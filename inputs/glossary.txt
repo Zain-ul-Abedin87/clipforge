@@ -1,0 +1,25 @@
+# One product/brand name per line. Used as Whisper prompt and for transcript cleanup.
+Mossberg 500
+Remington 870
+Benelli M4
+Beretta A300
+Glock 19
+Sig Sauer P365
+Ruger 10/22
+Smith & Wesson M&P
+Leatherman
+Gerber
+Morakniv
+LifeStraw
+Rock Island Armory M206
+Taurus G3c
+Hi-Point 995TS
+Winchester SXP Defender
+Ruger Security-9
+CZ P-10 C
+Extar EP9
+PSA Dagger Compact
+Mossberg Maverick 88 Security
+Ruger American Gen II Ranch
+KelTec SUB2000 Gen 3
+PSA PA-15 blem build

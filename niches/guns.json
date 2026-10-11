@@ -1,0 +1,194 @@
+{
+  "name": "guns",
+  "label": "Guns / firearms (Top X listicle)",
+  "description": "Best X / Top 5 / Top 10 firearm and gear reviews, Amazon-affiliate driven.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.25
+  },
+  "product": {
+    "_comment": "Where footage of the exact product may come from, in order. Stock is never used for a product: a generic gun clip would show the wrong model.",
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": false,
+    "genericFallback": true,
+    "_genericFallback": "No media of the exact model: use moving footage of the same type of gun (revolver, pistol, shotgun, carbine, rifle) with the name in the lower third, instead of a name card."
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [
+      [
+        "revolver|38 special|357 magnum|cylinder",
+        "revolver close up"
+      ],
+      [
+        "carbine|pistol caliber carbine|pcc",
+        "carbine rifle shooting range"
+      ],
+      [
+        "pistol|handgun|9mm|concealed carry|ccw|edc",
+        "pistol shooting range"
+      ],
+      [
+        "shotgun|12 gauge|20 gauge|pump action|clay|trap shooting|skeet",
+        "clay shooting shotgun"
+      ],
+      [
+        "rifle|scope|long range|ar-15|ar15|bolt action",
+        "rifle scope shooting range"
+      ],
+      [
+        "holster|belt",
+        "gun holster on belt"
+      ],
+      [
+        "ammo|ammunition|bullets?|cartridges?|rounds",
+        "ammunition bullets close up"
+      ],
+      [
+        "gun store|gun counter|retailer|shop|inventory",
+        "gun store shelves"
+      ],
+      [
+        "price|budget|cheap|dollars|money|wallet|afford",
+        "money wallet cash"
+      ],
+      [
+        "deer|elk|whitetail|big game",
+        "hunter in autumn forest"
+      ],
+      [
+        "duck|goose|waterfowl",
+        "duck hunting marsh sunrise"
+      ],
+      [
+        "upland|pheasant|quail",
+        "hunter walking in field"
+      ],
+      [
+        "home defen[cs]e|intruder|break-in",
+        "house at night security"
+      ],
+      [
+        "range|target|accuracy|shoot|shooting",
+        "outdoor shooting range"
+      ],
+      [
+        "camp|camping|backcountry|hike|hiking|trail",
+        "camping in the mountains"
+      ],
+      [
+        "bug-out|prepper|emergency|survival",
+        "survival backpack gear"
+      ],
+      [
+        "truck|vehicle|road",
+        "pickup truck on dirt road"
+      ],
+      [
+        "knife|blade",
+        "knife on wooden table"
+      ],
+      [
+        "safety|lock|kids|children|storage",
+        "gun safe storage"
+      ]
+    ],
+    "_sectionHintCount": "The first N hints name the product category (pistol, shotgun, rifle). Only these may be inferred from the whole product section when a line matches nothing itself.",
+    "sectionHintCount": 5,
+    "fallbackQuery": "outdoor shooting range",
+    "_blocked": "Stock results whose title/tags contain any of these are skipped.",
+    "blockedTerms": [
+      "toy",
+      "airsoft",
+      "nerf",
+      "water gun",
+      "cartoon",
+      "kids playing",
+      "paintball",
+      "video game",
+      "war",
+      "soldier",
+      "terror",
+      "crime",
+      "robbery",
+      "shooting at people",
+      "military",
+      "marines",
+      "troops",
+      "army",
+      "combat",
+      "soldiers",
+      "police raid",
+      "marine",
+      "infantry",
+      "air force",
+      "missile",
+      "rocket",
+      "navy",
+      "artillery"
+    ],
+    "_sources": "B-roll providers in order. Photo sources (unsplash) are left out here on purpose: still B-roll makes a gun listicle feel like a slideshow. Unsplash is still used for product photos (product.sources).",
+    "sources": [
+      "pixabay",
+      "pexels",
+      "wikimedia_video"
+    ]
+  },
+  "llmGuidance": "Niche: firearms and shooting gear reviews for an American audience. Product scenes must show the exact named model. Stock B-roll should be ranges, hunting, outdoors, gear on tables, holsters, ammo, gun stores; never violence, crime, war, people aiming at the camera, toys or airsoft. Use a title_card for every ranked item, at most one price_badge and one pros_cons per item, spec_card only with specs the narration states.",
+  "disclaimer": "This video is for educational and entertainment purposes only. Always follow local, state, and federal laws regarding the safe handling, purchase, and ownership of firearms.",
+  "qa": {
+    "_comment": "Share of running time that may be still images/cards (product photos move with zoom/pan, but too many feel like a slideshow).",
+    "stillWarn": 0.6,
+    "stillFail": 0.75
+  },
+  "official": {
+    "_comment": "Brand -> manufacturer site. Product photos are taken from the product page found in the site sitemap (sites that answer 403 are skipped).",
+    "brands": {
+      "ruger": "ruger.com",
+      "taurus": "taurususa.com",
+      "kel-tec": "keltecweapons.com",
+      "keltec": "keltecweapons.com",
+      "cz": "cz-usa.com",
+      "rock island": "armscor.com",
+      "rock island armory": "armscor.com",
+      "armscor": "armscor.com",
+      "extar": "extarusa.com",
+      "winchester": "winchesterguns.com",
+      "hi-point": "hi-pointfirearms.com",
+      "mossberg": "mossberg.com",
+      "psa": "palmettostatearmory.com",
+      "palmetto state armory": "palmettostatearmory.com",
+      "sig sauer": "sigsauer.com",
+      "glock": "us.glock.com",
+      "smith & wesson": "smith-wesson.com",
+      "s&w": "smith-wesson.com",
+      "springfield": "springfield-armory.com",
+      "springfield armory": "springfield-armory.com",
+      "savage": "savagearms.com",
+      "henry": "henryusa.com",
+      "beretta": "beretta.com",
+      "remington": "remarms.com",
+      "stoeger": "stoegerindustries.com",
+      "canik": "canikusa.com",
+      "marlin": "marlinfirearms.com",
+      "benelli": "benelliusa.com",
+      "kimber": "kimberamerica.com",
+      "heritage": "heritagemfg.com",
+      "bersa": "bersa.com",
+      "walther": "waltherarms.com",
+      "fn": "fnamerica.com",
+      "tikka": "tikka.fi",
+      "bergara": "bergara.online",
+      "charter arms": "charterfirearms.com"
+    }
+  }
+}

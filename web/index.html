@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClipForge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">◆</span> ClipForge <span class="ver">local</span></div>
+    <div id="keyChips" class="chips"></div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="card">
+        <h2>New video</h2>
+        <label class="field">
+          <span>Project name</span>
+          <input id="newName" placeholder="best-shotguns-2026" autocomplete="off">
+        </label>
+        <div id="drop" class="drop">
+          <input id="audioFile" type="file" accept=".mp3,.wav,.m4a" hidden>
+          <div class="drop-icon">🎙</div>
+          <div id="dropText">Drop voiceover here<br><small>mp3 / wav / m4a</small></div>
+        </div>
+        <label class="field">
+          <span>Script <small>(optional, improves accuracy)</small></span>
+          <textarea id="newScript" rows="5" placeholder="Paste the exact script you recorded, or leave empty for voice-only mode."></textarea>
+        </label>
+        <label class="field">
+          <span>Video type <small>(rule set)</small></span>
+          <select id="newNiche"></select>
+        </label>
+        <label class="field">
+          <span>Channel style</span>
+          <select id="newChannel"></select>
+        </label>
+        <label class="check"><input id="newUseLlm" type="checkbox" checked> Use Claude for scene labels <small id="llmHint"></small></label>
+        <button id="createBtn" class="btn primary wide">Upload &amp; start</button>
+        <div id="uploadProgress" class="progress hidden"><div></div></div>
+      </section>
+
+      <section class="card">
+        <details id="batchBox">
+          <summary><h2 class="inline">Batch</h2> <small>many videos, one after another</small></summary>
+          <div id="batchDrop" class="drop small-drop"><input id="batchFiles" type="file" multiple accept=".mp3,.wav,.m4a,.txt" hidden>
+            <div id="batchDropText">Drop several voiceovers here<br><small>add a .txt with the same name as a voiceover to use it as its script</small></div></div>
+          <div class="row2">
+            <label class="field"><span>Video type</span><select id="batchNiche"></select></label>
+            <label class="field"><span>Channel</span><select id="batchChannel"></select></label>
+          </div>
+          <label class="check"><input id="batchLlm" type="checkbox"> Use Claude for scene labels</label>
+          <button id="batchAdd" class="btn small primary">Upload &amp; queue</button>
+          <div id="batchProgress" class="progress hidden"><div></div></div>
+          <div class="queue-head"><b>Queue</b> <span id="queueState" class="muted small"></span>
+            <span class="queue-btns"><button id="queuePause" class="btn small">Pause</button><button id="queueClear" class="btn small">Clear finished</button></span></div>
+          <ul id="queueList" class="queue-list"></ul>
+        </details>
+      </section>
+
+      <section class="card">
+        <details id="channelBox">
+          <summary><h2 class="inline">Channels</h2> <small>style, logo, music</small></summary>
+          <label class="field"><span>Channel</span><select id="chSel"></select></label>
+          <div class="row2">
+            <label class="field"><span>Default video type</span><select id="chNiche"></select></label>
+            <label class="field"><span>Logo position</span><select id="chLogoPos"><option>top-right</option><option>top-left</option><option>bottom-right</option><option>bottom-left</option></select></label>
+          </div>
+          <div class="row3">
+            <label class="field"><span>Accent</span><input id="chPrimary" type="color"></label>
+            <label class="field"><span>Card bg</span><input id="chSecondary" type="color"></label>
+            <label class="field"><span>Text</span><input id="chText" type="color"></label>
+          </div>
+          <label class="check"><input id="chCaptions" type="checkbox"> Captions</label>
+          <label class="field"><span>Caption size <b id="chCapSizeV"></b></span><input id="chCapSize" type="range" min="30" max="90"></label>
+          <label class="field"><span>Music volume <b id="chMusicV"></b> dB</span><input id="chMusic" type="range" min="-40" max="-6"></label>
+          <label class="field"><span>Music dip under voice <b id="chDuckV"></b> dB</span><input id="chDuck" type="range" min="-30" max="0"></label>
+          <label class="check"><input id="chMg" type="checkbox"> Motion graphics (animated cards, lower thirds)</label>
+          <label class="check"><input id="chSfx" type="checkbox"> Sound effects (whoosh / pop)</label>
+          <label class="field"><span>Logo opacity <b id="chLogoOpV"></b></span><input id="chLogoOp" type="range" min="0.1" max="1" step="0.05"></label>
+          <button id="chSave" class="btn small primary">Save settings</button>
+          <div class="sub-block">
+            <b class="small">Logo</b> <img id="chLogoImg" class="logo-prev hidden" alt="">
+            <input id="chLogoFile" type="file" accept=".png,.jpg,.jpeg,.webp"> <button id="chLogoDel" class="btn small">Remove logo</button>
+          </div>
+          <div class="sub-block">
+            <b class="small">Music</b>
+            <ul id="chMusicList" class="pk-list"></ul>
+            <input id="chMusicFile" type="file" accept=".mp3,.wav,.m4a,.ogg,.flac" multiple>
+            <input id="chMusicNote" placeholder="Licence, e.g. YouTube Audio Library - no attribution">
+            <button id="chMusicAdd" class="btn small">Add music</button>
+          </div>
+          <div class="sub-block">
+            <b class="small">New channel</b> <span class="muted small">(copies the selected one)</span>
+            <div class="gate-row"><input id="chNewName" placeholder="tech-reviews"><button id="chCreate" class="btn small">Create</button></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Projects</h2>
+        <ul id="projectList" class="projects"></ul>
+      </section>
+
+      <section class="card">
+        <details id="libraryBox" open>
+          <summary><h2 class="inline">My clips</h2> <small>your own / permitted media</small></summary>
+          <p class="muted small">Upload clips or photos from your computer. They are used <b>first</b>, before any stock footage.</p>
+          <label class="field"><span>What is it?</span>
+            <select id="libKind">
+              <option value="product">Product footage (one product)</option>
+              <option value="broll">General B-roll (range, hunting, gear...)</option>
+            </select>
+          </label>
+          <label class="field"><span id="libLabelTitle">Product (exact name, as in glossary)</span><input id="libLabel" list="pkProducts" placeholder="Sig Sauer P365"></label>
+          <div id="libDrop" class="drop small-drop"><input id="libFiles" type="file" multiple accept=".mp4,.mov,.m4v,.webm,.mkv,.jpg,.jpeg,.png,.webp" hidden><div id="libDropText">Drop clips / photos here</div></div>
+          <label class="field"><span>Source / permission (required)</span><input id="libNote" placeholder="Filmed by me / Permission from Ruger by email 12 Oct 2026"></label>
+          <button id="libUpload" class="btn small">Upload</button>
+          <div id="libProgress" class="progress hidden"><div></div></div>
+          <ul id="libList" class="pk-list"></ul>
+        </details>
+      </section>
+
+      <section class="card">
+        <details id="presskitBox">
+          <summary><h2 class="inline">Press kit</h2> <small>official product media</small></summary>
+          <p class="muted small">Paste a <b>direct file link</b> (photo or video) from the manufacturer's media / press page. It is used for that product's scenes.</p>
+          <label class="field"><span>Product (exact name, as in glossary)</span><input id="pkProduct" list="pkProducts" placeholder="Sig Sauer P365"></label>
+          <datalist id="pkProducts"></datalist>
+          <label class="field"><span>File link</span><input id="pkUrl" placeholder="https://.../p365-hero.jpg"></label>
+          <label class="field"><span>License / terms</span><input id="pkLicense" value="Manufacturer press kit (editorial/review use)"></label>
+          <button id="pkAdd" class="btn small">Add to press kit</button>
+          <p class="muted small">Or let ClipForge find photos on the manufacturer's site (uses the product above, or every glossary product when empty). Step 4 also does this automatically for products without media.</p>
+          <button id="pkOfficial" class="btn small">Find official photos</button>
+          <pre id="pkOfficialLog" class="muted small hidden"></pre>
+          <ul id="pkList" class="pk-list"></ul>
+        </details>
+      </section>
+
+      <section class="card">
+        <details>
+          <summary><h2 class="inline">Glossary</h2> <small>product names</small></summary>
+          <textarea id="glossary" rows="10"></textarea>
+          <button id="saveGlossary" class="btn small">Save glossary</button>
+        </details>
+      </section>
+    </aside>
+
+    <main id="main">
+      <div id="empty" class="empty">
+        <h1>Voiceover → finished video</h1>
+        <p>Upload a voiceover on the left. ClipForge transcribes it, aligns your script, and plans 6–12 second scenes.</p>
+      </div>
+
+      <div id="projectView" class="hidden">
+        <div class="project-head">
+          <div>
+            <h1 id="pvName"></h1>
+            <div id="pvMeta" class="muted"></div>
+          </div>
+          <div class="actions">
+            <select id="pvNiche" class="btn" title="Video type rule set"></select>
+            <button id="runAll" class="btn primary">▶ Run pipeline</button>
+            <select id="rerunStep" class="btn">
+              <option value="">Re-run step…</option>
+              <option value="transcribe">1 · Transcribe</option>
+              <option value="align">2 · Align</option>
+              <option value="plan">3 · Plan scenes</option>
+              <option value="assets">4 · Assets</option>
+              <option value="timeline">5 · Timeline</option>
+              <option value="render">6 · Render</option>
+              <option value="qa">7 · QA</option>
+            </select>
+          </div>
+        </div>
+
+        <ol id="stepper" class="stepper"></ol>
+
+        <details id="logBox" class="card log">
+          <summary>Log <span id="logState" class="muted"></span></summary>
+          <pre id="log"></pre>
+        </details>
+
+        <section id="finalBox" class="card final hidden">
+          <h2>Final video</h2>
+          <video id="finalVideo" controls preload="metadata"></video>
+          <div class="final-row"><span id="finalMeta" class="muted small"></span><a id="finalDownload" class="btn primary small" href="#">⬇ Download MP4</a></div>
+        </section>
+
+        <section id="reviewArea" class="hidden">
+          <div class="card player">
+            <div id="stage" class="stage">
+              <div id="stageLayer" class="stage-layer"></div>
+              <div id="stageCaption" class="stage-caption hidden"></div>
+              <div id="stagePill" class="stage-pill"></div>
+              <div id="stageNote" class="stage-note">Preview · real footage arrives in step 4 (Assets)</div>
+              <button id="stagePlay" class="stage-play">▶</button>
+            </div>
+            <div class="stage-opts">
+              <label class="check"><input id="capToggle" type="checkbox" checked> Captions</label>
+            </div>
+            <audio id="audio" controls preload="metadata"></audio>
+            <div class="now"><span id="nowTime">0:00</span> <span id="nowScene" class="muted"></span></div>
+            <div id="sectionsBar" class="sections-bar"></div>
+            <div id="timeline" class="timeline"><div id="playhead" class="playhead"></div></div>
+            <div class="legend">
+              <span class="lg stock">stock</span><span class="lg product">product</span>
+              <span class="lg graphic">graphic</span><span class="lg image">image</span>
+            </div>
+          </div>
+
+          <nav class="tabs">
+            <button class="tab active" data-tab="scenes">Scenes</button>
+            <button class="tab" data-tab="transcript">Transcript</button>
+            <button class="tab" data-tab="stats">Stats</button>
+            <button class="tab" data-tab="qa">QA &amp; publish <span id="qaBadge" class="qa-badge"></span></button>
+          </nav>
+
+          <div id="tab-scenes" class="tabpane">
+            <div class="filters">
+              <input id="sceneFilter" placeholder="Filter scenes…">
+              <select id="typeFilter"><option value="">All types</option><option>stock</option><option>product</option><option>graphic</option><option>image</option></select>
+            </div>
+            <div id="sceneList" class="scene-list"></div>
+          </div>
+          <div id="tab-transcript" class="tabpane hidden">
+            <p class="muted small">
+              <span class="w edited">your fix</span>
+              <span class="w glossary">glossary fix</span>
+              <span class="w low">low confidence</span>
+              <span class="w interpolated">not heard (timed by estimate)</span>
+              <span class="w extra">spoken, not in script</span>
+              · click a word to jump there · <b>double-click to correct it</b>
+              <button id="applyCaptions" class="btn small primary hidden">Apply caption fixes (re-render)</button>
+            </p>
+            <div id="transcript" class="transcript"></div>
+          </div>
+          <div id="tab-qa" class="tabpane hidden">
+            <div id="qaBox"><p class="muted">Run the pipeline through step 7 (QA) to see checks here.</p></div>
+          </div>
+          <div id="tab-stats" class="tabpane hidden">
+            <div id="stats" class="stats"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

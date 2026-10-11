@@ -1,0 +1,29 @@
+node_modules/
+.venv/
+.env
+workspace/*
+!workspace/.gitkeep
+output/*
+!output/.gitkeep
+inputs/*.mp3
+inputs/*.wav
+channels/*/footage/*
+channels/*/music/*
+!channels/*/footage/.gitkeep
+!channels/*/music/.gitkeep
+*.log
+__pycache__/
+models/
+inputs/test/
+cache/
+
+# official product photos and press-kit media (manufacturer copyright) stay local
+channels/*/presskit/*
+channels/*/logo*
+*.part.mp4
+# test/demo voiceovers and scratch inputs
+inputs/**/*.mp3
+inputs/**/*.wav
+inputs/batch/
+inputs/test*/
+inputs/demo*/

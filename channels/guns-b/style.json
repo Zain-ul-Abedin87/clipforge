@@ -1,0 +1,51 @@
+{
+  "name": "guns-b",
+  "niche": "guns",
+  "resolution": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "fonts": {
+    "title": "Oswald",
+    "body": "Inter",
+    "caption": "Inter"
+  },
+  "colors": {
+    "primary": "#2E86DE",
+    "secondary": "#101820",
+    "text": "#FFFFFF",
+    "accent": "#C0392B"
+  },
+  "captions": {
+    "enabled": true,
+    "position": "bottom",
+    "maxWordsPerLine": 7,
+    "fontSize": 50,
+    "background": "rgba(0,0,0,0.55)"
+  },
+  "music": {
+    "folder": "music",
+    "volumeDb": -20,
+    "duckDb": -12
+  },
+  "scenes": {
+    "avgLengthSec": 8,
+    "minLengthSec": 6,
+    "maxLengthSec": 12
+  },
+  "intro": null,
+  "outro": null,
+  "logo": {
+    "position": "top-right",
+    "opacity": 0.85,
+    "path": "D:\\YT_CODE_Base\\clipforge\\channels\\guns-b\\logo\\logo.png"
+  },
+  "aiDisclosure": true,
+  "motionGraphics": {
+    "enabled": true,
+    "sfx": true,
+    "sfxDb": -14,
+    "_comment": "Animated card text, lower thirds, rank badges, flash transitions; sfx = whoosh/pop (assets/sfx, replace with your own wav files)."
+  }
+}

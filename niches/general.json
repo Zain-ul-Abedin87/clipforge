@@ -1,0 +1,45 @@
+{
+  "name": "general",
+  "label": "General (any topic)",
+  "description": "No niche rules: stock searches use the narration's own key words.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.15
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "hints": [],
+    "fallbackQuery": "landscape",
+    "blockedTerms": [
+      "cartoon"
+    ],
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "sectionHintCount": 0,
+    "_sources": "Stock providers in the order tried: pixabay, pexels, unsplash (photos), wikimedia_video, archive (public-domain films).",
+    "sources": [
+      "pixabay",
+      "pexels",
+      "wikimedia_video",
+      "archive",
+      "unsplash"
+    ]
+  },
+  "llmGuidance": "General faceless documentary / explainer video. Choose literal, searchable stock phrases for what the narration describes (places, objects, actions, eras).",
+  "disclaimer": "",
+  "qa": {
+    "_comment": "Share of running time that may be still images/cards (product photos move with zoom/pan, but too many feel like a slideshow).",
+    "stillWarn": 0.5,
+    "stillFail": 0.65
+  }
+}

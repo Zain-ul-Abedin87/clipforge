@@ -1,0 +1,31 @@
+{
+  "name": "clipforge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Local voiceover-to-faceless-YouTube-video pipeline",
+  "type": "module",
+  "bin": {
+    "clipforge": "./bin/clipforge.cmd"
+  },
+  "scripts": {
+    "cf": "tsx src/cli.ts",
+    "doctor": "tsx src/cli.ts doctor",
+    "test:nvenc": "tsx src/cli.ts test-nvenc",
+    "typecheck": "tsc --noEmit",
+    "serve": "tsx src/cli.ts serve --port 4173"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "commander": "^15.0.0",
+    "dotenv": "^18.0.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

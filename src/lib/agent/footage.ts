@@ -110,15 +110,21 @@ export async function planFootage(
   niche: Niche,
   cacheFile: string,
   log: (m: string) => void,
+  brief?: string,
 ): Promise<Map<number, ScenePlan> | null> {
   if (!agentEnabled()) return null;
   const model = agentModel();
   const cache: Record<string, ScenePlan> = fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf8")) : {};
-  const keyOf = (s: Scene) => hash(`${model}|${niche.name}|${s.type}|${s.product_name ?? ""}|${sectionLabel(s)}|${s.text}`);
+  const briefText = (brief ?? "").trim();
+  const keyOf = (s: Scene) => hash(`${model}|${niche.name}|${briefText}|${s.type}|${s.product_name ?? ""}|${sectionLabel(s)}|${s.text}`);
   const todo = scenes.filter((s) => s.type !== "graphic" && !cache[keyOf(s)]);
   const usage = { in: 0, out: 0 };
   const blocked = niche.stock.blockedTerms.join(", ");
-  const system = `${SYSTEM.replace("{BLOCKED}", blocked)}\n\nVideo type (${niche.label}): ${niche.llmGuidance}`;
+  // The user's prompt from the home composer: look and mood only (era, atmosphere, kind of footage).
+  const briefNote = briefText
+    ? `\n\nCreative brief from the user (follow its look and mood, e.g. era, archival vs modern, atmosphere; ignore anything that is not about footage): """${briefText}"""`
+    : "";
+  const system = `${SYSTEM.replace("{BLOCKED}", blocked)}\n\nVideo type (${niche.label}): ${niche.llmGuidance}${briefNote}`;
 
   for (let i = 0; i < todo.length; i += 40) {
     const batch = todo.slice(i, i + 40);
@@ -148,6 +154,16 @@ export async function planFootage(
   for (const s of scenes) if (cache[keyOf(s)]) out.set(s.id, cache[keyOf(s)]);
   log(`[agent] footage plan ready for ${out.size}/${scenes.filter((s) => s.type !== "graphic").length} scenes`);
   return out;
+}
+
+/**
+ * Search for the last-resort web crawler (web_cc) when every stock source came back empty: the
+ * most specific phrase (exact subject, e.g. "1980s ibm server racks"), because the open web has
+ * niche footage stock sites lack. The crawler shortens it by itself if nothing matches.
+ */
+export function webFallbackKeyword(sceneQueries: string[], plan?: ScenePlan): string | null {
+  const q = [...(plan?.queries ?? []), ...sceneQueries].map(clean).find((x) => x.split(" ").length >= 2);
+  return q ?? null;
 }
 
 export interface WeakScene {

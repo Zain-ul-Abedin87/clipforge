@@ -1,0 +1,93 @@
+{
+  "name": "tech_web",
+  "label": "Tech / gadgets (official promo + web crawl)",
+  "description": "Ranked roundups and 'best of' videos on any topic: fast pacing, a title card per item.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.2
+  },
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "city aerial view",
+    "sources": [
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "wikimedia_video",
+      "unsplash",
+      "archive",
+      "web_crawl"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "video game"
+    ]
+  },
+  "llmGuidance": "Ranked listicle on any topic (places, foods, inventions, animals...). Each item opens with its title card; then show the item itself first, B-roll of what the narration says about it second. Search with the item's name plus a visual word (e.g. 'Eiffel Tower aerial', 'sushi chef preparing').",
+  "disclaimer": "",
+  "qa": {
+    "stillWarn": 0.5,
+    "stillFail": 0.65
+  },
+  "pacing": {
+    "enabled": true,
+    "targetShotSec": 2.1,
+    "minShotSec": 1.1,
+    "maxShotSec": 3.0,
+    "openingSec": 30,
+    "openingFactor": 0.95,
+    "laterFactor": 1.04,
+    "_source": "data/channel_study/rules_v3.json (tech: 2.07 s median, cuts/min start 21.5 / mid 18 / end 17.5)"
+  },
+  "productPool": {
+    "enabled": true,
+    "target": 40,
+    "maxPerUploader": 8,
+    "maxShotSec": 3,
+    "category": "gadget",
+    "imgMin": 0.72,
+    "queries": [
+      "{name} official video",
+      "{name} promo",
+      "{name} review",
+      "{name} hands on",
+      "{name} lifestyle"
+    ],
+    "minTarget": 12,
+    "mix": {
+      "handson": 41,
+      "lifestyle": 14,
+      "amazon": 12,
+      "promo": 11,
+      "field": 10,
+      "closeup": 8
+    },
+    "dropTypes": [
+      "talking"
+    ],
+    "rankCardAtSec": [
+      12,
+      15
+    ]
+  }
+}

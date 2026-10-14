@@ -5,3 +5,14 @@ ctranslate2==4.5.0
 nvidia-cublas-cu12==12.9.2.10
 nvidia-cudnn-cu12==9.27.0.42
 numpy
+# YouTube Creative Commons footage (stock provider "youtube_cc"): search + 15 s pieces only.
+yt-dlp>=2025.1.1
+# Open-web Creative Commons fallback (stock source "web_cc", python/web_crawler.py).
+# `ddgs` is the renamed `duckduckgo_search`; the crawler imports either.
+ddgs>=9.0
+moviepy>=2.1,<3
+# CLIP scoring (python/clip_score.py, ONNX, no torch).
+fastembed>=0.4
+# Shot splitting for web_crawl candidates (python/split_shots.py).
+scenedetect>=0.6.4
+opencv-python-headless>=4.8

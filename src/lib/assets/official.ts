@@ -5,6 +5,7 @@ import { paths } from "../paths.js";
 import { addPresskitFile, slug, USER_AGENT } from "./presskit.js";
 import { choosePage, ImageIn, pickProductPhotos } from "../agent/official.js";
 import { agentEnabled } from "../agent/footage.js";
+import { researchProduct } from "../agent/webResearch.js";
 
 /**
  * Official photo importer: product name -> manufacturer site (niche brand table) -> product page
@@ -330,6 +331,91 @@ function youtubeOn(html: string): string[] {
   return [...new Set(ids)].map((id) => `https://www.youtube.com/watch?v=${id}`);
 }
 
+/**
+ * Product photos from one official page into the channel's press kit (max 5, real images only).
+ * With the agent on, Claude looks at the page's images and keeps only photos of this product.
+ */
+async function importFromPage(
+  channel: string,
+  product: string,
+  page: string,
+  modelTokens: string[],
+  via: string,
+  log: (m: string) => void,
+): Promise<OfficialResult> {
+  const dir = path.join(paths.channels, channel, "presskit", slug(product));
+  const html = await text(page);
+  let photos = dedupeRenditions(photosOn(html, page, modelTokens));
+  if (agentEnabled()) {
+    // og:images are sometimes site-wide, and many sites use numbered file names.
+    const pool = dedupeRenditions([...photos, ...otherImages(html, page, new Set(photos))]).slice(0, 8);
+    const loaded = await loadImages(pool);
+    const keep = await pickProductPhotos(product, loaded.map((l) => l.img));
+    photos = keep.map((i) => loaded[i].url);
+    log(`[official] ${product}: agent kept ${keep.length} of ${loaded.length} image(s) on ${new URL(page).hostname}`);
+  }
+  const youtube = youtubeOn(html);
+  let saved = 0;
+  for (const url of photos) {
+    if (saved >= 5) break;
+    try {
+      const f = await addPresskitFile(channel, product, url, `Manufacturer product photo (${via}, editorial/review use) - ${page}`);
+      // Thumbnails and swatches are useless on a 1080p screen.
+      if (f.bytes < 15_000) fs.rmSync(f.file);
+      else saved++;
+    } catch {
+      /* not an image / failed: try the next one */
+    }
+  }
+  if (youtube.length) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "youtube_links.txt"), `# Official videos linked on ${page}\n# Download yourself if you have the rights, then add them in My clips.\n${youtube.join("\n")}\n`);
+  }
+  return { product, status: saved ? "imported" : "no-photos", page, photos: saved, youtube };
+}
+
+/**
+ * Web-search path: Claude finds the maker's product / press pages (any brand, any niche); each is
+ * tried in order until one gives photos. robots.txt is respected per site.
+ */
+async function importViaWebSearch(
+  channel: string,
+  product: string,
+  niche: Niche,
+  robotsCache: Map<string, Robots>,
+  log: (m: string) => void,
+): Promise<OfficialResult | null> {
+  const research = await researchProduct(channel, product, niche.label, log);
+  if (!research?.pages.length) return null;
+  const tokens = product.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 1);
+  let last: OfficialResult | null = null;
+  const good: OfficialResult[] = [];
+  let total = 0;
+  for (const p of research.pages) {
+    // Product pages often have one hero shot; press pages add more angles. Stop at 3 photos.
+    if (total >= 3) break;
+    const origin = new URL(p.url).origin;
+    try {
+      if (!robotsCache.has(origin)) robotsCache.set(origin, await robots(origin));
+      if (!allowed(robotsCache.get(origin)!, p.url)) {
+        last = { product, status: "blocked", page: p.url, photos: 0, youtube: [], message: "robots.txt disallows this page" };
+        continue;
+      }
+      const r = await importFromPage(channel, product, p.url, tokens, `${p.publisher} ${p.kind.replace("_", " ")}, found by web search`, log);
+      if (r.photos) {
+        total += r.photos;
+        good.push(r);
+      } else last = r;
+    } catch (err) {
+      last = err instanceof Blocked
+        ? { product, status: "blocked", page: p.url, photos: 0, youtube: [], message: err.message }
+        : { product, status: "not-found", page: p.url, photos: 0, youtube: [], message: String((err as Error).message ?? err).slice(0, 160) };
+    }
+  }
+  if (!good.length) return last;
+  return { ...good[0], photos: total, youtube: [...new Set(good.flatMap((g) => g.youtube))] };
+}
+
 const hasMedia = (dir: string) => fs.existsSync(dir) && fs.readdirSync(dir).some((f) => MEDIA.test(f));
 
 /** Brand domain from the niche table (longest matching brand name wins). */
@@ -386,42 +472,17 @@ export async function importOfficial(channel: string, products: string[], niche:
         }
         if (!page) r = { product, status: "not-found", photos: 0, youtube: [], message: `no product page for "${modelTokens.join(" ")}" on ${b.domain}` };
         else if (!allowed(rb, page)) r = { product, status: "blocked", page, photos: 0, youtube: [], message: "robots.txt disallows this page" };
-        else {
-          const html = await text(page);
-          let photos = dedupeRenditions(photosOn(html, page, modelTokens));
-          if (agentEnabled()) {
-            // The agent looks at the page's images (named ones first) and keeps only photos of this
-            // product: og:images are sometimes site-wide, and many sites use numbered file names.
-            const pool = dedupeRenditions([...photos, ...otherImages(html, page, new Set(photos))]).slice(0, 8);
-            const loaded = await loadImages(pool);
-            const keep = await pickProductPhotos(product, loaded.map((l) => l.img));
-            photos = keep.map((i) => loaded[i].url);
-            log(`[official] ${product}: agent kept ${keep.length} of ${loaded.length} page image(s)`);
-          }
-          const youtube = youtubeOn(html);
-          let saved = 0;
-          for (const url of photos) {
-            if (saved >= 5) break;
-            try {
-              const f = await addPresskitFile(channel, product, url, `Manufacturer product photo (official site, editorial/review use) - ${page}`);
-              // Thumbnails and swatches are useless on a 1080p screen.
-              if (f.bytes < 15_000) fs.rmSync(f.file);
-              else saved++;
-            } catch {
-              /* not an image / failed: try the next one */
-            }
-          }
-          if (youtube.length) {
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, "youtube_links.txt"), `# Official videos linked on ${page}\n# Download yourself if you have the rights, then add them in My clips.\n${youtube.join("\n")}\n`);
-          }
-          r = { product, status: saved ? "imported" : "no-photos", page, photos: saved, youtube };
-        }
+        else r = await importFromPage(channel, product, page, modelTokens, "official site", log);
       } catch (err) {
         r = err instanceof Blocked
           ? { product, status: "blocked", photos: 0, youtube: [], message: err.message }
           : { product, status: "not-found", photos: 0, youtube: [], message: String((err as Error).message ?? err).slice(0, 160) };
       }
+    }
+    // No brand in the niche table, no page in the sitemap, or a refusing site: ask web search.
+    if (r.status !== "imported") {
+      const viaWeb = await importViaWebSearch(channel, product, niche, robotsCache, log);
+      if (viaWeb && (viaWeb.status === "imported" || r.status === "no-brand")) r = viaWeb;
     }
     log(`[official] ${product}: ${r.status}${r.photos ? ` (${r.photos} photo${r.photos > 1 ? "s" : ""})` : ""}${r.youtube.length ? `, ${r.youtube.length} YouTube link(s)` : ""}${r.message ? ` - ${r.message}` : ""}`);
     results.push(r);

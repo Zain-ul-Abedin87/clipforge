@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
@@ -9,7 +9,8 @@ import { detectSections, splitIntoScenes } from "../lib/planner/structure.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { Scene, Section, validateScenes } from "../lib/scenes.js";
 import { loadStyle } from "../lib/style.js";
-import { loadNiche, nichesDir, projectNicheName } from "../lib/niche.js";
+import { loadProjectNiche, nicheFingerprintPath } from "../lib/niche.js";
+import { applyPlanEdits } from "../lib/planEdits.js";
 import type { ScriptSection } from "../lib/scriptImport.js";
 import { ffprobePath } from "../lib/tools.js";
 import type { Aligned } from "./align.js";
@@ -123,19 +124,20 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     log(`[plan] ${alignedFile} missing. Run \`clipforge align\` first.`);
     return 1;
   }
-  const project = readJson<{ audio: string; channel?: string; niche?: string }>(path.join(dir, "project.json"));
+  const project = readJson<{ name?: string; audio: string; channel?: string; niche?: string }>(path.join(dir, "project.json"));
+  if (!project.name) project.name = opts.project;
   const channel = opts.channel ?? project.channel ?? "default";
   const style = loadStyle(channel);
   const glossaryFile = path.join(paths.inputs, "glossary.txt");
   const useLlm = !opts.noLlm && hasKey("ANTHROPIC_API_KEY");
-  const niche = loadNiche(projectNicheName(project, style));
+  const niche = loadProjectNiche(project, style);
 
   const inputs = {
     aligned: fingerprint(alignedFile),
     style: fingerprint(path.join(paths.channels, channel, "style.json")),
     glossary: fingerprint(glossaryFile),
     scriptSections: fingerprint(path.join(dir, "script_sections.json")),
-    niche: `${niche.name}:${fingerprint(path.join(nichesDir, `${niche.name}.json`))}`,
+    niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
     labels: `${useLlm ? env("LLM_MODEL", "claude-opus-5-5") : "heuristic-v5"}:cards-v2`,
   };
   if (!opts.force && isCached(dir, "plan", inputs, ["scenes.json"])) {
@@ -145,13 +147,16 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
 
   const aligned = readJson<Aligned>(alignedFile);
   const duration = await audioDuration(project.audio);
-  const limits = style.scenes;
+  // The video type sets the pacing (documentary shots breathe, explainers cut faster).
+  const limits = niche.scenes ?? style.scenes;
 
   const scriptSecFile = path.join(dir, "script_sections.json");
   const sections =
     aligned.mode === "script" && fs.existsSync(scriptSecFile)
       ? sectionsFromScript(readJson<ScriptSection[]>(scriptSecFile), aligned, duration)
-      : detectSections(aligned.sentences, duration, loadGlossary(glossaryFile));
+      : niche.structure.detectListicle
+        ? detectSections(aligned.sentences, duration, loadGlossary(glossaryFile))
+        : [{ id: 0, kind: "body" as const, start: 0, end: duration }];
   const spans = splitIntoScenes(sections, aligned.words, limits);
   log(`[plan] video type: ${niche.label}`);
   log(`[plan] ${sections.length} sections: ${sections.map((s) => (s.kind === "item" ? `${s.rank !== undefined ? `#${s.rank} ` : ""}${s.product_name ?? "?"}` : s.kind)).join(" | ")}`);
@@ -182,6 +187,8 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
 
   scenes = capGraphics(scenes, niche.structure.targetGraphicShare, duration, niche.stock.fallbackQuery, log);
   scenes = splitAdjacentCards(scenes, niche.stock.fallbackQuery, log);
+  const kept = applyPlanEdits(dir, scenes);
+  if (kept) log(`[plan] kept ${kept} footage search edit(s) from the plan review`);
 
   const v = validateScenes(scenes, duration, limits);
   const lengths = scenes.map((s) => s.end - s.start);

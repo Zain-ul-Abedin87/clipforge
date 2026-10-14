@@ -1,9 +1,10 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
-import { hasKey } from "../lib/env.js";
+import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
 import { CardStyle, renderGraphic, renderTextCard } from "../lib/assets/graphics.js";
 import { indexFolder, LocalItem, matchLocal, tokens } from "../lib/assets/local.js";
+import { searchTermsForLines, titleTheme } from "../footage/stock.js";
 import { downloadStock, downloadThumb, RateLimited, searchPexels, searchPixabay } from "../lib/assets/stock.js";
 import { downloadWikimedia, searchWikimedia } from "../lib/assets/wikimedia.js";
 import { downloadCandidate, nicheProviders, RateLimited as ProviderRateLimited, searchProvider, StockProvider } from "../lib/assets/sources.js";
@@ -12,11 +13,20 @@ import type { Asset, Assets, Candidate } from "../lib/assets/types.js";
 import { paths } from "../lib/paths.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import type { Scene, Section } from "../lib/scenes.js";
-import { agentEnabled, agentModel, broadenFootage, planFootage, ScenePlan } from "../lib/agent/footage.js";
+import { agentEnabled, agentModel, broadenFootage, planFootage, ScenePlan, webFallbackKeyword } from "../lib/agent/footage.js";
+import { planSubjects, vetCandidates, VetItem } from "../lib/agent/editor.js";
+import { fetchFromWeb, readWebMeta, webCrawlerReady, webCrawlsLeft, webLicense } from "../lib/assets/webCrawler.js";
+import { researchProduct, webResearchEnabled } from "../lib/agent/webResearch.js";
+import { setStoryblocksIds, storyblocksExhausted, storyblocksReady } from "../lib/assets/storyblocks.js";
 import { importOfficial } from "../lib/assets/official.js";
+import { stopYoutubeWorker } from "../lib/assets/youtube.js";
+import { stopWebCrawlWorker, webCrawlEnabled, webCrawlMinCands, webCrawlMode } from "../lib/assets/webCrawl.js";
+import { addToLibrary, libraryAsset, libraryBackend, libraryEnabled, libraryMinMatch, librarySize, LibraryShot, loadLibrary, queryLibrary } from "../lib/assets/footageLibrary.js";
+import { verifyCandidates, visionTopN, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
 import { loadStyle } from "../lib/style.js";
-import { isBlocked, loadNiche, nicheHints, nichesDir, projectNicheName } from "../lib/niche.js";
+import { FOOTAGE_MODE_LABELS, footageMode, isBlocked, loadProjectNiche, nicheFingerprintPath, nicheHints } from "../lib/niche.js";
 import { ffmpegPath, venvPythonPath } from "../lib/tools.js";
+import { buildProductPools, poolConfig } from "../lib/assets/productPool.js";
 
 export interface AssetsOpts {
   project: string;
@@ -50,11 +60,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     log(`[assets] ${scenesFile} missing. Run \`clipforge plan\` first.`);
     return 1;
   }
-  const project = readJson<{ channel?: string; niche?: string }>(path.join(dir, "project.json"));
+  const project = readJson<{ name?: string; channel?: string; niche?: string; footage?: string; brief?: string; title?: string }>(path.join(dir, "project.json"));
+  if (!project.name) project.name = opts.project;
   const channel = project.channel ?? "default";
   const chDir = path.join(paths.channels, channel);
   const style = loadStyle(channel);
-  const niche = loadNiche(projectNicheName(project, style));
+  // Video type + the project's footage mode ("CC & public domain only" narrows the sources).
+  const niche = loadProjectNiche(project, style);
   const colors = (style.colors ?? {}) as Record<string, string>;
   const fonts = (style.fonts ?? {}) as Record<string, string>;
   const cardStyle: CardStyle = {
@@ -70,13 +82,25 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     scenes: fingerprint(scenesFile),
     style: fingerprint(path.join(chDir, "style.json")),
     pexels: String(hasKey("PEXELS_API_KEY")),
+    storyblocks: String(storyblocksReady()),
     pixabay: String(hasKey("PIXABAY_API_KEY")),
     unsplash: String(hasKey("UNSPLASH_ACCESS_KEY")),
     providers: nicheProviders(niche).join(","),
+    footageMode: footageMode(project),
+    productSources: niche.product.sources.join(","),
     footage: footageSignature(chDir),
     ranker: fs.existsSync(path.join(paths.python, "clip_score.py")) ? "clip-v7" : "stock-rank-v7",
-    niche: `${niche.name}:${fingerprint(path.join(nichesDir, `${niche.name}.json`))}`,
+    niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
     agent: agentEnabled() ? `agent-v1:${agentModel()}` : "off",
+    brief: project.brief ?? "",
+    web: webCrawlerReady() ? "web-cc-v1" : "off",
+    editor: agentEnabled() ? "editor-v1" : "off",
+    webCrawl: webCrawlEnabled() ? `web-crawl-v1:${webCrawlMode()}` : "off",
+    vision: visionVerifyEnabled() ? `vision-v1:${agentModel()}` : "off",
+    clipModel: env("CLIP_MODEL", "default"),
+    library: libraryEnabled() ? `lib-v1:${librarySize()}` : "off",
+    // Title theme for generic B-roll searches (only present when the project has a title).
+    ...(titleTheme(project.title ?? project.brief) ? { theme: `terms-v1:${titleTheme(project.title ?? project.brief)}` } : {}),
   };
   if (!opts.force && isCached(dir, "assets", inputs, ["assets.json", "license_log.csv"])) {
     log(`[assets] cached -> ${path.join(dir, "assets.json")} (use --force to redo)`);
@@ -90,17 +114,27 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   if (niche.product.sources.includes("official")) {
     const names = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))];
     await importOfficial(channel, names, niche, log).catch((err) => log(`[official] skipped: ${String(err)}`));
+    // Spec facts for the on-screen chips, also for products that already had photos (cached per
+    // channel for 30 days, so each product is searched once).
+    if (webResearchEnabled()) for (const n of names) await researchProduct(channel, n, niche.label, log);
   }
 
   log(`[assets] indexing footage for channel "${channel}" ...`);
   const local = await indexFolder(path.join(chDir, "footage"), "local");
   const presskit = await indexFolder(path.join(chDir, "presskit"), "presskit");
   log(`[assets] video type: ${niche.label}`);
+  log(`[assets] footage sources: ${FOOTAGE_MODE_LABELS[footageMode(project)]}`);
   log(`[assets] local footage: ${local.length} files, press kit: ${presskit.length} files`);
   const providers = nicheProviders(niche);
-  const keyFor: Partial<Record<StockProvider, string>> = { pixabay: "PIXABAY_API_KEY", pexels: "PEXELS_API_KEY", unsplash: "UNSPLASH_ACCESS_KEY" };
+  setStoryblocksIds(channel, opts.project);
+  const keyFor: Partial<Record<StockProvider, string>> = { storyblocks: "STORYBLOCKS_PUBLIC_KEY", pixabay: "PIXABAY_API_KEY", pexels: "PEXELS_API_KEY", unsplash: "UNSPLASH_ACCESS_KEY" };
   log(`[assets] stock order: ${providers.map((p) => (keyFor[p] && !hasKey(keyFor[p]!) ? `${p} (no key)` : p)).join(" -> ")}`);
 
+  // Generic B-roll lines search with the title's theme ("truck glovebox pistol"), MPT-style terms.
+  const theme = titleTheme(project.title ?? project.brief);
+  const themeTerms = theme
+    ? await searchTermsForLines(theme, scenes.filter((s) => s.type === "stock" && !s.product_name && !s.edited).map((s) => ({ id: s.id, text: s.text })), log)
+    : new Map<number, string[]>();
   const result: Assets = {};
   const useCount = new Map<string, number>();
   const disabled = new Set<string>();
@@ -155,6 +189,34 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     };
   };
 
+  /**
+   * Last resort before a text card: a Creative Commons / public-domain clip from the open web
+   * (python/web_crawler.py). Licence-checked on the video's own page; capped per run.
+   */
+  const webDir = path.join(dir, "web");
+  const tryWeb = async (scene: Scene, why: string): Promise<Asset | null> => {
+    if (!webCrawlerReady() || !webCrawlsLeft()) return null;
+    const q = webFallbackKeyword(scene.queries, agentPlan?.get(scene.id));
+    if (!q || isBlocked(niche, q)) return null;
+    const len = scene.end - scene.start;
+    log(`[web_cc] scene ${scene.id}: ${why}; searching the web for CC footage of "${q}"`);
+    const file = await fetchFromWeb(q, webDir, String(scene.id), { seconds: Math.min(12, Math.max(5, Math.ceil(len + 0.5))), log });
+    const meta = file ? readWebMeta(file) : null;
+    if (!file || !meta) return null;
+    if (isBlocked(niche, meta.title)) {
+      log(`[web_cc] scene ${scene.id}: "${meta.title}" hits the niche's blocked terms; not used`);
+      fs.rmSync(file, { force: true });
+      fs.rmSync(file.replace(/.mp4$/i, ".json"), { force: true });
+      return null;
+    }
+    log(`[web_cc] scene ${scene.id}: ${meta.url} (${meta.license})`);
+    return {
+      path: file, source: "web_cc", license: webLicense(meta.license), url: meta.url, kind: "video",
+      author: meta.author || undefined, width: meta.width, height: meta.height, duration: meta.duration, in: 0, query: q,
+      note: `Web CC fallback (${why}) - open the link and check the uploader made this video`,
+    };
+  };
+
   const stockPools: StockPool[] = [];
   const wikiCache = new Map<string, Candidate[]>();
   const unsplashCache = new Map<string, Candidate[]>();
@@ -171,22 +233,53 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (!sec) return "body";
     return sec.kind === "item" ? `product review: ${sec.product_name ?? "item"}` : sec.kind;
   };
-  const agentPlan: Map<number, ScenePlan> | null = await planFootage(scenes, sectionLabel, niche, path.join(dir, "agent_footage.json"), log).catch((err) => {
+  const agentPlan: Map<number, ScenePlan> | null = await planFootage(scenes, sectionLabel, niche, path.join(dir, "agent_footage.json"), log, project.brief).catch((err) => {
     log(`[agent] failed, using rule-based searches: ${String(err)}`);
     return null;
   });
+
+  // Footage library first: clips used in earlier videos that already match a scene well.
+  const libMatches = await matchLibrary(scenes.filter((s) => s.type !== "graphic"), (s) => clipText(s, agentPlan?.get(s.id)?.queries ?? s.queries, agentPlan?.get(s.id)?.visual), log);
+  // Editor: which product each scene is about (also when the sentence does not name it) and what
+  // kind of shot it needs. Product/detail/comparison shots of a product with own media use only
+  // that media; generic shots keep stock (checked by Claude below).
+  const topic = project.brief || niche.label;
+  const productNames = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))];
+  const subjects = await planSubjects(
+    scenes.filter((s) => s.type !== "graphic").map((s) => ({ id: s.id, text: s.text })),
+    productNames,
+    topic,
+    path.join(dir, "subjects.json"),
+    log,
+  );
+  const hasOwnMedia = (name: string) =>
+    matchLocal(presskit, "presskit", [], tokens(name)).length > 0 || matchLocal(local, "local", [], tokens(name)).length > 0;
+  let locked = 0;
 
   const breakerIds = new Set<number>();
   for (const sceneOrig of scenes) {
     let scene = sceneOrig;
     const id = String(scene.id);
     const plan = agentPlan?.get(scene.id);
-    if (plan && scene.type !== "graphic" && scene.type !== "product") scene = { ...scene, queries: plan.queries };
+    const subj = subjects.get(scene.id);
+    if (subj?.subject && scene.type === "stock" && subj.shot !== "generic" && hasOwnMedia(subj.subject)) {
+      scene = { ...scene, type: "product", product_name: subj.subject };
+      locked++;
+    } else if (subj?.subject && scene.type === "stock" && !scene.product_name) scene = { ...scene, product_name: subj.subject };
+    // Searches the user typed in the plan review win over the agent's.
+    if (plan && !scene.edited && scene.type !== "graphic" && scene.type !== "product") scene = { ...scene, queries: plan.queries };
     const productTokens = scene.product_name ? tokens(scene.product_name) : [];
     // Previous scene a still (photo or card)? Then this scene must move: two stills in a row read as
     // a slideshow. Scenes waiting for a stock pick have no result yet and will be video.
+    // With the parallax showcase a product photo moves on its own, so a card followed by a photo is
+    // fine (title card "UP NEXT: X" -> X's photo); photo after photo still asks for moving footage.
     const prev = scene.id > 0 ? result[String(scene.id - 1)] : undefined;
-    const mustMove = prev?.kind === "image" && niche.product.genericFallback !== false;
+    const parallaxOn = env("PRODUCT_PARALLAX", "on").toLowerCase() !== "off";
+    const prev2 = scene.id > 1 ? result[String(scene.id - 2)] : undefined;
+    const stillRun = prev?.kind === "image" ? (prev2?.kind === "image" ? 2 : 1) : 0;
+    const mustMove =
+      niche.product.genericFallback !== false &&
+      (parallaxOn ? stillRun >= 2 || (stillRun === 1 && prev?.source !== "graphic" && prev?.source !== "presskit" && prev?.source !== "local") : stillRun >= 1);
 
     if (scene.type === "graphic" && scene.graphic) {
       const file = await renderGraphic(scene.graphic, cardStyle, graphicsDir);
@@ -286,10 +379,20 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       result[id] = fromCandidate(scene, localHit, scene.queries[0]);
       continue;
     }
+    const lib = libMatches.get(scene.id);
+    if (lib && !(mustMove && lib.shot.kind === "image") && (useCount.get(`lib_${lib.shot.id}`) ?? 0) < 2) {
+      useCount.set(`lib_${lib.shot.id}`, (useCount.get(`lib_${lib.shot.id}`) ?? 0) + 1);
+      result[id] = libraryAsset(lib.shot, lib.sim, scene.queries[0] ?? "");
+      continue;
+    }
     const cands: Candidate[] = [];
     const queryOf = new Map<string, string>();
-    for (const q of scene.queries.slice(0, 3)) {
+    const themed = !scene.product_name && !scene.edited ? themeTerms.get(scene.id) : undefined;
+    const queries = themed?.length ? [...new Set([themed[0], scene.queries[0], ...themed.slice(1), ...scene.queries.slice(1)].filter(Boolean))] : scene.queries;
+    for (const q of queries.slice(0, 3)) {
       for (const provider of providers) {
+        // General web crawl (licence unknown) only fills gaps unless WEBCRAWL_MODE=always.
+        if (provider === "web_crawl" && webCrawlMode() === "fallback" && cands.length >= webCrawlMinCands()) continue;
         for (const c of (await search(provider, q)).slice(0, 6)) {
           if (queryOf.has(c.id)) continue;
           queryOf.set(c.id, q);
@@ -298,6 +401,11 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       }
     }
     if (!cands.length) {
+      const web = await tryWeb(scene, "no stock result");
+      if (web) {
+        result[id] = web;
+        continue;
+      }
       const file = await renderTextCard("", scene.queries[0] ?? scene.text.split(/\s+/).slice(0, 6).join(" "), cardStyle, graphicsDir);
       result[id] = {
         path: file, source: "graphic", license: GENERATED, url: "", kind: "image", width: 1920, height: 1080,
@@ -362,6 +470,50 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       .map((c) => ({ ...c, match: clipScores?.get(`${p.scene.id}|${c.id}`), query: p.queryOf.get(c.id) }))
       .sort((a, b) => (b.match ?? 0) - (a.match ?? 0));
   }
+  // Vision verify: Claude looks at the top CLIP candidates of every scene (frames + narration).
+  const verdicts: Map<string, boolean> = clipScores
+    ? await verifyCandidates(
+        stockPools
+          .map((p) => {
+            const sc = (c: Candidate) => clipScores.get(`${p.scene.id}|${c.id}`) ?? -1;
+            const top = p.cands.filter((c) => framesOf.has(c.id)).sort((a, b) => sc(b) - sc(a)).slice(0, visionTopN());
+            const k = scenes.findIndex((x) => x.id === p.scene.id);
+            const before = scenes.slice(Math.max(0, k - 2), k).map((x) => x.text).join(" ");
+            return { sceneId: p.scene.id, text: p.scene.text, before, cands: top.map((c) => ({ id: c.id, frames: framesOf.get(c.id)! })) };
+          })
+          .filter((i) => i.cands.length),
+        project.brief || niche.label,
+        path.join(dir, "vision_verify.json"),
+        log,
+      )
+    : new Map<string, boolean>();
+  if (locked) log(`[editor] ${locked} scene(s) locked to their product's own media`);
+  const vetItems: VetItem[] = [];
+  for (const p of stockPools) {
+    const top = (candidateFile[String(p.scene.id)] ?? []).slice(0, 4);
+    const thumbs: VetItem["thumbs"] = [];
+    for (const c of top) {
+      const f = await downloadThumb(c);
+      if (f && fs.existsSync(f)) thumbs.push({ candId: c.id, data: fs.readFileSync(f) });
+    }
+    vetItems.push({ id: p.scene.id, text: p.scene.text, subject: p.scene.product_name ?? null, thumbs });
+  }
+  const vetted = await vetCandidates(vetItems, topic, log);
+  let rejectedAll = 0;
+  for (const p of stockPools) {
+    const ok = vetted.get(p.scene.id);
+    if (!ok) continue;
+    const judged = new Set(vetItems.find((v) => v.id === p.scene.id)?.thumbs.map((t) => t.candId));
+    // Judged and rejected thumbnails go; unjudged lower-ranked ones stay as a last resort.
+    const keep = p.cands.filter((c) => ok.has(c.id) || !judged.has(c.id));
+    if (!ok.size) rejectedAll++;
+    if (keep.length) p.cands = ok.size ? [...p.cands.filter((c) => ok.has(c.id)), ...keep.filter((c) => !ok.has(c.id))] : keep;
+    // The fallback list (next-best options when a download fails) loses rejected clips as well.
+    candidateFile[String(p.scene.id)] = (candidateFile[String(p.scene.id)] ?? []).filter((c) => ok.has(c.id) || !judged.has(c.id));
+    if (!ok.size) for (const c of p.cands) clipScores?.set(`${p.scene.id}|${c.id}`, Math.min(clipScores.get(`${p.scene.id}|${c.id}`) ?? 0, 0.18));
+  }
+  if (vetted.size) log(`[editor] ${rejectedAll} scene(s) had no acceptable stock thumbnail (a nearby good clip is reused)`);
+
   for (const p of stockPools) {
     let best: Candidate | null = null;
     let bestScore = -Infinity;
@@ -372,7 +524,9 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const base = clip ?? c.score / 10 - i * 0.001;
       // Stills make a video feel like a slideshow (YouTube "reused content" risk): prefer motion.
       const stillPenalty = c.kind === "image" ? 0.03 : 0;
-      const s = base - stillPenalty - 0.03 * (useCount.get(c.id) ?? 0);
+      // A candidate Claude rejected only wins when nothing better passed.
+      const visionPenalty = verdicts.get(`${p.scene.id}|${c.id}`) === false ? 1 : 0;
+      const s = base - stillPenalty - visionPenalty - 0.03 * (useCount.get(c.id) ?? 0);
       if (s > bestScore) [best, bestScore, bestClip] = [c, s, clip];
     });
     const c = best!;
@@ -380,6 +534,8 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (bestClip !== undefined) asset.match = bestClip;
     if (genericIds.has(p.scene.id)) asset.note = "Generic footage of this type of gun (no media of this exact model yet - add some in My clips / Press kit)";
     if (breakerIds.has(p.scene.id)) asset.note = "Moving footage between product photos (two stills in a row look like a slideshow)";
+    if (verdicts.get(`${p.scene.id}|${c.id}`) === false) asset.note ??= "Vision check: none of the top candidates fit the narration - swap it";
+    if (c.source === "web_crawl") asset.note ??= "Web crawl: licence unknown (copyright risk) - check the source or replace before publishing";
     result[String(p.scene.id)] = asset;
     pendingDownloads.push({ sceneId: p.scene.id, cand: c });
   }
@@ -423,11 +579,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const unique = [...new Map(pendingDownloads.map((d) => [d.cand.id, d.cand])).values()];
   if (unique.length) log(`[assets] downloading ${unique.length} stock clips ...`);
   const files = new Map<string, string>();
+  const failed = new Set<string>();
   let done = 0;
   await pool(unique, 3, async (c) => {
     try {
       files.set(c.id, await downloadCandidate(c));
     } catch (err) {
+      failed.add(c.id);
       log(`[assets] ${String(err)}`);
     }
     done++;
@@ -437,11 +595,69 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     const a = result[String(sceneId)];
     if (a.source !== cand.source || a.url !== cand.pageUrl) continue;
     const file = files.get(cand.id);
-    if (file) a.path = file;
-    else {
-      const scene = scenes[sceneId];
+    if (file) {
+      a.path = file;
+      continue;
+    }
+    // Failed download (or a YouTube video whose watch page is not CC): try the next-best options
+    // for this scene before falling back to a text card.
+    const scene = scenes[sceneId];
+    let replaced = false;
+    // Skip Storyblocks options once the key has no downloads left (cached clips still work).
+    const usable = (c: Candidate) => c.source !== "storyblocks" || !storyblocksExhausted() || fs.existsSync(path.join(paths.root, "cache", "media", `${c.id}.mp4`));
+    const goodEnough = (c: Candidate & { match?: number }) => c.match === undefined || c.match >= MIN_MATCH;
+    for (const alt of (candidateFile[String(sceneId)] ?? []).filter((c) => c.id !== cand.id && !failed.has(c.id) && usable(c) && goodEnough(c)).slice(0, 3)) {
+      try {
+        const altFile = files.get(alt.id) ?? (await downloadCandidate(alt));
+        files.set(alt.id, altFile);
+        result[String(sceneId)] = { ...fromCandidate(scene, alt, alt.query ?? scene.queries[0]), path: altFile, note: "Next-best option (the first pick could not be downloaded)" };
+        if (alt.match !== undefined) result[String(sceneId)].match = alt.match;
+        replaced = true;
+        break;
+      } catch (err) {
+        failed.add(alt.id);
+        log(`[assets] ${String(err)}`);
+      }
+    }
+    if (!replaced) {
+      // A nearby clip that is already on disk and matched its own scene well.
+      const donor = scenes
+        .filter((n) => n.id !== sceneId)
+        .sort((x, y) => Math.abs(x.id - sceneId) - Math.abs(y.id - sceneId))
+        .map((n) => result[String(n.id)])
+        .find((d) => d && d.kind === "video" && d.source !== "graphic" && (d.match ?? 0) >= 0.22 && fs.existsSync(d.path) && !/\.part$/.test(d.path));
+      if (donor) {
+        const len = scene.end - scene.start;
+        const room = Math.max(0, (donor.duration ?? 0) - len - 0.5);
+        result[String(sceneId)] = { ...donor, in: room > 0 ? Math.round((((donor.in ?? 0) + len + 1) % room) * 100) / 100 : 0, note: "Reused a nearby clip (first pick could not be downloaded)" };
+        continue;
+      }
+      const web = await tryWeb(scene, "stock download failed");
+      if (web) {
+        result[String(sceneId)] = web;
+        continue;
+      }
       const card = await renderTextCard("", scene.queries[0] ?? "", cardStyle, graphicsDir);
       result[String(sceneId)] = { path: card, source: "graphic", license: GENERATED, url: "", kind: "image", width: 1920, height: 1080, note: "Stock download failed" };
+    }
+  }
+
+  // Footage library: remember every downloaded pick with its CLIP embedding for later videos.
+  if (libraryEnabled() && clipModelName) {
+    const byId = new Map(Object.values(candidateFile).flat().map((c) => [c.id, c as Candidate]));
+    const now = new Date().toISOString();
+    const add: LibraryShot[] = [];
+    for (const [cid, file] of files) {
+      const c = byId.get(cid);
+      const emb = embedOf.get(cid);
+      if (!c || !emb || !fs.existsSync(file)) continue;
+      add.push({ id: cid, path: file, source: c.source, url: c.pageUrl, license: c.license, author: c.author, kind: c.kind, duration: c.duration, width: c.width, height: c.height, title: c.tags?.slice(0, 200), model: clipModelName, embedding: emb, added: now });
+    }
+    try {
+      const n = addToLibrary(add);
+      if (n) log(`[library] stored ${n} clip(s) in the footage library (${libraryBackend()})`);
+    } catch (err) {
+      log(`[library] could not store clips: ${String(err)}`);
     }
   }
 
@@ -502,6 +718,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (t) a.thumb = t;
   });
 
+  stopYoutubeWorker();
+  // Product-locked shot pools (product_pool.json) for the timeline's pacing engine.
+  if (poolConfig(niche).enabled) {
+    const n = await buildProductPools(scenes, dir, channel, niche, log).catch((err) => (log(`[pool] failed: ${String(err).slice(0, 200)}`), 0));
+    log(`[pool] ${n} product shot(s) ready`);
+  }
+  stopWebCrawlWorker();
   writeLicenseLog(dir, scenes, result);
   saveCandidates(dir, candidateFile);
   writeJson(path.join(dir, "assets.json"), result);
@@ -517,7 +740,8 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   writeJson(path.join(dir, "assets_report.json"), report);
 
   log(`[assets] sources ${JSON.stringify(bySource)}`);
-  if (notes) log(`[assets] ${notes} scenes fell back to a text card (see notes in the review page)`);
+  const textCards = Object.values(result).filter((a) => a.source === "graphic" && a.note).length;
+  if (notes) log(`[assets] ${notes} scenes have notes (reused clips, fallbacks${textCards ? `, ${textCards} text card(s)` : ""}) - see the review page`);
   if (problems.length) {
     log(`[assets] FAILED: scenes without a usable asset: ${problems.map((s) => s.id).join(", ")}`);
     return 1;
@@ -546,16 +770,21 @@ async function rankWithClip(pools: StockPool[], log: (m: string) => void): Promi
   if (!pools.length || !py || !fs.existsSync(path.join(paths.python, "clip_score.py"))) return null;
   const unique = [...new Map(pools.flatMap((p) => p.cands).map((c) => [c.id, c])).values()];
   log(`[assets] CLIP: fetching ${unique.length} thumbnails to judge ${pools.length} scenes ...`);
-  const thumbs = new Map<string, string>();
+  // Up to 3 frames per candidate (web_crawl shots carry their own); others use the thumbnail.
+  const thumbs = new Map<string, string[]>();
   await pool(unique, 6, async (c) => {
+    const fr = (c.frames ?? []).filter((f) => fs.existsSync(f));
+    if (fr.length) return void thumbs.set(c.id, fr.slice(0, 3));
     const t = await downloadThumb(c);
-    if (t) thumbs.set(c.id, t);
+    if (t) thumbs.set(c.id, [t]);
   });
+  for (const [k, v] of thumbs) framesOf.set(k, v);
 
   const job = {
-    texts: Object.fromEntries(pools.map((p) => [String(p.scene.id), p.visual ? `${p.visual} ${p.scene.queries[0] ?? ""}` : `${p.scene.queries[0] ?? ""}. ${p.scene.text.split(/\s+/).slice(0, 25).join(" ")}`])),
+    texts: Object.fromEntries(pools.map((p) => [String(p.scene.id), clipText(p.scene, p.scene.queries, p.visual)])),
     images: Object.fromEntries(thumbs),
     pairs: pools.flatMap((p) => p.cands.filter((c) => thumbs.has(c.id)).map((c) => [String(p.scene.id), c.id])),
+    return_image_embeddings: libraryEnabled(),
   };
   const tmp = path.join(paths.root, "cache", "clip");
   fs.mkdirSync(tmp, { recursive: true });
@@ -568,8 +797,58 @@ async function rankWithClip(pools: StockPool[], log: (m: string) => void): Promi
     log(`[assets] CLIP unavailable (${r.stderr.trim().split("\n").pop()?.slice(0, 160)}); using stock ranking`);
     return null;
   }
-  const scores = JSON.parse(fs.readFileSync(outFile, "utf8")).scores as Record<string, number>;
+  const res = JSON.parse(fs.readFileSync(outFile, "utf8")) as { scores: Record<string, number>; model?: string; image_embeddings?: Record<string, number[]> };
+  if (res.model) clipModelName = res.model;
+  for (const [k, v] of Object.entries(res.image_embeddings ?? {})) embedOf.set(k, v);
+  const scores = res.scores;
   return new Map(Object.entries(scores));
+}
+
+/** Frames (thumbnail or per-shot JPEGs) and CLIP image embeddings of every scored candidate in this run. */
+const framesOf = new Map<string, string[]>();
+const embedOf = new Map<string, number[]>();
+let clipModelName = "";
+
+/** The text CLIP compares footage to: the agent's ideal-shot sentence, else the first search + narration. */
+function clipText(scene: Scene, queries: string[], visual?: string): string {
+  return visual ? `${visual} ${queries[0] ?? ""}` : `${queries[0] ?? ""}. ${scene.text.split(/\s+/).slice(0, 25).join(" ")}`;
+}
+
+/**
+ * Footage library lookup: embeds each scene's CLIP text and returns the best stored clip per scene
+ * whose similarity is at least LIBRARY_MIN_MATCH (FOOTAGE_LIBRARY=off disables it).
+ */
+async function matchLibrary(scenes: Scene[], textOf: (s: Scene) => string, log: (m: string) => void): Promise<Map<number, { shot: LibraryShot; sim: number }>> {
+  const out = new Map<number, { shot: LibraryShot; sim: number }>();
+  const py = venvPythonPath();
+  if (!libraryEnabled() || !py || !scenes.length || !fs.existsSync(path.join(paths.python, "clip_score.py"))) return out;
+  let size = 0;
+  try {
+    size = librarySize();
+  } catch {
+    return out;
+  }
+  if (!size) return out;
+  const tmp = path.join(paths.root, "cache", "clip");
+  fs.mkdirSync(tmp, { recursive: true });
+  const jobFile = path.join(tmp, "library_job.json");
+  const outFile = path.join(tmp, "library_out.json");
+  fs.writeFileSync(jobFile, JSON.stringify({ texts: Object.fromEntries(scenes.map((s) => [String(s.id), textOf(s)])), images: {}, pairs: [], return_text_embeddings: true }));
+  fs.rmSync(outFile, { force: true });
+  const r = await run(py, [path.join(paths.python, "clip_score.py"), "--job", jobFile, "--out", outFile, "--models-dir", path.join(paths.root, "models", "fastembed")]);
+  if (r.code !== 0 || !fs.existsSync(outFile)) return out;
+  const res = JSON.parse(fs.readFileSync(outFile, "utf8")) as { model: string; text_embeddings: Record<string, number[]> };
+  clipModelName = res.model;
+  const lib = loadLibrary(res.model);
+  if (!lib.length) return out;
+  const min = libraryMinMatch();
+  for (const s of scenes) {
+    const vec = res.text_embeddings[String(s.id)];
+    const best = vec ? queryLibrary(lib, vec, 1)[0] : undefined;
+    if (best && best.sim >= min) out.set(s.id, best);
+  }
+  log(`[library] ${out.size} scene(s) can reuse a clip from the footage library (${lib.length} stored, min similarity ${min})`);
+  return out;
 }
 
 /** Changes when files are added to or removed from the channel's media folders. */

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClipForge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="#/create"><span class="logo">C</span>ClipForge</a>
+    <nav>
+      <a href="#/create" data-nav="create">Create</a>
+      <a href="#/videos" data-nav="videos">My videos</a>
+      <a href="#/settings" data-nav="settings">Settings</a>
+      <a href="/index.html" class="muted" title="Purana full editor">Classic editor</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- CREATE -->
+  <section id="page-create" class="page">
+    <div class="head"><h1>Create a video</h1><p class="sub">Voiceover aur script daalein, channel chunein, Go dabayein.</p></div>
+    <div class="grid2">
+      <div class="card">
+        <label class="lbl"><span class="num">1</span>Voiceover <span class="hint">MP3 / WAV</span></label>
+        <label class="drop" id="drop">
+          <input type="file" id="audio" accept=".mp3,.wav,.m4a,audio/*" hidden>
+          <span class="drop-icon">&#8679;</span>
+          <span id="drop-text">Click or drop your voiceover file here</span>
+        </label>
+        <button class="link" id="clear-audio" hidden>Remove file</button>
+        <p class="help" id="mode-note">No voiceover? A computer test voice reads the script.</p>
+      </div>
+      <div class="card">
+        <label class="lbl" for="script"><span class="num">2</span>Script</label>
+        <textarea id="script" rows="9" placeholder="Paste your full script here..."></textarea>
+        <p class="help" id="wordcount">0 words</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="grid2 tight">
+        <div>
+          <label class="lbl" for="title">Title <span class="hint">optional</span></label>
+          <input id="title" placeholder="e.g. 7 Best Budget Air Fryers in 2026" autocomplete="off" maxlength="100">
+        </div>
+        <div>
+          <label class="lbl" for="channel">Channel preset</label>
+          <select id="channel"></select>
+        </div>
+      </div>
+      <div class="row-between" style="margin-top:16px">
+        <label class="switch"><input type="checkbox" id="review" checked><span>Review scenes before render</span><span class="hint">off = fully automatic</span></label>
+        <div class="go-wrap">
+          <button class="btn primary big" id="go">Go</button>
+          <p class="error" id="create-error"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROGRESS / RESULT -->
+  <section id="page-project" class="page" hidden>
+    <div class="head"><h1 id="p-title">Video</h1><p class="sub" id="p-status"></p></div>
+    <div class="card">
+      <div class="bar-row"><div class="bar"><div class="fill" id="p-fill"></div></div><span class="pct" id="p-pct">0%</span></div>
+      <p class="help" id="p-eta"></p>
+      <ol class="steps" id="steps"></ol>
+      <details><summary>Show log</summary><pre id="log"></pre></details>
+    </div>
+    <div id="review-box" class="card" hidden>
+      <div class="row-between"><div><h2>Review scenes</h2><p class="help">Har scene ke clips dekhein. Kisi shot par click karein, phir neeche alternative chunein. Theek ho to Render dabayein.</p></div>
+        <button class="btn primary big" id="render-btn">Render video</button></div>
+      <div class="rv" id="rv"></div>
+    </div>
+    <div id="result" hidden>
+      <div class="card">
+        <h2>Your video</h2>
+        <video id="player" controls preload="metadata"></video>
+        <div class="row">
+          <a class="btn primary" id="download">Download MP4</a>
+          <a class="btn ghost" id="license">License log (CSV)</a>
+        </div>
+      </div>
+      <div class="card" id="publish-card" hidden>
+        <h2>Publish pack</h2>
+        <label class="lbl">Title</label><input id="pub-title" readonly>
+        <label class="lbl">Thumbnails</label><div class="thumbs" id="pub-thumbs"></div>
+        <label class="lbl">Description</label><textarea id="pub-desc" rows="10" readonly></textarea>
+        <label class="lbl">Chapters</label><pre class="chap" id="pub-chap"></pre>
+      </div>
+      <div class="card">
+        <h2>Quality check</h2>
+        <div class="qa-sum" id="qa-sum"></div>
+        <ul class="qa" id="qa-list"></ul>
+      </div>
+      <div class="card">
+        <h2>Scenes</h2>
+        <p class="help" id="scene-note"></p>
+        <div class="scenes" id="scenes"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VIDEOS -->
+  <section id="page-videos" class="page" hidden>
+    <div class="head"><h1>My videos</h1><p class="sub">Saari projects yahan hain.</p></div>
+    <div class="card flush"><ul class="vlist" id="vlist"></ul></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="page-settings" class="page" hidden>
+    <div class="head"><h1>Settings</h1><p class="sub">Ek dafa set karein, har video par lagengi.</p></div>
+    <div class="card">
+      <h2>Defaults</h2>
+      <label class="lbl">Default niche</label>
+      <div class="toggle" id="s-niche"><button data-v="guns">Guns</button><button data-v="tech">Tech</button></div>
+      <label class="lbl">Shot length (seconds)</label>
+      <div class="grid2 tight">
+        <div><span class="help">Guns</span><input type="number" step="0.1" min="1" max="8" id="s-pace-guns"></div>
+        <div><span class="help">Tech</span><input type="number" step="0.1" min="1" max="8" id="s-pace-tech"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="s-captions"><span>Burned-in captions</span><span class="hint">competitors use none</span></label>
+    </div>
+    <div class="card">
+      <h2>Footage sources</h2>
+      <label class="switch"><input type="checkbox" id="s-web"><span>Web crawl (YouTube / web clips)</span><span class="hint">licence unknown</span></label>
+      <label class="switch"><input type="checkbox" id="s-presskit"><span>Press kit / official product photos</span></label>
+      <label class="switch"><input type="checkbox" id="s-stock"><span>Stock (Pixabay, Pexels, Storyblocks, Wikimedia)</span></label>
+      <label class="lbl">Web crawl mode</label>
+      <div class="toggle" id="s-mode"><button data-v="fallback">Fallback (gaps only)</button><button data-v="always">Always</button></div>
+    </div>
+    <div class="card">
+      <h2>Channel style preset</h2>
+      <p class="help">Har channel ka apna look: cards ka font, rang, kaun se graphics, shot length.</p>
+      <label class="lbl">Channel</label><select id="cs-channel"></select>
+      <div class="grid2 tight">
+        <div><label class="lbl">Card font</label><select id="cs-font"></select></div>
+        <div><label class="lbl">Shot length (s)</label><input type="number" step="0.1" min="1" max="8" id="cs-pace" placeholder="niche default"></div>
+        <div><label class="lbl">Accent colour</label><input type="color" id="cs-primary"></div>
+        <div><label class="lbl">Text colour</label><input type="color" id="cs-text"></div>
+        <div><label class="lbl">Graphic every (s)</label><input type="number" step="1" min="8" max="120" id="cs-every"></div>
+      </div>
+      <label class="lbl">Cards / graphics</label>
+      <div class="chips" id="cs-set"></div>
+      <div class="row"><button class="btn ghost" id="cs-save">Save channel style</button><span class="ok" id="cs-msg"></span></div>
+    </div>
+    <div class="card">
+      <h2>API keys</h2>
+      <ul class="keys" id="keys"></ul>
+      <p class="help">Keys are never shown here. Edit <code>.env</code> in the clipforge folder to change them.</p>
+    </div>
+    <div class="row"><button class="btn primary big" id="s-save">Save settings</button><span class="ok" id="s-msg"></span></div>
+  </section>
+</main>
+<script src="/simple/simple.js"></script>
+</body>
+</html>

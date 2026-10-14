@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { paths } from "../paths.js";
+import { netFetch } from "../net.js";
 import { tokens } from "./local.js";
 import { USER_AGENT } from "./presskit.js";
 import type { Candidate } from "./types.js";
@@ -31,7 +32,7 @@ export function wikiFetch(url: string, timeoutMs = 30_000): Promise<Response> {
   const job = wikiQueue.then(async () => {
     for (const wait of [0, 3000, 8000, 20000]) {
       if (wait) await new Promise((r) => setTimeout(r, wait));
-      const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await netFetch(url, { headers: { "User-Agent": USER_AGENT }, timeoutMs });
       if (res.status !== 429) {
         await new Promise((r) => setTimeout(r, 700));
         return res;

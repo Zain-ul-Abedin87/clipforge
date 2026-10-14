@@ -30,9 +30,14 @@
           <textarea id="newScript" rows="5" placeholder="Paste the exact script you recorded, or leave empty for voice-only mode."></textarea>
         </label>
         <label class="field">
-          <span>Video type <small>(rule set)</small></span>
+          <span>Video type <small id="newPacing"></small></span>
           <select id="newNiche"></select>
         </label>
+        <label class="field">
+          <span>Footage sources</span>
+          <select id="newFootage"></select>
+        </label>
+        <label class="check"><input id="newPlanGate" type="checkbox" checked> Show me the plan before footage is fetched</label>
         <label class="field">
           <span>Channel style</span>
           <select id="newChannel"></select>
@@ -51,6 +56,7 @@
             <label class="field"><span>Video type</span><select id="batchNiche"></select></label>
             <label class="field"><span>Channel</span><select id="batchChannel"></select></label>
           </div>
+          <label class="field"><span>Footage sources</span><select id="batchFootage"></select></label>
           <label class="check"><input id="batchLlm" type="checkbox"> Use Claude for scene labels</label>
           <button id="batchAdd" class="btn small primary">Upload &amp; queue</button>
           <div id="batchProgress" class="progress hidden"><div></div></div>
@@ -149,9 +155,38 @@
     </aside>
 
     <main id="main">
-      <div id="empty" class="empty">
-        <h1>Voiceover → finished video</h1>
-        <p>Upload a voiceover on the left. ClipForge transcribes it, aligns your script, and plans 6–12 second scenes.</p>
+      <div id="empty" class="empty composer-wrap">
+        <h1 class="composer-title">What are we making today?</h1>
+        <p class="muted composer-sub">Describe the video. Type <b>@</b> for a brand profile, A-roll or footage, click the orange tag to change the video type.</p>
+
+        <div id="composer" class="composer">
+          <div id="cpPrompt" class="cp-prompt" contenteditable="true" spellcheck="false" data-placeholder="Build me a WW2 documentary with archival footage, dramatic pacing and cinematic narration..."></div>
+          <div id="cpAttached" class="cp-attached"></div>
+          <div class="cp-bar">
+            <button id="cpPlus" class="cp-round" title="Add script or audio" aria-haspopup="menu">+</button>
+            <div class="cp-right">
+              <button id="cpModel" class="cp-model" aria-haspopup="menu"><span id="cpModelLabel">Claude Haiku</span> <span class="cp-caret">⌄</span></button>
+              <button id="cpSend" class="cp-send" title="Create video" aria-label="Create video">↑</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="cpMenu" class="cp-menu hidden" role="menu"></div>
+        <input id="cpAudioFile" type="file" accept=".mp3,.wav,.m4a" hidden>
+        <input id="cpScriptFile" type="file" accept=".txt,.md,.html,.htm" hidden>
+
+        <div id="cpScriptModal" class="cp-modal hidden">
+          <div class="cp-modal-box">
+            <div class="cp-modal-head"><b>Custom script</b><button id="cpScriptClose" class="cp-x" aria-label="Close">×</button></div>
+            <textarea id="cpScriptText" rows="12" placeholder="Paste the exact script you recorded (it improves alignment), or load a .txt / .html file."></textarea>
+            <div class="cp-modal-foot">
+              <button id="cpScriptLoad" class="btn small">Load file…</button>
+              <button id="cpScriptSave" class="btn small primary">Attach script</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="muted small composer-note">Length follows your voiceover (Custom Audio). Script-to-voice is not built yet, so a voiceover is needed to start.</p>
       </div>
 
       <div id="projectView" class="hidden">
@@ -161,7 +196,8 @@
             <div id="pvMeta" class="muted"></div>
           </div>
           <div class="actions">
-            <select id="pvNiche" class="btn" title="Video type rule set"></select>
+            <select id="pvNiche" class="btn" title="Video type"></select>
+            <select id="pvFootage" class="btn" title="Where footage may come from"></select>
             <button id="runAll" class="btn primary">▶ Run pipeline</button>
             <select id="rerunStep" class="btn">
               <option value="">Re-run step…</option>
@@ -177,6 +213,17 @@
         </div>
 
         <ol id="stepper" class="stepper"></ol>
+
+        <section id="planBox" class="card plan-box hidden">
+          <div class="plan-head">
+            <div>
+              <h2>Plan ready - check it before the video is made</h2>
+              <p class="muted small">Footage is fetched only after you approve. Change any scene's searches in the <b>Scenes</b> list below (✎ Edit searches), or change the video type / footage sources above to re-plan.</p>
+            </div>
+            <button id="approvePlan" class="btn primary">✓ Approve plan &amp; make video</button>
+          </div>
+          <div id="planEstimate" class="plan-grid"></div>
+        </section>
 
         <details id="logBox" class="card log">
           <summary>Log <span id="logState" class="muted"></span></summary>
@@ -250,5 +297,6 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="app.js"></script>
+  <script src="composer.js"></script>
 </body>
 </html>

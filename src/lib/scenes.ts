@@ -35,6 +35,8 @@ export interface Scene {
   section: number;
   graphic?: Graphic;
   labeledBy: "llm" | "heuristic";
+  /** Set when the user changed the searches in the plan review: the footage agent keeps them. */
+  edited?: boolean;
 }
 
 export interface ValidationResult {

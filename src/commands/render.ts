@@ -10,6 +10,7 @@ import { AlignedWord } from "./align.js";
 import { buildAss, captionLines, CaptionLine } from "../lib/render/captions.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
+import { duckGraph } from "../audio/duck.js";
 import type { Layer } from "../lib/assets/graphics.js";
 import type { Timeline, TimelineScene } from "./timeline.js";
 
@@ -29,7 +30,8 @@ const fpath = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(
 /** Gentle Ken Burns on stills via zoompan over an upscaled frame (upscaling avoids zoompan jitter). */
 function motionFilter(s: TimelineScene, frames: number): string {
   if (s.motion === "none") return `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
-  const Z = s.asset.source === "graphic" ? 1.04 : 1.1;
+  // Mild moves (channel study: still motion mostly static / slow zoom).
+  const Z = s.asset.source === "graphic" ? 1.03 : 1.06;
   const n = Math.max(1, frames - 1);
   const center = `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
   const expr = {
@@ -41,8 +43,76 @@ function motionFilter(s: TimelineScene, frames: number): string {
   return `scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,crop=${W * 1.5}:${H * 1.5},zoompan=${expr}:d=1:s=${W}x${H}:fps=30`;
 }
 
-interface SegmentJob {
+/** Baked once per photo: backdrop (slightly larger than the frame, for drift) + photo with shadow. */
+export interface Showcase {
+  bg: string;
+  fg: string;
+  /** Spec chips on the right: the product sits left of centre. */
+  left: boolean;
+}
+
+/**
+ * Still images (overlay layers, logo, showcase stills) are read once and repeated inside the
+ * filter graph. With `-loop 1` inputs FFmpeg 7 decodes them in their own threads far ahead of a
+ * slow graph; six chip layers on a showcase ran out of memory that way.
+ */
+const HOLD = "loop=loop=-1:size=1:start=0,setpts=N/30/TB";
+
+const BG_PAD_X = 120;
+const BG_PAD_Y = 68;
+
+/**
+ * Product-photo showcase (2.5D parallax). The backdrop drifts one way, the whole photo (never
+ * cropped, so a wide shotgun or a tall phone stays whole) grows slowly and drifts the other way.
+ * Inputs: [0:v] backdrop, [1:v] photo with shadow. Output label [pv].
+ */
+function showcaseGraph(s: TimelineScene, frames: number, sc: Showcase): string[] {
+  const D = Math.max(1, frames - 1) / 30;
+  const p = `min(1,t/${D.toFixed(3)})`;
+  const grow = s.motion === "zoom_out" ? `(1.06-0.06*${p})` : `(1+0.06*${p})`;
+  const dir = s.motion === "pan_left" ? -1 : s.motion === "pan_right" ? 1 : s.id % 2 ? 1 : -1;
+  const bgX = dir > 0 ? `${BG_PAD_X}*${p}` : `${BG_PAD_X}*(1-${p})`;
+  const cx = sc.left ? Math.round(W * 0.33) : W / 2;
+  const dx = `${-dir * 30}*(${p}-0.5)`;
+  return [
+    `[0:v]${HOLD},crop=${W}:${H}:x='${bgX}':y=${BG_PAD_Y / 2},format=rgba[pbg]`,
+    `[1:v]${HOLD},format=rgba,scale=w='trunc(iw*${grow}/2)*2':h=-2:eval=frame[pfg]`,
+    `[pbg][pfg]overlay=x='${cx}-w/2+${dx}':y='${H / 2 - 10}-h/2':eval=frame,format=yuv420p[pv]`,
+  ];
+}
+
+/**
+ * Bakes the showcase stills. Cut-out photos (with transparency, common on maker sites) get a
+ * neutral studio gradient; ordinary photos get a blurred, darkened copy of themselves.
+ */
+export async function prepareShowcase(ff: string, fp: string, src: string, outDir: string, left: boolean): Promise<Showcase | null> {
+  const key = crypto.createHash("sha1").update(`${src}|${left}|sc2`).digest("hex").slice(0, 12);
+  const bg = path.join(outDir, `scbg_${key}.png`);
+  const fg = path.join(outDir, `scfg_${key}.png`);
+  if (fs.existsSync(bg) && fs.existsSync(fg)) return { bg, fg, left };
+  const pix = (await run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", src])).stdout.trim();
+  const alpha = /a|^pal8$/.test(pix.replace(/^gray$/, ""));
+  const BW = W + BG_PAD_X;
+  const BH = H + BG_PAD_Y;
+  const glow = (base: number, add: number) => `'${base}+${add}*pow(max(0,1-hypot((X-W/2)/(W*0.62),(Y-H*0.42)/(H*0.8))),1.5)'`;
+  const bgArgs = alpha
+    ? ["-f", "lavfi", "-i", `color=c=black:s=${BW}x${BH},format=rgb24,geq=r=${glow(16, 48)}:g=${glow(17, 51)}:b=${glow(20, 58)}`]
+    : ["-i", src, "-vf", `scale=${BW}:${BH}:force_original_aspect_ratio=increase,crop=${BW}:${BH},boxblur=36:3,eq=brightness=-0.24:saturation=0.85`];
+  const r1 = await run(ff, ["-hide_banner", "-loglevel", "error", "-y", ...bgArgs, "-frames:v", "1", bg]);
+  // Photo inside its box, a soft offset shadow under it, on a transparent canvas.
+  const box = left ? `${Math.round(W * 0.48)}:${H - 300}` : `${W - 420}:${H - 280}`;
+  const graph =
+    `[0:v]format=rgba,scale=${box}:force_original_aspect_ratio=decrease,split=2[ph][sh];` +
+    `[sh]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.55,pad=iw+120:ih+120:74:84:color=black@0,boxblur=22:2[shb];` +
+    `[shb][ph]overlay=60:60`;
+  const r2 = await run(ff, ["-hide_banner", "-loglevel", "error", "-y", "-i", src, "-filter_complex", graph, "-frames:v", "1", fg]);
+  return r1.code === 0 && r2.code === 0 ? { bg, fg, left } : null;
+}
+
+export interface SegmentJob {
   logo?: Timeline["logo"];
+  /** Non-16:9 product photo: parallax showcase instead of a baked blurred-background still. */
+  showcase?: Showcase;
   scene: TimelineScene;
   frames: number;
   startSec: number;
@@ -59,43 +129,75 @@ const ease = (d: number, len: number) => `pow(1-min(1,max(0,(t-${d.toFixed(3)})/
 function layerPosition(l: Layer): string {
   if (l.anim === "slide_up") return `x=0:y='70*${ease(l.delay, 0.4)}'`;
   if (l.anim === "slide_left") return `x='-760*${ease(l.delay, 0.45)}':y=0`;
+  if (l.anim === "slide_right") return `x='820*${ease(l.delay, 0.4)}':y=0`;
   return "x=0:y=0";
 }
 
-function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[] {
+export function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[] {
   const { scene, frames } = job;
   const dur = frames / 30;
-  const input =
-    scene.asset.kind === "video"
+  const sc = job.showcase;
+  // Sub-shots (pacing engine): one input per sub-shot, scaled, trimmed and concatenated in the graph.
+  const subs = !sc && scene.asset.shots && scene.asset.shots.length ? scene.asset.shots : null;
+  const input = subs
+    ? subs.flatMap((x) => (x.kind === "video" ? ["-ss", String(x.in ?? 0), "-stream_loop", "-1", "-i", x.path] : ["-loop", "1", "-framerate", "30", "-i", x.path]))
+    : sc
+    ? ["-i", sc.bg, "-i", sc.fg]
+    : scene.asset.kind === "video"
       ? ["-ss", String(scene.asset.in ?? 0), "-stream_loop", "-1", "-i", scene.asset.path]
       : ["-loop", "1", "-framerate", "30", "-i", scene.asset.path];
-  const layers = (scene.overlays ?? []).filter((l) => l.delay < dur);
-  const layerInputs = layers.flatMap((l) => ["-loop", "1", "-framerate", "30", "-i", l.path]);
+  // Overlay inputs follow the footage input(s).
+  const first = subs ? subs.length : sc ? 2 : 1;
+  const layers = (scene.overlays ?? []).filter((l) => l.delay < dur && (!l.video || fs.existsSync(l.path)));
+  // Remotion cards are ProRes 4444 clips with alpha (l.video); PNG layers are stills.
+  const layerInputs = layers.flatMap((l) => ["-i", l.path]);
   const logo = job.logo;
-  if (logo) layerInputs.push("-loop", "1", "-framerate", "30", "-i", logo.path);
+  if (logo) layerInputs.push("-i", logo.path);
 
-  const base = [motionFilter(scene, frames), "fps=30", "setsar=1"];
+  const base = sc ? ["fps=30", "setsar=1"] : [motionFilter(scene, frames), "fps=30", "setsar=1"];
+  // Card over footage: blur and darken the picture so the text reads.
+  if (scene.backdrop === "blur") base.push("boxblur=22:2", "eq=brightness=-0.28:saturation=0.8");
   if (job.fadeIn) base.push(scene.transition === "flash" ? `fade=t=in:st=0:d=0.3:color=white` : `fade=t=in:st=0:d=${FADE}`);
   if (job.fadeOut) base.push(`fade=t=out:st=${Math.max(0, dur - FADE).toFixed(3)}:d=${FADE}`);
-  const graph: string[] = [`[0:v]${base.join(",")}[v0]`];
+  const graph: string[] = subs
+    ? [
+        ...subs.map((x, k) =>
+          x.kind === "image"
+            ? `[${k}:v]scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,crop=${W * 1.5}:${H * 1.5},zoompan=z='1+0.05*on/${Math.max(1, x.frames - 1)}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${W}x${H}:fps=30,setsar=1,trim=end_frame=${x.frames},setpts=PTS-STARTPTS[ss${k}]`
+            : `[${k}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=30,setsar=1,trim=end_frame=${x.frames},setpts=PTS-STARTPTS[ss${k}]`,
+        ),
+        `${subs.map((_, k) => `[ss${k}]`).join("")}concat=n=${subs.length}:v=1:a=0[cat]`,
+        `[cat]${["fps=30", "setsar=1", ...base.slice(subs ? 3 : 0)].join(",")}[v0]`,
+      ]
+    : sc
+      ? [...showcaseGraph(scene, frames, sc), `[pv]${base.join(",")}[v0]`]
+      : [`[0:v]${base.join(",")}[v0]`];
   let cur = "v0";
   layers.forEach((l, k) => {
+    if (l.video) {
+      // The card animates itself (spring in, fade out); shift it to its start time and let the
+      // footage pass through once it ends.
+      graph.push(`[${k + first}:v]format=yuva444p,setpts=PTS-STARTPTS+${l.delay.toFixed(3)}/TB[l${k}]`);
+      graph.push(`[${cur}][l${k}]overlay=x=0:y=0:eof_action=pass:format=auto[v${k + 1}]`);
+      cur = `v${k + 1}`;
+      return;
+    }
     const fades = [`fade=t=in:st=${l.delay.toFixed(3)}:d=0.3:alpha=1`];
     if (l.out !== undefined && l.out < dur) fades.push(`fade=t=out:st=${l.out.toFixed(3)}:d=0.3:alpha=1`);
-    graph.push(`[${k + 1}:v]format=rgba,${fades.join(",")}[l${k}]`);
+    graph.push(`[${k + first}:v]${HOLD},format=rgba,${fades.join(",")}[l${k}]`);
     graph.push(`[${cur}][l${k}]overlay=${layerPosition(l)}:eval=frame[v${k + 1}]`);
     cur = `v${k + 1}`;
   });
   if (logo) {
     // Corner logo, ~170 px wide, at the channel's opacity; drawn under the captions.
-    const k = layers.length + 1;
+    const k = layers.length + first;
     const pos: Record<string, string> = {
       "top-right": "x=W-w-48:y=40",
       "top-left": "x=48:y=40",
       "bottom-right": "x=W-w-48:y=H-h-150",
       "bottom-left": "x=48:y=H-h-150",
     };
-    graph.push(`[${k}:v]scale=170:-1,format=rgba,colorchannelmixer=aa=${logo.opacity}[logo]`);
+    graph.push(`[${k}:v]${HOLD},scale=170:-1,format=rgba,colorchannelmixer=aa=${logo.opacity}[logo]`);
     graph.push(`[${cur}][logo]overlay=${pos[logo.position] ?? pos["top-right"]}[vlogo]`);
     cur = "vlogo";
   }
@@ -186,13 +288,20 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     fs.writeFileSync(assFile, buildAss(lines, tl.captions), "utf8");
   }
 
-  // Non-16:9 product stills (press kit, Wikimedia, own photos) get the blurred-background treatment.
+  // Non-16:9 product stills (press kit, official, Wikimedia, own photos) get the parallax showcase;
+  // PRODUCT_PARALLAX=off falls back to one baked blurred-background still with a Ken Burns move.
+  const parallaxOn = env("PRODUCT_PARALLAX", "on").toLowerCase() !== "off";
+  const showcases = new Map<number, Showcase>();
   for (const s of scenes) {
     const a = s.asset;
-    if (a.kind !== "image" || a.source === "graphic") continue;
+    if (a.kind !== "image" || a.source === "graphic" || a.shots?.length) continue;
     const probe = await run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", a.path]);
     const [w, h] = probe.stdout.trim().split(",").map(Number);
-    if (w && h && Math.abs(w / h - 16 / 9) > 0.15) s.asset = { ...a, path: await fitToFrame(ff, a.path, segDir) };
+    if (!w || !h || Math.abs(w / h - 16 / 9) <= 0.15) continue;
+    const chips = (s.overlays ?? []).some((l) => l.anim === "slide_right");
+    const sc = parallaxOn && s.motion !== "none" ? await prepareShowcase(ff, fp, a.path, segDir, chips) : null;
+    if (sc) showcases.set(s.id, sc);
+    else s.asset = { ...a, path: await fitToFrame(ff, a.path, segDir) };
   }
 
   // Segment jobs. A segment's file name hashes everything that affects its pixels, so an edited
@@ -204,12 +313,13 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     const fadeIn = s.transition === "fade" || s.transition === "flash";
     const fadeOut = scenes[i + 1]?.transition === "fade";
     const segLines = lines.filter((l) => l.end > startSec && l.start < endFrame / 30);
+    const showcase = showcases.get(s.id);
     const key = crypto
       .createHash("sha1")
-      .update(JSON.stringify({ a: s.asset, m: s.motion, tr: s.transition, ov: s.overlays ?? [], lg: tl.logo ?? null, f: frames, st: s.startFrame, fadeIn, fadeOut, segLines, cap: assFile ? tl.captions : null, v: 3 }))
+      .update(JSON.stringify({ a: s.asset, m: s.motion, tr: s.transition, ov: s.overlays ?? [], lg: tl.logo ?? null, f: frames, st: s.startFrame, fadeIn, fadeOut, segLines, cap: assFile ? tl.captions : null, v: 4, bd: s.backdrop ?? null, ...(showcase ? { sc: showcase } : {}) }))
       .digest("hex")
       .slice(0, 12);
-    return { logo: tl.logo ?? null, scene: s, frames, startSec, fadeIn, fadeOut, out: path.join(segDir, `seg_${String(s.id).padStart(4, "0")}_${key}.mp4`), assFile: segLines.length ? assFile : null };
+    return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, out: path.join(segDir, `seg_${String(s.id).padStart(4, "0")}_${key}.mp4`), assFile: segLines.length ? assFile : null };
   });
 
   if (opts.force) for (const j of jobs) for (const f of [j.out, `${j.out}.enc`]) fs.rmSync(f, { force: true });
@@ -302,13 +412,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   if (sfxLabels.length) sfxGraph.push(`${sfxLabels.join("")}amix=inputs=${sfxLabels.length}:duration=longest:normalize=0,atrim=0:${D}[sfx]`);
   const voiceChain = `[1:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`;
   const filter = bed
-    ? [
-        `${voiceChain},asplit=2[vo][key]`,
-        `[2:a]volume=${tl.music.volumeDb}dB,atrim=0:${D},asetpts=PTS-STARTPTS,afade=t=in:d=2,afade=t=out:st=${Math.max(0, duration - 3).toFixed(3)}:d=3[mb]`,
-        // Ducking: the voice drives a compressor on the music, ~duckDb quieter while speaking.
-        `[mb][key]sidechaincompress=threshold=0.015:ratio=${Math.max(2, Math.abs(tl.music.duckDb) / 1.5).toFixed(1)}:attack=15:release=350[duck]`,
-        `[vo][duck]amix=inputs=2:duration=first:normalize=0[pre]`,
-      ].join(";")
+    ? duckGraph({ voiceChain, musicIn: "[2:a]", duration, volumeDb: tl.music.volumeDb, out: "pre" })
     : `${voiceChain}[pre]`;
   const finalAudio = sfxLabels.length
     ? `${sfxGraph.join(";")};[pre][sfx]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[aout]`

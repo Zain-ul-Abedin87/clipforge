@@ -1,0 +1,521 @@
+{
+ "_meta": {
+  "source": "channel_study v2, first 5 min of sampled videos, faceless channels only (talking-head share <15%)",
+  "shot_classes": "CLIP ViT-B/32 zero-shot on 1 mid-frame per shot",
+  "note": "pct = % of screen time; lift = share during this sentence type / overall share"
+ },
+ "tech": {
+  "pacing": {
+   "targetShotSec": 1.8,
+   "avgShotSec": 2.45,
+   "shotSecP25": 1.13,
+   "maxShotSec": 5.0,
+   "cutsPerMin": 25.8,
+   "cutsPerMinRange": [
+    19.4,
+    30.9
+   ],
+   "pctUnder2s": 55.7,
+   "pctOver6s": 4.9
+  },
+  "product": {
+   "segmentSecMedian": 39.3,
+   "shotsPerProductMedian": 16.0,
+   "shotsPerProductIQR": [
+    11.0,
+    22.25
+   ]
+  },
+  "cards": {
+   "segmentsWithCardPct": 26.8,
+   "firstCardAfterIntroSecMedian": 18.5,
+   "rankCardOnIntro": true
+  },
+  "sourceMixPct": {
+   "handson": 45.4,
+   "field": 14.5,
+   "promo": 11.8,
+   "amazon": 9.6,
+   "lifestyle": 9.0,
+   "talking": 4.2,
+   "rankcard": 2.8,
+   "other": 1.9,
+   "textcard": 0.7
+  },
+  "sentenceRules": {
+   "hook": {
+    "share_pct": {
+     "handson": 40.8,
+     "field": 17.7,
+     "lifestyle": 10.9,
+     "promo": 9.4,
+     "amazon": 9.0,
+     "talking": 5.1
+    },
+    "lift": {
+     "rankcard": 1.68,
+     "field": 1.22,
+     "lifestyle": 1.21,
+     "talking": 1.21
+    },
+    "preferred_shot_types": [
+     "handson",
+     "field",
+     "lifestyle",
+     "promo",
+     "amazon",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" in use outdoor test",
+     "{category} lifestyle stock footage",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "use_case": {
+    "share_pct": {
+     "handson": 52.6,
+     "field": 16.5,
+     "promo": 8.8,
+     "lifestyle": 8.5,
+     "amazon": 6.4,
+     "talking": 3.7
+    },
+    "lift": {
+     "handson": 1.16,
+     "other": 1.16,
+     "field": 1.14,
+     "lifestyle": 0.94
+    },
+    "preferred_shot_types": [
+     "handson",
+     "field",
+     "promo",
+     "lifestyle",
+     "amazon"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)"
+    ]
+   },
+   "price": {
+    "share_pct": {
+     "handson": 31.6,
+     "amazon": 17.8,
+     "rankcard": 13.3,
+     "field": 12.2,
+     "promo": 9.4,
+     "lifestyle": 8.7
+    },
+    "lift": {
+     "rankcard": 4.75,
+     "amazon": 1.85,
+     "other": 1.21,
+     "talking": 1.12
+    },
+    "preferred_shot_types": [
+     "handson",
+     "amazon",
+     "rankcard",
+     "field",
+     "promo",
+     "lifestyle"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "GENERATE: rank number + name + price card",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video",
+     "{category} lifestyle stock footage"
+    ]
+   },
+   "other": {
+    "share_pct": {
+     "handson": 48.0,
+     "field": 12.1,
+     "promo": 12.0,
+     "amazon": 9.4,
+     "lifestyle": 9.0,
+     "talking": 4.2
+    },
+    "lift": {
+     "textcard": 1.14,
+     "handson": 1.06,
+     "promo": 1.02,
+     "lifestyle": 1.0
+    },
+    "preferred_shot_types": [
+     "handson",
+     "field",
+     "promo",
+     "amazon",
+     "lifestyle"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "{category} lifestyle stock footage"
+    ]
+   },
+   "product_intro": {
+    "share_pct": {
+     "handson": 34.6,
+     "promo": 16.7,
+     "amazon": 16.1,
+     "field": 15.4,
+     "lifestyle": 7.2,
+     "rankcard": 4.3
+    },
+    "lift": {
+     "amazon": 1.68,
+     "textcard": 1.57,
+     "rankcard": 1.54,
+     "promo": 1.42
+    },
+    "preferred_shot_types": [
+     "handson",
+     "promo",
+     "amazon",
+     "field",
+     "lifestyle",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" in use outdoor test",
+     "{category} lifestyle stock footage",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "spec": {
+    "share_pct": {
+     "handson": 41.1,
+     "field": 15.7,
+     "promo": 12.1,
+     "lifestyle": 10.8,
+     "amazon": 9.7,
+     "talking": 4.8
+    },
+    "lift": {
+     "other": 1.63,
+     "lifestyle": 1.2,
+     "talking": 1.14,
+     "field": 1.08
+    },
+    "preferred_shot_types": [
+     "handson",
+     "field",
+     "promo",
+     "lifestyle",
+     "amazon"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)"
+    ]
+   },
+   "verdict": {
+    "share_pct": {
+     "handson": 48.4,
+     "amazon": 15.3,
+     "promo": 12.1,
+     "lifestyle": 7.3,
+     "field": 6.7,
+     "talking": 4.5
+    },
+    "lift": {
+     "amazon": 1.59,
+     "textcard": 1.29,
+     "rankcard": 1.18,
+     "handson": 1.07
+    },
+    "preferred_shot_types": [
+     "handson",
+     "amazon",
+     "promo",
+     "lifestyle",
+     "field"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" official trailer OR launch video",
+     "{category} lifestyle stock footage",
+     "\"{product}\" in use outdoor test"
+    ]
+   }
+  },
+  "sample": {
+   "channels": 39,
+   "videos": 85,
+   "excludedTalkingHead": [
+    "@Mrwhosetheboss",
+    "@SmartHomeSolver",
+    "@ToastyBros",
+    "@Top5best",
+    "@howtomen",
+    "@infinite",
+    "@itsemilyleah",
+    "@randomfrankp"
+   ]
+  }
+ },
+ "guns": {
+  "pacing": {
+   "targetShotSec": 2.2,
+   "avgShotSec": 3.16,
+   "shotSecP25": 1.27,
+   "maxShotSec": 6.1,
+   "cutsPerMin": 19.8,
+   "cutsPerMinRange": [
+    12.2,
+    25.3
+   ],
+   "pctUnder2s": 44.9,
+   "pctOver6s": 8.2
+  },
+  "product": {
+   "segmentSecMedian": 67.1,
+   "shotsPerProductMedian": 16.0,
+   "shotsPerProductIQR": [
+    9.0,
+    30.0
+   ]
+  },
+  "cards": {
+   "segmentsWithCardPct": 45.1,
+   "firstCardAfterIntroSecMedian": 17.7,
+   "rankCardOnIntro": true
+  },
+  "sourceMixPct": {
+   "field": 70.5,
+   "handson": 9.5,
+   "promo": 4.7,
+   "amazon": 4.2,
+   "rankcard": 2.9,
+   "talking": 2.7,
+   "lifestyle": 2.3,
+   "other": 1.9,
+   "textcard": 1.3
+  },
+  "sentenceRules": {
+   "hook": {
+    "share_pct": {
+     "field": 73.8,
+     "handson": 8.1,
+     "talking": 3.5,
+     "amazon": 3.3,
+     "other": 2.9,
+     "promo": 2.8
+    },
+    "lift": {
+     "other": 1.53,
+     "talking": 1.3,
+     "lifestyle": 1.09,
+     "field": 1.05
+    },
+    "preferred_shot_types": [
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   },
+   "other": {
+    "share_pct": {
+     "field": 70.6,
+     "handson": 9.8,
+     "promo": 4.9,
+     "amazon": 4.1,
+     "talking": 2.9,
+     "lifestyle": 2.5
+    },
+    "lift": {
+     "lifestyle": 1.09,
+     "talking": 1.07,
+     "promo": 1.04,
+     "handson": 1.03
+    },
+    "preferred_shot_types": [
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   },
+   "product_intro": {
+    "share_pct": {
+     "field": 59.0,
+     "rankcard": 10.4,
+     "handson": 7.6,
+     "amazon": 7.1,
+     "textcard": 6.3,
+     "promo": 5.3
+    },
+    "lift": {
+     "textcard": 4.85,
+     "rankcard": 3.59,
+     "amazon": 1.69,
+     "promo": 1.13
+    },
+    "preferred_shot_types": [
+     "field",
+     "rankcard",
+     "handson",
+     "amazon",
+     "textcard",
+     "promo"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "GENERATE: rank number + name + price card",
+     "\"{product}\" table review close-up hands",
+     "\"{product}\" official product photo (manufacturer site)",
+     "GENERATE: spec card (caliber, capacity, weight, barrel)",
+     "\"{product}\" official manufacturer video"
+    ]
+   },
+   "spec": {
+    "share_pct": {
+     "field": 75.4,
+     "handson": 7.7,
+     "amazon": 5.4,
+     "promo": 3.6,
+     "talking": 2.2,
+     "rankcard": 2.0
+    },
+    "lift": {
+     "amazon": 1.29,
+     "field": 1.07,
+     "handson": 0.81,
+     "talking": 0.81
+    },
+    "preferred_shot_types": [
+     "field",
+     "handson",
+     "amazon"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands",
+     "\"{product}\" official product photo (manufacturer site)"
+    ]
+   },
+   "price": {
+    "share_pct": {
+     "field": 63.1,
+     "handson": 9.2,
+     "rankcard": 9.1,
+     "promo": 8.7,
+     "amazon": 3.2,
+     "talking": 2.3
+    },
+    "lift": {
+     "rankcard": 3.14,
+     "promo": 1.85,
+     "textcard": 1.15,
+     "handson": 0.97
+    },
+    "preferred_shot_types": [
+     "field",
+     "handson",
+     "rankcard",
+     "promo"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands",
+     "GENERATE: rank number + name + price card",
+     "\"{product}\" official manufacturer video"
+    ]
+   },
+   "use_case": {
+    "share_pct": {
+     "field": 69.0,
+     "handson": 13.7,
+     "promo": 4.4,
+     "lifestyle": 3.6,
+     "amazon": 3.1,
+     "other": 2.3
+    },
+    "lift": {
+     "lifestyle": 1.57,
+     "handson": 1.44,
+     "other": 1.21,
+     "field": 0.98
+    },
+    "preferred_shot_types": [
+     "field",
+     "handson",
+     "lifestyle"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands",
+     "outdoors hunting stock footage"
+    ]
+   },
+   "verdict": {
+    "share_pct": {
+     "field": 79.0,
+     "talking": 4.4,
+     "rankcard": 4.0,
+     "handson": 3.6,
+     "other": 2.7,
+     "promo": 2.1
+    },
+    "lift": {
+     "talking": 1.63,
+     "other": 1.42,
+     "rankcard": 1.38,
+     "field": 1.12
+    },
+    "preferred_shot_types": [
+     "field"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll"
+    ]
+   }
+  },
+  "sample": {
+   "channels": 40,
+   "videos": 89,
+   "excludedTalkingHead": [
+    "@3of7Project",
+    "@ClassicFirearms",
+    "@ColionNoir",
+    "@Godfamilyandguns",
+    "@PewView",
+    "@TacticalConsiderations",
+    "@TexasPlinking",
+    "@ThePreparedWanderer",
+    "@WarriorPoetSociety",
+    "@backfire",
+    "@bigboytoys7115",
+    "@gideonstactical",
+    "@sootch00",
+    "@tfbtv"
+   ]
+  }
+ }
+}

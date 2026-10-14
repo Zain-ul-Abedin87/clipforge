@@ -134,10 +134,15 @@
       "missile",
       "rocket",
       "navy",
-      "artillery"
+      "artillery",
+      "zodiac",
+      "horoscope",
+      "astrology",
+      "constellation"
     ],
     "_sources": "B-roll providers in order. Photo sources (unsplash) are left out here on purpose: still B-roll makes a gun listicle feel like a slideshow. Unsplash is still used for product photos (product.sources).",
     "sources": [
+      "storyblocks",
       "pixabay",
       "pexels",
       "wikimedia_video"
@@ -190,5 +195,11 @@
       "bergara": "bergara.online",
       "charter arms": "charterfirearms.com"
     }
+  },
+  "_scenes": "Professional listicle pacing: a new shot about every 4 s.",
+  "scenes": {
+    "avgLengthSec": 4,
+    "minLengthSec": 3,
+    "maxLengthSec": 5.5
   }
 }

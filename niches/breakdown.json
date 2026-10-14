@@ -1,0 +1,52 @@
+{
+  "name": "breakdown",
+  "label": "Breakdown (specs, product reviews, analyses)",
+  "description": "Technical walkthrough of a product, car or market: detail B-roll and on-screen stats per item.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.2
+  },
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "workshop tools close up",
+    "sources": [
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "wikimedia_video",
+      "unsplash",
+      "archive"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "toy",
+      "video game"
+    ]
+  },
+  "llmGuidance": "Breakdown / review video (automotive specs, product reviews, restorations, market analyses). Prefer close-up detail shots of the thing being described (engine bay, dashboard, circuit board, material texture). When the narration gives specs or numbers, use a spec_card with 2-4 short lines; never invent specs.",
+  "disclaimer": "",
+  "qa": {
+    "stillWarn": 0.55,
+    "stillFail": 0.7
+  }
+}

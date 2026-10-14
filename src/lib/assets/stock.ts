@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { env, hasKey } from "../env.js";
 import { paths } from "../paths.js";
+import { netFetch } from "../net.js";
 import type { Candidate } from "./types.js";
 
 const CACHE = path.join(paths.root, "cache");
@@ -54,7 +55,7 @@ export async function searchPexels(query: string): Promise<Candidate[]> {
   if (!hasKey("PEXELS_API_KEY")) return [];
   const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&orientation=landscape&size=medium&per_page=15`;
   const data = (await cachedJson(`pexels:${query}`, async () => {
-    const res = await fetch(url, { headers: { Authorization: env("PEXELS_API_KEY") } });
+    const res = await netFetch(url, { headers: { Authorization: env("PEXELS_API_KEY") } });
     if (res.status === 429) throw new RateLimited("Pexels rate limit reached");
     if (!res.ok) throw new Error(`Pexels ${res.status}: ${(await res.text()).slice(0, 200)}`);
     return res.json();
@@ -97,7 +98,7 @@ export async function searchPixabay(query: string): Promise<Candidate[]> {
   const url = `https://pixabay.com/api/videos/?key=${env("PIXABAY_API_KEY")}&q=${q}&per_page=15&safesearch=true`;
   const data = (await cachedJson(`pixabay:${query}`, async () => {
     await spaced("pixabay", 700);
-    const res = await fetch(url);
+    const res = await netFetch(url);
     if (res.status === 429) throw new RateLimited("Pixabay rate limit reached");
     if (!res.ok) throw new Error(`Pixabay ${res.status}: ${(await res.text()).slice(0, 200)}`);
     return res.json();
@@ -135,6 +136,8 @@ export async function downloadStock(c: Candidate): Promise<string> {
   const part = `${out}.part`;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    // A dropped connection usually comes back within seconds on this link.
+    if (attempt > 1) await new Promise((r) => setTimeout(r, attempt * 4000));
     try {
       const res = await fetch(c.location, { signal: AbortSignal.timeout(180_000) });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -158,7 +161,7 @@ export async function downloadThumb(c: Candidate): Promise<string | null> {
   const out = path.join(THUMB_CACHE, `${c.id}.jpg`);
   if (fs.existsSync(out)) return out;
   try {
-    const res = await fetch(c.thumbUrl, { signal: AbortSignal.timeout(30_000) });
+    const res = await netFetch(c.thumbUrl, { timeoutMs: 30_000 }, [3000]);
     if (!res.ok) return null;
     fs.writeFileSync(out, Buffer.from(await res.arrayBuffer()));
     return out;

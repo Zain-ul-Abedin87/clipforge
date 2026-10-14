@@ -1,0 +1,55 @@
+{
+  "name": "auto",
+  "niche": "auto",
+  "resolution": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "fonts": {
+    "title": "Oswald",
+    "body": "Inter",
+    "caption": "Inter"
+  },
+  "colors": {
+    "primary": "#E8A317",
+    "secondary": "#1C1C1C",
+    "text": "#FFFFFF",
+    "accent": "#C0392B"
+  },
+  "captions": {
+    "enabled": false,
+    "position": "bottom",
+    "maxWordsPerLine": 7,
+    "fontSize": 54,
+    "background": "rgba(0,0,0,0.55)"
+  },
+  "music": {
+    "folder": "music",
+    "volumeDb": -18,
+    "duckDb": -10
+  },
+  "scenes": {
+    "avgLengthSec": 8,
+    "minLengthSec": 6,
+    "maxLengthSec": 12
+  },
+  "pacing": {
+    "targetShotSec": 2.3
+  },
+  "intro": null,
+  "outro": null,
+  "logo": {
+    "path": null,
+    "position": "top-right",
+    "opacity": 0.8
+  },
+  "aiDisclosure": true,
+  "motionGraphics": {
+    "enabled": true,
+    "sfx": true,
+    "sfxDb": -14,
+    "_comment": "Animated cards; niche auto-detected from script."
+  },
+  "_comment": "Generic preset: niche is detected from title+script on Go (see src/lib/nicheDetect.ts)."
+}

@@ -6,9 +6,23 @@ import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from
 import type { Scene } from "../lib/scenes.js";
 import { loadStyle } from "../lib/style.js";
 import type { CaptionStyle } from "../lib/render/captions.js";
-import { CardStyle, Layer, renderCardLayers, renderLowerThird, renderRankBadge } from "../lib/assets/graphics.js";
+import { CardStyle, Layer, renderCardLayers, renderLowerThird, renderRankBadge, renderSidePanel, renderSpecChip } from "../lib/assets/graphics.js";
+import { slug } from "../lib/assets/presskit.js";
+import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
+import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
+import { productRegions, readProductPool } from "../lib/assets/productPool.js";
+import { loadProjectNiche } from "../lib/niche.js";
+import { env } from "../lib/env.js";
+import { applyRemotionCards } from "../lib/render/remotionCards.js";
+import { filterPoolByShotQa } from "../lib/assets/shotQa.js";
+import { poolConfig } from "../lib/assets/productPool.js";
+import { extractFacts, readFacts, type Facts } from "../lib/facts.js";
+import { buildChapters, writeChapters } from "../lib/chapters.js";
+import { cardPreset, pacingTarget, themeOf } from "../lib/stylePreset.js";
+import { placeChapterGraphics } from "../lib/render/productGraphics.js";
+import { reapplySwaps } from "../lib/sceneReview.js";
 
 export const FPS = 30;
 
@@ -22,13 +36,15 @@ export interface TimelineScene {
   /** Frame-exact boundaries (cumulative rounding, so the total never drifts from the audio). */
   startFrame: number;
   endFrame: number;
-  asset: Pick<Asset, "path" | "kind" | "source" | "duration" | "in">;
+  asset: Pick<Asset, "path" | "kind" | "source" | "duration" | "in"> & { shots?: SubShot[] };
   motion: Motion;
   transition: Transition;
   /** Animated transparent layers drawn over the scene (card text, lower third, rank badge). */
   overlays?: Layer[];
   /** Sound effects, seconds after the scene starts. */
   sfx?: { kind: SfxKind; at: number }[];
+  /** "blur": the footage is a blurred, darkened backdrop for card text drawn over it. */
+  backdrop?: "blur";
 }
 
 export interface Timeline {
@@ -62,7 +78,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       return 1;
     }
   }
-  const project = readJson<{ audio: string; channel?: string }>(path.join(dir, "project.json"));
+  const project = readJson<{ name?: string; audio: string; channel?: string; niche?: string; footage?: string }>(path.join(dir, "project.json"));
+  if (!project.name) project.name = opts.project;
   const channel = project.channel ?? "default";
   const chDir = path.join(paths.channels, channel);
   const style = loadStyle(channel);
@@ -73,8 +90,17 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     style: fingerprint(path.join(chDir, "style.json")),
     music: musicFiles(chDir, style).join("|"),
     sections: fingerprint(path.join(dir, "sections.json")),
-    graphicsVersion: "mg-1",
+    graphicsVersion: "mg-5-chapters",
+    cardsPreset: JSON.stringify(style.cards ?? null) + JSON.stringify(style.pacing ?? null),
+    facts: fingerprint(path.join(dir, "facts.json")),
+    swaps: fingerprint(path.join(dir, "review_swaps.json")),
+    shotQa: env("SHOT_QA", "on") + "shotqa-1" + env("CARDS", "on"),
+    // Spec chips come from web research saved in the press kit.
+    specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
     logo: JSON.stringify(logoOf(style)) + fingerprint(logoOf(style)?.path),
+    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-3-ledger",
+    pool: fingerprint(path.join(dir, "product_pool.json")),
+    aligned: fingerprint(path.join(dir, "aligned.json")),
   };
   if (!opts.force && isCached(dir, "timeline", inputs, ["timeline.json"])) {
     log(`[timeline] cached -> ${path.join(dir, "timeline.json")} (use --force to redo)`);
@@ -83,6 +109,13 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
 
   const scenes = readJson<Scene[]>(files[0]);
   const assets = readJson<Assets>(files[1]);
+  // Script facts (name, price, specs per product) and chapters (one per product).
+  const facts: Facts | null = await extractFacts(dir, scenes, log).catch((e) => (log(`[facts] failed: ${String(e).slice(0, 160)}`), readFacts(dir)));
+  FACTS = facts;
+  const chapters = buildChapters(scenes, facts);
+  writeChapters(dir, chapters);
+  log(`[chapters] ${chapters.length}: ${chapters.map((c) => `${c.title} @${c.start.toFixed(1)}s`).join(", ")}`);
+  const preset = cardPreset(style);
   const cap = (style.captions ?? {}) as Record<string, unknown>;
   const colors = (style.colors ?? {}) as Record<string, string>;
   const music = (style.music ?? {}) as Record<string, number>;
@@ -112,7 +145,37 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     };
   });
 
-  if (motionCfg.graphics) await addMotionGraphics(tl, scenes, assets, sections, style, path.join(dir, "graphics"));
+  if (motionCfg.graphics) await addMotionGraphics(tl, scenes, assets, sections, style, path.join(dir, "graphics"), channel);
+  const pace = pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off");
+  // Channel preset overrides the niche shot length; every chapter start gets the opening pace.
+  pace.targetShotSec = pacingTarget(style) ?? pace.targetShotSec;
+  pace.chapterStarts = chapters.filter((c) => c.product).map((c) => c.start);
+  if (pace.enabled && fs.existsSync(path.join(dir, "aligned.json"))) {
+    const words = readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words;
+    const nicheCfg = loadProjectNiche(project, style) as unknown as { productPool?: { mix?: Record<string, number>; rankCardAtSec?: [number, number] } };
+    const niche = loadProjectNiche(project, style);
+    const pool = await filterPoolByShotQa(readProductPool(dir), poolConfig(niche).category, log);
+    applyPacing(tl, scenes, words, pool, pace, log, {
+      photosOf: (p) => productPhotos(channel, p),
+      mix: nicheCfg.productPool?.mix,
+    });
+    if (motionCfg.graphics) await addRankPriceCards(tl, scenes, sections, cardStyleOf(style), path.join(dir, "graphics"), nicheCfg.productPool?.rankCardAtSec ?? [11, 14], log);
+  }
+  if (motionCfg.graphics && preset.set.size) {
+    const blank = path.join(dir, "graphics", "blank.png");
+    placeChapterGraphics(tl, scenes, chapters, facts, preset, blank, log);
+    // Card set from the channel preset; the theme (colours, font) goes to every card.
+    for (const t of tl) for (const l of t.overlays ?? []) {
+      if (!l.card) continue;
+      if (!preset.set.has(l.card.comp)) delete l.card;
+      else if (preset.custom) l.card.props = { ...l.card.props, theme: themeOf(preset) };
+    }
+  }
+  // Animated Remotion cards (cards/) replace the drawtext PNGs; any card that fails keeps its PNG.
+  if (motionCfg.graphics) await applyRemotionCards(tl, log);
+  // New product graphics have no drawtext version: drop them when Remotion did not render them.
+  for (const t of tl) if (t.overlays) t.overlays = t.overlays.filter((l) => l.video || !l.path.endsWith("blank.png"));
+  reapplySwaps(dir, tl, log);
 
   const out: Timeline = {
     version: 2,
@@ -190,9 +253,24 @@ async function addMotionGraphics(
   sections: Section[],
   style: Record<string, unknown>,
   outDir: string,
+  channel: string,
 ): Promise<void> {
   const cs = cardStyleOf(style);
   const lowerThirdDone = new Set<number>();
+  // Spec chips go on one shot per product: the first that shows the product's own media (own clip,
+  // press kit / official photo, Wikimedia photo), else its first non-card shot.
+  const OWN_MEDIA = new Set(["local", "presskit", "wikimedia"]);
+  const chipScene = new Map<string, number>();
+  const photoTurn = new Map<string, number>();
+  for (const [i, sc] of scenes.entries()) {
+    const name = sc.product_name;
+    const src = assets[String(sc.id)]?.source;
+    const len = tl[i].end - tl[i].start;
+    if (sc.type !== "product" || !name || src === "graphic" || len < 3) continue;
+    const prev = chipScene.get(name);
+    const prevOwn = prev !== undefined && OWN_MEDIA.has(assets[String(prev)]?.source ?? "");
+    if (prev === undefined || (!prevOwn && OWN_MEDIA.has(src ?? ""))) chipScene.set(name, sc.id);
+  }
   for (const [i, t] of tl.entries()) {
     const scene = scenes[i];
     const a = assets[String(scene.id)];
@@ -200,6 +278,33 @@ async function addMotionGraphics(
     const dur = t.end - t.start;
 
     if (scene.type === "graphic" && scene.graphic && a.source === "graphic") {
+      // Product cards (price, "up next", specs) sit on the product's own photo, not on black.
+      const g = scene.graphic;
+      const photos = scene.product_name ? productPhotos(channel, scene.product_name) : [];
+      const pcFacts = g.kind === "pros_cons" ? FACTS?.products.find((p) => p.name.toLowerCase() === (scene.product_name ?? "").toLowerCase()) : undefined;
+      if (photos.length && (["price_badge", "title_card", "spec_card"].includes(g.kind) || (g.kind === "pros_cons" && pcFacts))) {
+        const photo = photos[(photoTurn.get(scene.product_name!) ?? 0) % photos.length];
+        photoTurn.set(scene.product_name!, (photoTurn.get(scene.product_name!) ?? 0) + 1);
+        const kicker = g.kind === "price_badge" ? "Price" : g.kind === "title_card" ? (g.rank !== undefined ? `Number ${g.rank}` : "Up next") : g.kind === "pros_cons" ? "Pros & cons" : "Specs";
+        const big = g.kind === "price_badge" ? g.price : g.kind === "spec_card" ? g.lines?.[0]?.replace(/^[+-]\s*/, "") : undefined;
+        t.asset = { path: photo, kind: "image", source: "presskit", duration: undefined, in: 0 };
+        t.motion = "zoom_in";
+        t.overlays = [{ path: await renderSidePanel(kicker, scene.product_name!, big, cs, outDir), delay: 0.2, anim: "slide_right", card: cardFor(g, scene.product_name!) }];
+        t.sfx = [{ kind: "whoosh", at: 0.15 }];
+        continue;
+      }
+      // Other cards (intro, outro, cards without a product photo): text over the nearest footage,
+      // blurred and darkened, instead of a flat black card.
+      const near = nearestFootage(tl, i);
+      if (near) {
+        const { layers } = await renderCardLayers(scene.graphic, cs, outDir);
+        t.asset = { ...near.asset };
+        t.motion = near.asset.kind === "image" ? "zoom_in" : "none";
+        t.backdrop = "blur";
+        t.overlays = layers;
+        t.sfx = g.kind === "title_card" ? [{ kind: "whoosh", at: 0 }] : layers.slice(1).map((l) => ({ kind: "pop" as const, at: l.delay }));
+        continue;
+      }
       const { background, layers } = await renderCardLayers(scene.graphic, cs, outDir);
       t.asset = { ...t.asset, path: background };
       t.motion = "none"; // the text layers carry the motion; a zooming background would drift under them
@@ -218,6 +323,7 @@ async function addMotionGraphics(
         lowerThirdDone.add(sec.id);
         overlays.push({
           path: await renderLowerThird(sec.rank, scene.product_name, cs, outDir),
+          card: { comp: "LowerThird", props: { title: scene.product_name, rank: sec.rank, sub: "" } },
           delay: 0.4,
           anim: "slide_left",
           out: Math.max(1.2, Math.min(dur - 0.4, 4.5)),
@@ -225,6 +331,115 @@ async function addMotionGraphics(
         t.sfx = [{ kind: "whoosh", at: 0.35 }];
       }
     }
+    // The product's web-researched facts as chips (see chipScene above).
+    const specs = scene.product_name && chipScene.get(scene.product_name) === scene.id ? readResearch(channel, scene.product_name)?.specs ?? [] : [];
+    if (specs.length) {
+      const out = Math.min(dur - 0.35, 7);
+      const shown = specs.slice(0, dur >= 5 ? 4 : 2);
+      for (const [k, spec] of shown.entries()) {
+        const delay = Math.round((0.9 + k * 0.35) * 100) / 100;
+        if (delay + 0.6 > out) break;
+        overlays.push({ path: await renderSpecChip(spec, k, cs, outDir), delay, anim: "slide_right", out });
+        (t.sfx ??= []).push({ kind: "pop", at: delay });
+      }
+    }
     if (overlays.length) t.overlays = overlays;
   }
+}
+
+/**
+ * Channel study: the first rank/price card lands ~11-14 s after a product is introduced. Where the
+ * planner put no card in that window, a side-panel card ("#3" / "Price $599") slides in over the
+ * footage at that point for ~3.5 s.
+ */
+async function addRankPriceCards(
+  tl: TimelineScene[],
+  scenes: Scene[],
+  sections: Section[],
+  cs: CardStyle,
+  outDir: string,
+  win: [number, number],
+  log: (m: string) => void,
+): Promise<void> {
+  let added = 0, skipped = 0;
+  for (const [name, region] of productRegions(scenes)) {
+    const first = region.find((x) => x.type !== "graphic");
+    if (!first) continue;
+    const t0 = first.start;
+    const at = t0 + (win[0] + win[1]) / 2;
+    const hasCard = scenes.some((x) => x.type === "graphic" && x.start >= t0 + win[0] - 3 && x.start <= t0 + win[1] + 2);
+    if (hasCard) {
+      skipped++;
+      continue;
+    }
+    const i = tl.findIndex((t, k) => t.start <= at && t.end > at && scenes[k].type !== "graphic" && !t.backdrop);
+    if (i < 0) continue;
+    const t = tl[i];
+    const delay = Math.round((at - t.start) * 100) / 100;
+    if (t.end - at < 1.5) continue;
+    const f = FACTS?.products.find((p) => p.name.toLowerCase() === name.toLowerCase());
+    // A planned price card elsewhere in this product's region already shows the price: rank card here.
+    const pricedElsewhere = region.some((x) => x.graphic?.kind === "price_badge");
+    const price = pricedElsewhere ? undefined : f?.price ?? region.find((x) => x.graphic?.kind === "price_badge")?.graphic?.price;
+    const sec0 = sections.find((x) => x.id === first.section);
+    const sec = sec0?.rank === undefined && f?.rank !== undefined ? { ...sec0!, rank: f.rank } : sec0;
+    const kicker = price ? "Price" : sec?.rank !== undefined ? `#${sec.rank}` : "Pick";
+    const card: Layer["card"] = price
+      ? { comp: "PriceCard", props: { name, price } }
+      : sec?.rank !== undefined
+        ? { comp: "RankCard", props: { rank: sec.rank, name } }
+        : { comp: "LowerThird", props: { title: name, sub: f?.verdict ?? "Top pick", rank: null } };
+    const layer: Layer = { path: await renderSidePanel(kicker, name, price, cs, outDir), delay, anim: "slide_right", out: Math.min(t.end - t.start - 0.2, delay + 3.5), card };
+    // Drop spec chips that would collide with the panel.
+    t.overlays = [...(t.overlays ?? []).filter((l) => !(l.anim === "slide_right" && (l.out ?? 99) > delay)), layer];
+    (t.sfx ??= []).push({ kind: "whoosh", at: Math.max(0, delay - 0.05) });
+    added++;
+  }
+  log(`[timeline] rank/price cards at +${win[0]}-${win[1]} s: ${added} added, ${skipped} product(s) already had a card there`);
+}
+
+/** Remotion card for a product graphic scene (price / "number N" / specs) over its photo. */
+let FACTS: Facts | null = null;
+
+function cardFor(g: Scene["graphic"] & object, name: string): Layer["card"] {
+  const f = FACTS?.products.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (g.kind === "price_badge" && (f?.price || g.price)) return { comp: "PriceCard", props: { name, price: f?.price ?? g.price } };
+  // Spec card rows from the script facts (label / value pairs), not the planner's one-line text.
+  if (g.kind === "pros_cons" && f && f.pros.length + f.cons.length >= 2) return { comp: "ProsCons", props: { title: name, pros: f.pros, cons: f.cons } };
+  if (g.kind === "spec_card" && f && f.specs.length >= 2) return { comp: "SpecCard", props: { title: name, rows: f.specs.slice(0, 5).map((x) => [x.label, x.value]) } };
+  if (g.kind === "title_card" && g.rank !== undefined) return { comp: "RankCard", props: { rank: g.rank, name } };
+  if (g.kind === "spec_card" && g.lines?.length) {
+    const rows = g.lines.slice(0, 5).map((l) => {
+      const x = l.replace(/^[+-]\s*/, "");
+      const m = x.match(/^([^:]{2,24}):\s*(.+)$/) ?? x.match(/^(.{2,24}?)\s+-\s+(.+)$/);
+      return m ? [m[1].trim(), m[2].trim()] : [x, ""];
+    });
+    return { comp: "SpecCard", props: { title: name, rows } };
+  }
+  if (g.kind === "title_card") return { comp: "LowerThird", props: { title: name, sub: "Up next", rank: null } };
+  return undefined;
+}
+
+/** The product's photos in the channel press kit (official, press kit uploads), sorted. */
+function productPhotos(channel: string, product: string): string[] {
+  const dir = path.join(paths.channels, channel, "presskit", slug(product));
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => path.join(dir, f));
+}
+
+/** Closest real footage (video first) around scene i, for a card's blurred backdrop. */
+function nearestFootage(tl: TimelineScene[], i: number): TimelineScene | undefined {
+  for (let d = 1; d < tl.length; d++) {
+    for (const j of [i + d, i - d]) {
+      const t = tl[j];
+      if (t && t.asset.source !== "graphic" && t.asset.kind === "video") return t;
+    }
+  }
+  return undefined;
+}
+
+/** Changes when any product's saved specs change, so the timeline picks up new research. */
+function specFingerprint(channel: string, scenes: Scene[]): string {
+  const names = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))].sort();
+  return names.map((n) => `${n}:${(readResearch(channel, n)?.specs ?? []).join("|")}`).join(";");
 }

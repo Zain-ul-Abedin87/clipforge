@@ -52,11 +52,13 @@ async function boot() {
   state.status = await api("/status");
   $("keyChips").innerHTML = [
     ["Claude", state.status.anthropicKey],
+    ["Storyblocks", state.status.storyblocksKey],
     ["Pexels", state.status.pexelsKey],
     ["Pixabay", state.status.pixabayKey],
     ["Unsplash", state.status.unsplashKey],
+    ["YouTube CC", state.status.youtubeCC?.ok, state.status.youtubeCC?.detail],
   ]
-    .map(([n, on]) => `<span class="chip ${on ? "on" : "off"}" title="${on ? "key set in .env" : "not set in .env"}">${on ? "●" : "○"} ${n}</span>`)
+    .map(([n, on, detail]) => `<span class="chip ${on ? "on" : "off"}" title="${esc(detail || (on ? "key set in .env" : "not set in .env"))}">${on ? "●" : "○"} ${n}</span>`)
     .join("");
   if (!state.status.anthropicKey) {
     $("newUseLlm").checked = false;
@@ -72,6 +74,15 @@ async function boot() {
   $("batchNiche").innerHTML = nicheOpts;
   $("chNiche").innerHTML = nicheOpts;
   if (state.niches.some((n) => n.name === "guns")) $("batchNiche").value = "guns";
+  const pacing = () => {
+    const sc = state.niches.find((n) => n.name === $("newNiche").value)?.scenes;
+    $("newPacing").textContent = sc ? `(shots ${sc.minLengthSec}-${sc.maxLengthSec}s)` : "(channel pacing)";
+  };
+  $("newNiche").onchange = pacing;
+  pacing();
+  state.footageModes = await api("/footage-modes");
+  const footOpts = state.footageModes.map((m) => `<option value="${esc(m.name)}">${esc(m.label)}</option>`).join("");
+  for (const id of ["newFootage", "batchFootage", "pvFootage"]) $(id).innerHTML = footOpts;
   $("batchLlm").checked = !!state.status.anthropicKey;
   $("batchLlm").disabled = !state.status.anthropicKey;
 
@@ -81,6 +92,7 @@ async function boot() {
   refreshPresskit();
   refreshLibrary();
   await refreshChannels();
+  initComposer();
   pollQueue();
 
   await refreshProjects();
@@ -151,13 +163,13 @@ $("createBtn").onclick = async () => {
     await api(`/projects/${encodeURIComponent(name)}/script`, { method: "PUT", body: $("newScript").value });
     await api(`/projects/${encodeURIComponent(name)}/settings`, {
       method: "PUT",
-      body: JSON.stringify({ channel: $("newChannel").value, niche: $("newNiche").value }),
+      body: JSON.stringify({ channel: $("newChannel").value, niche: $("newNiche").value, footage: $("newFootage").value, planGate: $("newPlanGate").checked }),
     });
     await api(`/projects/${encodeURIComponent(name)}/run`, {
       method: "POST",
       body: JSON.stringify({ from: "transcribe", useLlm: $("newUseLlm").checked }),
     });
-    toast("Uploaded. Pipeline started.");
+    toast($("newPlanGate").checked ? "Uploaded. Planning scenes - you will see the plan before footage is fetched." : "Uploaded. Pipeline started.");
     state.file = null;
     drop.classList.remove("has");
     $("dropText").innerHTML = "Drop voiceover here<br><small>mp3 / wav / m4a</small>";
@@ -339,7 +351,7 @@ $("batchAdd").onclick = async () => {
       await uploadWithProgress(`/api/projects/${encodeURIComponent(name)}/audio`, a);
       const script = batchFiles.find((f) => /\.txt$/i.test(f.name) && stem(f.name) === stem(a.name));
       await api(`/projects/${encodeURIComponent(name)}/script`, { method: "PUT", body: script ? await script.text() : "" });
-      await api(`/projects/${encodeURIComponent(name)}/settings`, { method: "PUT", body: JSON.stringify({ channel: $("batchChannel").value, niche: $("batchNiche").value }) });
+      await api(`/projects/${encodeURIComponent(name)}/settings`, { method: "PUT", body: JSON.stringify({ channel: $("batchChannel").value, niche: $("batchNiche").value, footage: $("batchFootage").value }) });
       names.push(name);
       $("batchProgress").firstElementChild.style.width = `${(100 * (i + 1)) / audio.length}%`;
     }
@@ -558,8 +570,11 @@ async function openProject(name) {
   $("pvName").textContent = name;
   const nicheName = p.niche || "general";
   $("pvNiche").value = nicheName;
+  $("pvFootage").value = p.footage || "stock_cc";
+  state.planGate = p.planGate;
   const nicheLabel = state.niches?.find((n) => n.name === nicheName)?.label ?? nicheName;
-  $("pvMeta").textContent = `${p.audio || "no audio"} · ${p.hasScript ? "script mode" : "voice-only mode"} · ${nicheLabel} · channel: ${p.channel}`;
+  const footLabel = state.footageModes?.find((m) => m.name === (p.footage || "stock_cc"))?.label ?? "";
+  $("pvMeta").textContent = `${p.audio || "no audio"} · ${p.hasScript ? "script mode" : "voice-only mode"} · ${nicheLabel} · ${footLabel} · channel: ${p.channel}`;
   $("audio").src = `/api/projects/${encodeURIComponent(name)}/audio`;
   renderStepper(p.steps);
   refreshProjects();
@@ -569,8 +584,9 @@ async function openProject(name) {
 
 function renderStepper(steps) {
   $("stepper").innerHTML = STEPS.map((s, i) => {
-    const st = s.soon ? "soon" : steps[s.key] || "pending";
-    const label = { done: "✓ done", running: "● running…", failed: "✕ failed", pending: "pending", soon: "coming next" }[st];
+    let st = s.soon ? "soon" : steps[s.key] || "pending";
+    if (s.key === "assets" && st === "pending" && state.planGate === "waiting") st = "waiting";
+    const label = { done: "✓ done", running: "● running…", failed: "✕ failed", pending: "pending", soon: "coming next", waiting: "⏸ approve plan" }[st];
     return `<li class="${st}"><div class="num">${i + 1}</div><div>${s.label}</div><div class="st">${label}</div></li>`;
   }).join("");
 }
@@ -589,6 +605,56 @@ $("pvNiche").onchange = async (e) => {
   toast("Video type changed. Re-running scenes + assets with the new rules…");
   run({ from: "plan", force: true, useLlm: state.status.anthropicKey });
 };
+$("pvFootage").onchange = async (e) => {
+  await api(`/projects/${encodeURIComponent(state.current)}/settings`, { method: "PUT", body: JSON.stringify({ footage: e.target.value }) });
+  if (state.planGate === "waiting") {
+    toast("Footage sources changed.");
+    return renderPlanBox();
+  }
+  if (!state.scenes.length) return toast("Footage sources saved.");
+  toast("Footage sources changed. Fetching footage again…");
+  run({ from: "assets", force: true, useLlm: state.status.anthropicKey });
+};
+$("approvePlan").onclick = async () => {
+  $("approvePlan").disabled = true;
+  try {
+    await api(`/projects/${encodeURIComponent(state.current)}/plan/approve`, { method: "POST", body: JSON.stringify({ useLlm: state.status.anthropicKey }) });
+    state.planGate = "approved";
+    $("planBox").classList.add("hidden");
+    toast("Plan approved. Fetching footage and rendering…");
+    $("logBox").open = true;
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $("approvePlan").disabled = false;
+  }
+};
+
+async function renderPlanBox() {
+  const box = $("planBox");
+  if (state.planGate !== "waiting" || state.running) return box.classList.add("hidden");
+  const e = await api(`/projects/${encodeURIComponent(state.current)}/plan/estimate`).catch(() => null);
+  if (!e) return box.classList.add("hidden");
+  const cell = (k, v) => `<div class="cell"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const types = Object.entries(e.types).map(([t, n]) => `${n} ${t}`).join(" · ");
+  const cost = e.planCostUsd ? `$${e.planCostUsd.toFixed(3)} <small>(scene labels)</small>` : `$0 <small>(${esc(e.labeledBy)})</small>`;
+  $("planEstimate").innerHTML = [
+    cell("Video type", esc(e.videoType)),
+    cell("Length", `${fmt(e.durationSec)} <small>· ${e.scenes} scenes, avg ${e.avgSceneSec}s (${e.pacing.minLengthSec}-${e.pacing.maxLengthSec}s)</small>`),
+    cell("Scene mix", esc(types)),
+    cell("Footage", `${esc(e.footageMode)}<br>${e.stockSources.map((x) => {
+      const why = !x.ready ? "no API key in .env" : x.name === "youtube_cc" && !state.status.youtubeCC?.ok ? state.status.youtubeCC?.detail || "unavailable" : "";
+      return `<span class="src ${why ? "off" : ""}" title="${esc(why)}">${esc(x.label)}</span>`;
+    }).join("")}`),
+    cell("Product shots from", esc(e.productSources.join(", ") || "-")),
+    cell("Your search edits", `${e.editedScenes} scene(s)`),
+    cell("Claude cost so far", cost + (e.footageAgent ? `<br><small>footage agent: ${esc(e.footageAgent)} (small extra)</small>` : "")),
+    cell("Estimated time", `≈ ${e.estMinutes.total} min <small>(footage ${e.estMinutes.assets} · render ${e.estMinutes.render})</small>`),
+  ].join("");
+  box.classList.remove("hidden");
+}
+
 $("runAll").onclick = () => run({ from: "transcribe", useLlm: state.status.anthropicKey });
 $("rerunStep").onchange = (e) => {
   if (!e.target.value) return;
@@ -612,6 +678,8 @@ function startPolling() {
     const wasRunning = state.running;
     state.logTotal = r.total;
     state.running = r.running;
+    const gateBefore = state.planGate;
+    state.planGate = r.planGate;
     $("logState").textContent = r.running ? `· running ${r.step}` : r.failedStep ? `· failed at ${r.failedStep}` : "";
     $("runAll").disabled = r.running;
     renderStepper(r.steps);
@@ -619,8 +687,8 @@ function startPolling() {
     if (wasRunning && !r.running) {
       refreshProjects();
       await loadResults(r.steps);
-      toast(r.failedStep ? `Stopped: ${r.failedStep} failed (see log)` : "Pipeline finished");
-    }
+      toast(r.failedStep ? `Stopped: ${r.failedStep} failed (see log)` : r.awaitingApproval ? "Plan ready - check it and press Approve" : "Pipeline finished");
+    } else if (gateBefore !== state.planGate) renderPlanBox();
     if (!r.running && !wasRunning) clearInterval(state.poll);
   };
   tick();
@@ -644,6 +712,7 @@ async function loadResults(steps) {
   const approval = await api(`/projects/${name}/approve`).catch(() => ({ approved: false }));
   renderQa(qaReport, approval);
 
+  renderPlanBox();
   const any = state.aligned || state.scenes.length;
   $("reviewArea").classList.toggle("hidden", !any);
   if (!any) return;
@@ -951,8 +1020,10 @@ function renderScenes() {
             </div>
             ${state.assets?.[s.id]?.note ? `<div class="note">⚠ ${esc(state.assets[s.id].note)}</div>` : ""}
             <div class="text">${esc(s.text)}</div>
-            <div class="qs">${s.queries.map((x) => `<span class="q">${esc(x)}</span>`).join("")}</div>
+            <div class="qs">${s.queries.map((x) => `<span class="q${s.edited ? " edited" : ""}">${esc(x)}</span>`).join("")}</div>
             ${state.assets && s.type !== "graphic" ? `<button class="btn small swap-btn" data-id="${s.id}">⇄ Swap footage</button>` : ""}
+            ${!state.assets && s.type !== "graphic" && !state.running ? `<button class="btn small edit-btn" data-id="${s.id}">✎ Edit searches</button>` : ""}
+            <div class="edit-qs hidden" id="edit-${s.id}"></div>
             <div class="swap-panel hidden" id="swap-${s.id}"></div>
           </div>
         </div>`,
@@ -960,11 +1031,40 @@ function renderScenes() {
       .join("") || `<p class="muted">No scenes${state.scenes.length ? " match the filter" : " yet - run the Plan step"}.</p>`;
   for (const el of $("sceneList").querySelectorAll(".scene")) {
     el.onclick = (e) => {
-      if (e.target.closest(".swap-panel, .swap-btn")) return;
+      if (e.target.closest(".swap-panel, .swap-btn, .edit-btn, .edit-qs")) return;
       seek(state.scenes[Number(el.dataset.id)].start + 0.01);
     };
   }
   for (const b of $("sceneList").querySelectorAll(".swap-btn")) b.onclick = () => toggleSwap(Number(b.dataset.id));
+  for (const b of $("sceneList").querySelectorAll(".edit-btn")) b.onclick = () => toggleEdit(Number(b.dataset.id));
+}
+
+// ---------- plan review: change a scene's footage searches before approving ----------
+
+function toggleEdit(sceneId) {
+  const box = $(`edit-${sceneId}`);
+  if (!box.classList.contains("hidden")) return box.classList.add("hidden");
+  const s = state.scenes[sceneId];
+  box.classList.remove("hidden");
+  box.innerHTML = `<input value="${esc(s.queries.join(", "))}" placeholder="e.g. steam locomotive 1920s, railway station crowd" title="Up to 4 searches, separated by commas - the first one matters most">
+    <button class="btn small primary">Save</button>${s.edited ? '<button class="btn small reset">Undo edit</button>' : ""}`;
+  const input = box.querySelector("input");
+  const save = async (queries) => {
+    try {
+      const r = await api(`/projects/${encodeURIComponent(state.current)}/plan/scene/${sceneId}`, { method: "PUT", body: JSON.stringify({ queries }) });
+      state.scenes[sceneId] = { ...state.scenes[sceneId], queries: r.scene.queries, edited: r.scene.edited };
+      renderScenes();
+      renderPlanBox();
+      toast(r.scene.edited ? "Searches saved - approve the plan when ready" : "Edit undone");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  box.querySelector(".primary").onclick = () => save(input.value);
+  input.onkeydown = (e) => e.key === "Enter" && save(input.value);
+  const reset = box.querySelector(".reset");
+  if (reset) reset.onclick = () => save([]);
+  input.focus();
 }
 // ---------- scene swap (review page) ----------
 

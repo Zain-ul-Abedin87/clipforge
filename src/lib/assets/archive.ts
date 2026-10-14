@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { run } from "../exec.js";
 import { paths } from "../paths.js";
+import { netFetch } from "../net.js";
 import { ffmpegPath } from "../tools.js";
 import { USER_AGENT } from "./presskit.js";
 import type { Candidate } from "./types.js";
@@ -29,7 +30,7 @@ async function cachedJson<T>(key: string, url: string): Promise<T> {
   fs.mkdirSync(SEARCH_CACHE, { recursive: true });
   const f = path.join(SEARCH_CACHE, `${crypto.createHash("sha1").update(key).digest("hex").slice(0, 16)}.json`);
   if (fs.existsSync(f) && Date.now() - fs.statSync(f).mtimeMs < TTL) return JSON.parse(fs.readFileSync(f, "utf8"));
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(30_000) });
+  const res = await netFetch(url, { headers: { "User-Agent": USER_AGENT }, timeoutMs: 30_000 });
   if (!res.ok) throw new Error(`Archive.org ${res.status}`);
   const data = (await res.json()) as T;
   fs.writeFileSync(f, JSON.stringify(data));

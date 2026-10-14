@@ -18,7 +18,7 @@
     "accent": "#C0392B"
   },
   "captions": {
-    "enabled": true,
+    "enabled": false,
     "position": "bottom",
     "maxWordsPerLine": 7,
     "fontSize": 54,

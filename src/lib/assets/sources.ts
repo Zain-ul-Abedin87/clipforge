@@ -4,9 +4,12 @@ import { downloadStock, searchPexels, searchPixabay } from "./stock.js";
 import type { Candidate } from "./types.js";
 import { downloadUnsplash, searchUnsplash } from "./unsplash.js";
 import { downloadWikimedia, searchWikimediaVideo } from "./wikimedia.js";
+import { downloadYoutubeCC, searchYoutubeCC } from "./youtube.js";
+import { downloadStoryblocks, searchStoryblocks } from "./storyblocks.js";
+import { downloadWebCrawl, searchWebCrawl } from "./webCrawl.js";
 
 /** Stock providers a niche can list in stock.sources, in the order it wants them tried. */
-export const STOCK_PROVIDERS = ["pixabay", "pexels", "unsplash", "wikimedia_video", "archive"] as const;
+export const STOCK_PROVIDERS = ["storyblocks", "pixabay", "pexels", "unsplash", "wikimedia_video", "archive", "youtube_cc", "web_crawl"] as const;
 export type StockProvider = (typeof STOCK_PROVIDERS)[number];
 
 export class RateLimited extends Error {}
@@ -14,10 +17,13 @@ export class RateLimited extends Error {}
 export async function searchProvider(provider: StockProvider, query: string, niche: Niche): Promise<Candidate[]> {
   let found: Candidate[];
   try {
-    if (provider === "pixabay") found = await searchPixabay(query);
+    if (provider === "storyblocks") found = await searchStoryblocks(query);
+    else if (provider === "pixabay") found = await searchPixabay(query);
     else if (provider === "pexels") found = await searchPexels(query);
     else if (provider === "unsplash") found = await searchUnsplash(query);
     else if (provider === "wikimedia_video") found = await searchWikimediaVideo(query, niche.stock.blockedTerms);
+    else if (provider === "youtube_cc") found = await searchYoutubeCC(query);
+    else if (provider === "web_crawl") found = await searchWebCrawl(query);
     else found = await searchArchive(query);
   } catch (err) {
     const msg = String((err as Error).message ?? err);
@@ -40,5 +46,8 @@ export async function downloadCandidate(c: Candidate): Promise<string> {
   if (c.source === "unsplash") return downloadUnsplash(c);
   if (c.source === "wikimedia") return downloadWikimedia(c);
   if (c.source === "archive") return downloadArchive(c);
+  if (c.source === "youtube_cc") return downloadYoutubeCC(c);
+  if (c.source === "storyblocks") return downloadStoryblocks(c);
+  if (c.source === "web_crawl") return downloadWebCrawl(c);
   return c.location; // local / press kit files are already on disk
 }

@@ -1,0 +1,800 @@
+{
+ "_meta": {
+  "source": "channel_study v3, multi-window analysis (start/mid/end up to 120s windows), faceless channels only (talking-head share <15%)",
+  "shot_classes": "CLIP ViT-B/32 zero-shot on 1 mid-frame per shot (classes include gun_closeup)",
+  "note": "pct = % of screen time; lift = share during this sentence type / overall share; windows sample start, middle, and end of each video"
+ },
+ "tech": {
+  "pacing": {
+   "targetShotSec": 2.07,
+   "avgShotSec": 3.04,
+   "shotSecP25": 1.26,
+   "maxShotSec": 6.1,
+   "cutsPerMin": 19.5,
+   "cutsPerMinRange": [
+    13.83,
+    24.33
+   ],
+   "pctUnder2s": 47.6,
+   "pctOver6s": 9.1,
+   "cutsPerMinByPosition": {
+    "start": 21.5,
+    "middle": 18.0,
+    "end": 17.5
+   }
+  },
+  "product": {
+   "segmentSecMedian": 38.4,
+   "shotsPerProductMedian": 12,
+   "shotsPerProductIQR": [
+    8.0,
+    18.0
+   ],
+   "nSegments": 531
+  },
+  "cards": {
+   "segmentsWithCardPct": 28.1,
+   "firstCardAfterIntroSecMedian": 13.8,
+   "rankCardOnIntro": true
+  },
+  "sourceMixPct": {
+   "handson": 40.8,
+   "lifestyle": 13.8,
+   "amazon": 12.4,
+   "promo": 10.7,
+   "field": 10.2,
+   "talking": 3.5,
+   "other": 2.6,
+   "rankcard": 2.4,
+   "gun_closeup": 2.1,
+   "textcard": 1.6
+  },
+  "sentenceRules": {
+   "hook": {
+    "share_pct": {
+     "handson": 38.0,
+     "lifestyle": 16.2,
+     "promo": 11.3,
+     "field": 11.1,
+     "amazon": 10.1,
+     "talking": 4.9
+    },
+    "lift": {
+     "rankcard": 1.54,
+     "talking": 1.4,
+     "lifestyle": 1.17,
+     "field": 1.09
+    },
+    "preferred_shot_types": [
+     "handson",
+     "lifestyle",
+     "promo",
+     "field",
+     "amazon",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "{category} lifestyle stock footage",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "other": {
+    "share_pct": {
+     "handson": 40.6,
+     "lifestyle": 13.8,
+     "amazon": 12.3,
+     "promo": 10.7,
+     "field": 10.4,
+     "talking": 3.5
+    },
+    "lift": {
+     "gun_closeup": 1.05,
+     "field": 1.02,
+     "handson": 1.0,
+     "lifestyle": 1.0
+    },
+    "preferred_shot_types": [
+     "handson",
+     "lifestyle",
+     "amazon",
+     "promo",
+     "field"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" in use outdoor test"
+    ]
+   },
+   "use_case": {
+    "share_pct": {
+     "handson": 47.0,
+     "lifestyle": 12.3,
+     "amazon": 10.6,
+     "field": 10.4,
+     "promo": 8.7,
+     "talking": 3.3
+    },
+    "lift": {
+     "handson": 1.15,
+     "field": 1.02,
+     "gun_closeup": 0.95,
+     "talking": 0.94
+    },
+    "preferred_shot_types": [
+     "handson",
+     "lifestyle",
+     "amazon",
+     "field",
+     "promo"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video"
+    ]
+   },
+   "product_intro": {
+    "share_pct": {
+     "handson": 35.8,
+     "amazon": 15.4,
+     "lifestyle": 13.3,
+     "promo": 13.1,
+     "field": 9.8,
+     "rankcard": 4.1
+    },
+    "lift": {
+     "rankcard": 1.71,
+     "amazon": 1.24,
+     "promo": 1.22,
+     "textcard": 1.12
+    },
+    "preferred_shot_types": [
+     "handson",
+     "amazon",
+     "lifestyle",
+     "promo",
+     "field",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "{category} lifestyle stock footage",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" in use outdoor test",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "spec": {
+    "share_pct": {
+     "handson": 37.1,
+     "lifestyle": 15.6,
+     "amazon": 14.9,
+     "promo": 11.1,
+     "field": 9.3,
+     "talking": 3.3
+    },
+    "lift": {
+     "textcard": 1.44,
+     "amazon": 1.2,
+     "lifestyle": 1.13,
+     "other": 1.08
+    },
+    "preferred_shot_types": [
+     "handson",
+     "lifestyle",
+     "amazon",
+     "promo",
+     "field"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" official trailer OR launch video",
+     "\"{product}\" in use outdoor test"
+    ]
+   },
+   "price": {
+    "share_pct": {
+     "handson": 32.1,
+     "amazon": 20.1,
+     "lifestyle": 12.2,
+     "field": 11.5,
+     "promo": 9.5,
+     "rankcard": 4.8
+    },
+    "lift": {
+     "rankcard": 2.0,
+     "amazon": 1.62,
+     "textcard": 1.38,
+     "other": 1.31
+    },
+    "preferred_shot_types": [
+     "handson",
+     "amazon",
+     "lifestyle",
+     "field",
+     "promo",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "{category} lifestyle stock footage",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "verdict": {
+    "share_pct": {
+     "handson": 45.8,
+     "lifestyle": 12.6,
+     "amazon": 11.3,
+     "field": 9.4,
+     "promo": 8.9,
+     "talking": 3.9
+    },
+    "lift": {
+     "handson": 1.12,
+     "talking": 1.11,
+     "rankcard": 1.0,
+     "textcard": 1.0
+    },
+    "preferred_shot_types": [
+     "handson",
+     "lifestyle",
+     "amazon",
+     "field",
+     "promo"
+    ],
+    "queries": [
+     "\"{product}\" review hands on",
+     "{category} lifestyle stock footage",
+     "\"{product}\" product photo white background (amazon / press kit)",
+     "\"{product}\" in use outdoor test",
+     "\"{product}\" official trailer OR launch video"
+    ]
+   }
+  },
+  "sample": {
+   "channels": 198,
+   "videos": 381,
+   "channelsTotal": 279,
+   "videosTotal": 477,
+   "excludedTalkingHead": [
+    "@51Drones",
+    "@9to5Mac",
+    "@AI.Uncovered",
+    "@AmericasTestKitchen",
+    "@ApolloScooters",
+    "@ByteReview",
+    "@CEONTHEMAKING",
+    "@ChinaCore123",
+    "@DHRME",
+    "@DOPEorNOPE",
+    "@ELJefeReviews",
+    "@ESG-ElectricScooterGuide",
+    "@EbikeEscape",
+    "@EbikeSchool",
+    "@ElectricBikeReport",
+    "@Electroheads",
+    "@GadgetEvolution",
+    "@Gadgetrum-z1m",
+    "@GeorgeLangabeer",
+    "@HalfChrome",
+    "@HotshotTek",
+    "@HumbleMechanic",
+    "@JonGadget",
+    "@JoshuaChang",
+    "@LifeHackster",
+    "@MikeOBrienMedia",
+    "@MrPaulXavier",
+    "@Mrwhosetheboss",
+    "@OfficialGamesky",
+    "@PatrickRambles",
+    "@PeteMatheson",
+    "@ProjectUntethered",
+    "@RK9Rides",
+    "@ROYDAN-in3wk",
+    "@SecurityDotOrg",
+    "@ShaneCreates",
+    "@ShortCircuit",
+    "@SillycornsMedia",
+    "@SmartHomeSolver",
+    "@SteveDOES",
+    "@SurvivalOnPurpose",
+    "@TechBuyAdvisor",
+    "@TechSpurt",
+    "@TechnicallyTee",
+    "@TerrenRule",
+    "@TheForemostPicksof2027",
+    "@TheHookUp",
+    "@TheRcSaylors",
+    "@TheStudio",
+    "@TheVideoNerd",
+    "@ThinkMediaTV",
+    "@TinyHomeTours",
+    "@TinyHouseGiantJourney",
+    "@Top5best",
+    "@UrAvgConsumer",
+    "@VacuumWars",
+    "@alysmalls",
+    "@awaytogether",
+    "@carhelpcorner",
+    "@dannywinget",
+    "@edmundscars",
+    "@electricviking",
+    "@flyingfilmmaker",
+    "@freakytechreviews",
+    "@freshlycharged",
+    "@howtomen",
+    "@infinite",
+    "@itsemilyleah",
+    "@joshfenn",
+    "@lifestyle101_official",
+    "@mkbhd",
+    "@pickyaudio",
+    "@randomfrankp",
+    "@romandellapena",
+    "@sambeckman",
+    "@sixthreezero",
+    "@techfiles",
+    "@techwiser",
+    "@vacuumnerds",
+    "@vmax_escooter",
+    "Tech Atlas and AI Unpack"
+   ]
+  },
+  "extras": {
+   "transitionsPct": {
+    "hard": 75.8,
+    "soft": 15.0,
+    "flash": 6.4,
+    "fade_black": 2.9
+   },
+   "videosUsingFlashPct": 83.7,
+   "motionOnStillShotsPct": {
+    "static": 52.9,
+    "zoom_in": 20.0,
+    "pan": 16.8,
+    "zoom_out": 10.3
+   },
+   "text": {
+    "shots_ocr_sampled": 12448,
+    "shots_with_overlay_text_pct": 46.1,
+    "burned_caption_line_pct": 3.8,
+    "position_of_largest_text_pct": {
+     "bottom-center": 19.4,
+     "middle-center": 18.1,
+     "bottom-left": 15.7,
+     "top-left": 14.0,
+     "bottom-right": 8.5,
+     "top-center": 7.8,
+     "top-right": 7.4,
+     "middle-left": 5.0,
+     "middle-right": 4.0
+    },
+    "case_pct": {
+     "Title/mixed": 53.7,
+     "UPPER": 41.1,
+     "lower": 5.3
+    },
+    "text_height_frac_median": 0.083,
+    "words_per_overlay_median": 3.0,
+    "price_text_pct_of_sampled_shots": 2.6,
+    "rank_number_pct_of_sampled_shots": 0.4
+   },
+   "music": {
+    "videos_measured": 367,
+    "music_bed_detected_pct": 77.9,
+    "speech_minus_pause_db_median": 14.9
+   },
+   "cornerWatermarkVideosPct": 6.3,
+   "subscribePopup": {
+    "videos_pct": 15.5,
+    "sampled_shots": 87
+   }
+  }
+ },
+ "guns": {
+  "pacing": {
+   "targetShotSec": 2.53,
+   "avgShotSec": 3.99,
+   "shotSecP25": 1.47,
+   "maxShotSec": 7.4,
+   "cutsPerMin": 14.3,
+   "cutsPerMinRange": [
+    8.79,
+    20.33
+   ],
+   "pctUnder2s": 37.3,
+   "pctOver6s": 13.4,
+   "cutsPerMinByPosition": {
+    "start": 16.0,
+    "middle": 13.0,
+    "end": 13.0
+   }
+  },
+  "product": {
+   "segmentSecMedian": 46.3,
+   "shotsPerProductMedian": 11.0,
+   "shotsPerProductIQR": [
+    6.0,
+    17.75
+   ],
+   "nSegments": 388
+  },
+  "cards": {
+   "segmentsWithCardPct": 29.9,
+   "firstCardAfterIntroSecMedian": 10.9,
+   "rankCardOnIntro": true
+  },
+  "sourceMixPct": {
+   "gun_closeup": 34.8,
+   "field": 27.8,
+   "handson": 19.0,
+   "amazon": 4.5,
+   "lifestyle": 3.7,
+   "promo": 2.7,
+   "rankcard": 2.3,
+   "talking": 2.1,
+   "other": 1.7,
+   "textcard": 1.5
+  },
+  "sentenceRules": {
+   "hook": {
+    "share_pct": {
+     "field": 33.9,
+     "gun_closeup": 29.1,
+     "handson": 15.0,
+     "lifestyle": 6.2,
+     "promo": 3.8,
+     "amazon": 3.5
+    },
+    "lift": {
+     "lifestyle": 1.68,
+     "other": 1.47,
+     "promo": 1.41,
+     "talking": 1.38
+    },
+    "preferred_shot_types": [
+     "field",
+     "gun_closeup",
+     "handson",
+     "lifestyle"
+    ],
+    "queries": [
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" table review close-up hands",
+     "outdoors hunting stock footage"
+    ]
+   },
+   "price": {
+    "share_pct": {
+     "gun_closeup": 38.2,
+     "field": 25.7,
+     "handson": 17.9,
+     "amazon": 5.1,
+     "rankcard": 4.8,
+     "promo": 2.5
+    },
+    "lift": {
+     "rankcard": 2.09,
+     "amazon": 1.13,
+     "gun_closeup": 1.1,
+     "textcard": 1.0
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson",
+     "amazon",
+     "rankcard"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands",
+     "\"{product}\" official product photo (manufacturer site)",
+     "GENERATE: rank number + name + price card"
+    ]
+   },
+   "product_intro": {
+    "share_pct": {
+     "gun_closeup": 34.4,
+     "field": 23.9,
+     "handson": 16.5,
+     "amazon": 6.0,
+     "rankcard": 5.5,
+     "promo": 4.0
+    },
+    "lift": {
+     "rankcard": 2.39,
+     "textcard": 2.13,
+     "promo": 1.48,
+     "amazon": 1.33
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson",
+     "amazon",
+     "rankcard",
+     "textcard"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands",
+     "\"{product}\" official product photo (manufacturer site)",
+     "GENERATE: rank number + name + price card",
+     "GENERATE: spec card (caliber, capacity, weight, barrel)"
+    ]
+   },
+   "spec": {
+    "share_pct": {
+     "gun_closeup": 44.3,
+     "field": 33.4,
+     "handson": 9.4,
+     "amazon": 3.0,
+     "promo": 2.5,
+     "textcard": 2.0
+    },
+    "lift": {
+     "textcard": 1.33,
+     "gun_closeup": 1.27,
+     "field": 1.2,
+     "promo": 0.93
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   },
+   "other": {
+    "share_pct": {
+     "gun_closeup": 34.4,
+     "field": 27.2,
+     "handson": 19.8,
+     "amazon": 4.6,
+     "lifestyle": 3.8,
+     "promo": 2.7
+    },
+    "lift": {
+     "talking": 1.05,
+     "handson": 1.04,
+     "lifestyle": 1.03,
+     "amazon": 1.02
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   },
+   "use_case": {
+    "share_pct": {
+     "gun_closeup": 33.1,
+     "field": 27.4,
+     "handson": 21.4,
+     "lifestyle": 4.9,
+     "amazon": 4.2,
+     "talking": 2.4
+    },
+    "lift": {
+     "lifestyle": 1.32,
+     "talking": 1.14,
+     "handson": 1.13,
+     "field": 0.99
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   },
+   "verdict": {
+    "share_pct": {
+     "gun_closeup": 37.1,
+     "field": 29.0,
+     "handson": 19.3,
+     "amazon": 4.9,
+     "other": 2.2,
+     "lifestyle": 1.9
+    },
+    "lift": {
+     "other": 1.29,
+     "amazon": 1.09,
+     "gun_closeup": 1.07,
+     "field": 1.04
+    },
+    "preferred_shot_types": [
+     "gun_closeup",
+     "field",
+     "handson"
+    ],
+    "queries": [
+     "\"{product}\" close-up product shot table / detail",
+     "\"{product}\" range test shooting / review b-roll",
+     "\"{product}\" table review close-up hands"
+    ]
+   }
+  },
+  "sample": {
+   "channels": 190,
+   "videos": 378,
+   "channelsTotal": 280,
+   "videosTotal": 480,
+   "excludedTalkingHead": [
+    "@110sassactual",
+    "@1ShotTV",
+    "@1stShotTactical",
+    "@3of7Project",
+    "@AAROnair",
+    "@ArcheryTalkVideo",
+    "@At3tactical",
+    "@BestDamnEDC",
+    "@BlackScoutSurvival",
+    "@CharlieSurvival",
+    "@ClassicFirearms",
+    "@ColionNoir",
+    "@DavidCanterbury",
+    "@Deathbybunjie",
+    "@DutchBushcraftKnives",
+    "@ElliottDelp",
+    "@ForgottenWeapons",
+    "@Forgottenamericanarms",
+    "@GUNMENusa",
+    "@Godfamilyandguns",
+    "@GoshenPrepping",
+    "@GunsandGuitars",
+    "@Guntestsmag",
+    "@Hegshot87",
+    "@HerringtonArmsWarehouse",
+    "@HuntFishShootChannel",
+    "@Iraqveteran8888",
+    "@JonGadget",
+    "@JunkyardFox",
+    "@LuckyGunner",
+    "@MarineX",
+    "@MelissaBackwoods",
+    "@MikeB128",
+    "@Militaryarmschannel",
+    "@ModernTacticalShooting",
+    "@NightwoodGuns",
+    "@PaulHarrell",
+    "@PewView",
+    "@PursuitofAccuracy",
+    "@RedwolfEDC",
+    "@RhettCallahanPrepping",
+    "@Rollshambo",
+    "@RonSpomerOutdoors",
+    "@SensiblePrepper",
+    "@SlipjointSawyer",
+    "@SurvivalOnPurpose",
+    "@TFBTVShowTime",
+    "@TacticalAdvisor",
+    "@TacticalConsiderations",
+    "@TacticalHyve",
+    "@TacticalToolbox",
+    "@TargetFocusedLife",
+    "@TexasPlinking",
+    "@TheFirearmGuy",
+    "@TheHumbleMarksman",
+    "@TheOutdoorGearReview",
+    "@ThePreparedWanderer",
+    "@TheUrbanPrepper",
+    "@TheYankeeMarshal",
+    "@TritonWild",
+    "@USCCAOfficial",
+    "@UltimateSurvivalTips",
+    "@UtahAirguns",
+    "@VortexNation",
+    "@WarriorPoetSociety",
+    "@YokiSturrup305",
+    "@airsoftgi",
+    "@backfire",
+    "@bananaballistics",
+    "@bigboytoys7115",
+    "@blockethoutdoors",
+    "@bowhuntordie",
+    "@bugoutbrothers",
+    "@centralgear",
+    "@diypreppertv",
+    "@draggindeeroutdoors",
+    "@evikecom",
+    "@extremeoutfitters",
+    "@gideonstactical",
+    "@gowilsoncombat",
+    "@hickok45",
+    "@joshfenn",
+    "@latestgearofficial",
+    "@podiumarcher3447",
+    "@rmatvmc",
+    "@sootch00",
+    "@teddysedc",
+    "@tfbtv",
+    "@wranglerstar",
+    "@zacinthewild"
+   ]
+  },
+  "extras": {
+   "transitionsPct": {
+    "hard": 74.4,
+    "soft": 14.6,
+    "flash": 7.4,
+    "fade_black": 3.5
+   },
+   "videosUsingFlashPct": 64.6,
+   "motionOnStillShotsPct": {
+    "static": 49.7,
+    "zoom_in": 26.7,
+    "pan": 12.9,
+    "zoom_out": 10.7
+   },
+   "text": {
+    "shots_ocr_sampled": 9616,
+    "shots_with_overlay_text_pct": 35.9,
+    "burned_caption_line_pct": 2.2,
+    "position_of_largest_text_pct": {
+     "middle-center": 19.4,
+     "bottom-center": 18.3,
+     "top-right": 15.5,
+     "top-left": 12.2,
+     "bottom-left": 10.9,
+     "top-center": 9.0,
+     "bottom-right": 7.6,
+     "middle-left": 3.9,
+     "middle-right": 3.2
+    },
+    "case_pct": {
+     "UPPER": 62.0,
+     "Title/mixed": 33.8,
+     "lower": 4.2
+    },
+    "text_height_frac_median": 0.088,
+    "words_per_overlay_median": 2.0,
+    "price_text_pct_of_sampled_shots": 1.1,
+    "rank_number_pct_of_sampled_shots": 0.9
+   },
+   "music": {
+    "videos_measured": 374,
+    "music_bed_detected_pct": 63.9,
+    "speech_minus_pause_db_median": 17.9
+   },
+   "cornerWatermarkVideosPct": 13.0,
+   "subscribePopup": {
+    "videos_pct": 13.5,
+    "sampled_shots": 65
+   }
+  }
+ }
+}

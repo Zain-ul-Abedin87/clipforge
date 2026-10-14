@@ -279,3 +279,71 @@ input[type=range] { padding: 0; }
 .queue-list li { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .queue-list a { color: var(--text); } .queue-list .q-del, .queue-list .q-retry { color: var(--accent); margin-left: auto; }
 .qi-running span { color: var(--run); } .qi-done span { color: var(--ok); } .qi-failed span { color: var(--bad); } .qi-queued span { color: var(--muted); }
+
+/* ---- plan approval (M1) ---- */
+.stepper li.waiting { border-color: var(--accent); }
+.stepper li.waiting .st { color: var(--accent); }
+.plan-box { margin-bottom: 16px; border-color: var(--accent); }
+.plan-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.plan-head h2 { color: var(--accent); }
+.plan-head p { margin: 0 0 12px; max-width: 640px; }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.plan-grid .cell { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.plan-grid .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.plan-grid .v { font-size: 15px; margin-top: 2px; }
+.plan-grid .v small { color: var(--muted); }
+.plan-grid .src { display: inline-block; margin: 2px 4px 0 0; font-size: 12px; }
+.plan-grid .src.off { color: var(--muted); text-decoration: line-through; }
+.q.edited { border-color: var(--accent); color: var(--accent); }
+.edit-qs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.edit-qs input { flex: 1; min-width: 200px; }
+
+/* ---------- prompt composer (home) ---------- */
+.composer-wrap { padding: 64px 16px 40px; position: relative; }
+.composer-wrap::before { content: ""; position: absolute; inset: 0 10% auto; height: 260px; background: radial-gradient(ellipse at 60% 0%, rgba(232, 120, 40, .14), transparent 70%); pointer-events: none; }
+.composer-title { position: relative; }
+.composer-sub { position: relative; margin: 0 auto 22px; max-width: 620px; }
+.composer { position: relative; max-width: 820px; margin: 0 auto; text-align: left; background: #26282c; border: 1.5px solid #3a3d42; border-radius: 26px; box-shadow: 0 10px 40px rgba(0, 0, 0, .45); }
+.cp-prompt { background: #1d1f22; border-radius: 24px 24px 18px 18px; padding: 22px 26px; min-height: 120px; max-height: 320px; overflow-y: auto; font-size: 17px; line-height: 1.75; color: #e9e9ea; outline: none; white-space: pre-wrap; word-break: break-word; }
+.cp-prompt:empty::before { content: attr(data-placeholder); color: #6d7178; pointer-events: none; }
+.cp-tag { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border-radius: 6px; font-weight: 600; font-size: 15px; line-height: 1.6; color: #fff; cursor: pointer; user-select: none; vertical-align: baseline; margin: 0 1px; }
+.cp-tag.type { background: #d4602a; }
+.cp-tag.brand { background: #4c9a5a; }
+.cp-tag.aroll { background: #5b6fd6; }
+.cp-tag.footage { background: #8a5cc4; }
+.cp-tag .ico { font-size: 12px; opacity: .9; }
+.cp-tag:hover { filter: brightness(1.12); }
+.cp-attached { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 18px; }
+.cp-attached:not(:empty) { padding: 10px 18px 0; }
+.cp-file { display: inline-flex; align-items: center; gap: 6px; background: #1d1f22; border: 1px solid #3a3d42; border-radius: 20px; padding: 4px 6px 4px 12px; font-size: 12.5px; color: #cfd1d4; max-width: 100%; }
+.cp-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.cp-file button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 4px; }
+.cp-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 14px; }
+.cp-right { display: flex; align-items: center; gap: 12px; }
+.cp-round { width: 42px; height: 42px; border-radius: 50%; border: 1.5px solid #4a4d52; background: #3a3c40; color: #e9e9ea; font-size: 24px; line-height: 1; cursor: pointer; }
+.cp-round:hover, .cp-round[aria-expanded="true"] { background: #46484d; }
+.cp-model { background: none; border: 0; color: #e9e9ea; font: inherit; font-size: 15px; cursor: pointer; padding: 6px 8px; border-radius: 8px; }
+.cp-model:hover { background: #313337; }
+.cp-caret { color: var(--muted); margin-left: 4px; }
+.cp-send { width: 42px; height: 42px; border-radius: 50%; border: 0; background: #4a6cf0; color: #fff; font-size: 20px; font-weight: 700; cursor: pointer; }
+.cp-send:hover { background: #5b7bff; }
+.cp-send:disabled { background: #3a3d42; color: var(--muted); cursor: default; }
+.cp-menu { position: absolute; z-index: 20; min-width: 200px; max-width: 320px; max-height: 320px; overflow-y: auto; background: #232528; border: 1px solid #34373c; border-radius: 12px; padding: 6px; box-shadow: 0 12px 32px rgba(0, 0, 0, .5); text-align: left; }
+.cp-menu .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 8px 10px 4px; }
+.cp-menu button { display: flex; align-items: center; gap: 12px; width: 100%; background: none; border: 0; color: #e3e4e6; font: inherit; font-size: 14px; text-align: left; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+.cp-menu button small { color: var(--muted); margin-left: auto; }
+.cp-menu button:hover, .cp-menu button.active { background: #303236; }
+.cp-menu .mi { width: 18px; text-align: center; color: #b9bcc1; }
+.cp-menu .dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.cp-modal { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.cp-modal-box { width: min(680px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; text-align: left; }
+.cp-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: var(--text); }
+.cp-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.cp-x { background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; }
+.composer-note { margin-top: 14px; }
+@media (max-width: 600px) {
+  .composer-wrap { padding: 32px 0 24px; }
+  .cp-prompt { font-size: 15px; padding: 16px 18px; }
+  .cp-tag { font-size: 13.5px; }
+}
+@media (max-width: 900px) { #main { order: -1; } }

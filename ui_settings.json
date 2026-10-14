@@ -1,0 +1,14 @@
+{
+  "defaultNiche": "guns",
+  "targetShotSec": {
+    "guns": 2.5,
+    "tech": 2.1
+  },
+  "captions": false,
+  "sources": {
+    "webCrawl": true,
+    "presskit": true,
+    "stock": true
+  },
+  "webCrawlMode": "fallback"
+}

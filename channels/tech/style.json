@@ -1,0 +1,54 @@
+{
+  "name": "tech",
+  "niche": "tech",
+  "resolution": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "fonts": {
+    "title": "Oswald",
+    "body": "Inter",
+    "caption": "Inter"
+  },
+  "colors": {
+    "primary": "#2E86DE",
+    "secondary": "#0F172A",
+    "text": "#FFFFFF",
+    "accent": "#22D3EE"
+  },
+  "captions": {
+    "enabled": false,
+    "position": "bottom",
+    "maxWordsPerLine": 7,
+    "fontSize": 54,
+    "background": "rgba(0,0,0,0.55)"
+  },
+  "music": {
+    "folder": "music",
+    "volumeDb": -18,
+    "duckDb": -10
+  },
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "pacing": {
+    "targetShotSec": 2.1
+  },
+  "intro": null,
+  "outro": null,
+  "logo": {
+    "path": null,
+    "position": "top-right",
+    "opacity": 0.8
+  },
+  "aiDisclosure": true,
+  "motionGraphics": {
+    "enabled": true,
+    "sfx": true,
+    "sfxDb": -14,
+    "_comment": "Tech channel preset linked to tech niche."
+  }
+}

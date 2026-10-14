@@ -49,6 +49,19 @@ export function updateStyle(channel: string, patch: Record<string, unknown>): Re
   s.logo ??= {};
   if (["top-right", "top-left", "bottom-right", "bottom-left"].includes(String(p.logo?.position))) s.logo.position = p.logo.position;
   set(s.logo, "opacity", num(p.logo?.opacity, 0.1, 1));
+  // Style preset: card font/colours/set and shot length (see src/lib/stylePreset.ts).
+  if (p.cards && typeof p.cards === "object") {
+    s.cards ??= {};
+    for (const k of ["primary", "text"]) set(s.cards, k, hex(p.cards[k]));
+    if (typeof p.cards.panel === "string" && /^(#[0-9a-f]{6,8}|rgba?\([\d.,\s]+\))$/i.test(p.cards.panel)) s.cards.panel = p.cards.panel;
+    if (typeof p.cards.font === "string" && /^[A-Za-z0-9 ]{2,40}$/.test(p.cards.font)) s.cards.font = p.cards.font;
+    if (Array.isArray(p.cards.set)) s.cards.set = (p.cards.set as unknown[]).filter((x) => typeof x === "string" && /^[A-Za-z]{3,20}$/.test(x));
+    set(s.cards, "graphicsEverySec", num(p.cards.graphicsEverySec, 8, 120));
+  }
+  if (p.pacing && typeof p.pacing === "object") {
+    s.pacing ??= {};
+    set(s.pacing, "targetShotSec", num(p.pacing.targetShotSec, 1, 8));
+  }
   const ai: unknown = patch.aiDisclosure;
   if (ai === "always" || ai === true || ai === false) s.aiDisclosure = ai;
   fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");

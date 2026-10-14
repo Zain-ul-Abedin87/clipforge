@@ -1,5 +1,5 @@
 /** Where a clip or photo came from (tier order is decided by the niche rule set). */
-export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive";
+export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive" | "youtube_cc" | "web_cc" | "storyblocks" | "web_crawl";
 
 /** assets.json contract: {scene_id: {path,source,license,url}} plus what the renderer needs. */
 export interface Asset {
@@ -44,4 +44,8 @@ export interface Candidate {
   thumbUrl?: string;
   /** Full length of the remote source when only a piece is fetched (Archive.org films). */
   sourceLength?: number;
+  /** Local frame JPEGs (up to 3) for CLIP / vision scoring, e.g. per-shot frames of a web_crawl preview. */
+  frames?: string[];
+  /** Seconds into the remote source where this shot starts (web_crawl: only this part is fetched in HD). */
+  shotStart?: number;
 }

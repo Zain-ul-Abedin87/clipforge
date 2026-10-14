@@ -13,6 +13,7 @@
     "sources": [
       "local",
       "presskit",
+      "official",
       "wikimedia",
       "unsplash"
     ],
@@ -28,11 +29,13 @@
     "sectionHintCount": 0,
     "_sources": "Stock providers in the order tried: pixabay, pexels, unsplash (photos), wikimedia_video, archive (public-domain films).",
     "sources": [
+      "storyblocks",
       "pixabay",
       "pexels",
       "wikimedia_video",
       "archive",
-      "unsplash"
+      "unsplash",
+      "web_crawl"
     ]
   },
   "llmGuidance": "General faceless documentary / explainer video. Choose literal, searchable stock phrases for what the narration describes (places, objects, actions, eras).",

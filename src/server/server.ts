@@ -8,13 +8,20 @@ import { listChannels, loadStyle } from "../lib/style.js";
 import { listNiches } from "../lib/niche.js";
 import { addPresskitFile, listPresskit, removePresskitFile } from "../lib/assets/presskit.js";
 import { applyCandidate, loadCandidates, saveCandidates, searchAlternatives } from "../lib/assets/review.js";
-import { loadNiche, projectNicheName } from "../lib/niche.js";
+import { FOOTAGE_MODE_LABELS, FOOTAGE_MODES, loadNiche, loadProjectNiche } from "../lib/niche.js";
+import { cleanQueries, savePlanEdit } from "../lib/planEdits.js";
+import { youtubeStatus } from "../lib/assets/youtube.js";
+import { approval, gateState, planEstimate, ProjectLike } from "./planGate.js";
 import { saveWordEdit } from "../lib/wordEdits.js";
 import { importFile, listLibrary, removeLibraryFile } from "../lib/assets/library.js";
 import { createChannel, listMusic, removeLogo, removeMusic, saveLogo, saveMusic, updateStyle } from "../lib/channels.js";
 import { BatchQueue } from "./queue.js";
 import { importOfficial } from "../lib/assets/official.js";
 import { parseScriptHtml, scriptSections, scriptText } from "../lib/scriptImport.js";
+import { listReview, reviewThumb, swapShot } from "../lib/sceneReview.js";
+import { ALL_CARDS, CARD_FONTS } from "../lib/stylePreset.js";
+import { buildUiNiche, keyStatus, loadAppSettings, runEnv, saveAppSettings, ttsToWav, UiNiche } from "./simpleUi.js";
+import { detectAndWriteNiche } from "../lib/nicheDetect.js";
 
 const WEB_DIR = path.join(paths.root, "web");
 const TSX_CLI = path.join(paths.root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -23,7 +30,7 @@ const CLI = path.join(paths.root, "src", "cli.ts");
 const STEPS = ["transcribe", "align", "plan", "assets", "timeline", "render", "qa"] as const;
 type Step = (typeof STEPS)[number];
 const STEP_OUTPUT: Record<Step, string> = { transcribe: "words.json", align: "aligned.json", plan: "scenes.json", assets: "assets.json", timeline: "timeline.json", render: "render_report.json", qa: "qa_report.json" };
-const READABLE = new Set(["candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
+const READABLE = new Set(["chapters.json", "facts.json", "candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
 const AUDIO_EXT = new Set([".mp3", ".wav", ".m4a"]);
 
 interface Job {
@@ -33,6 +40,10 @@ interface Job {
   log: string[];
   startedAt: number;
   finishedAt?: number;
+  /** Stopped after the plan: waiting for the user to approve it. */
+  awaitingApproval?: boolean;
+  /** Stopped after the timeline: waiting for the user to review scenes and press Render. */
+  awaitingReview?: boolean;
 }
 const jobs = new Map<string, Job>();
 
@@ -70,7 +81,10 @@ function summary(name: string) {
     hasScript: fs.existsSync(path.join(projDir(name), "script.txt")),
     channel: p.channel ?? "default",
     niche: p.niche ?? null,
+    footage: p.footage ?? "stock_cc",
+    planGate: gateState(projDir(name), p as ProjectLike),
     createdAt: p.createdAt ?? null,
+    voiceMode: p.voiceMode ?? null,
     steps: stepStatus(name),
     running: job?.running ?? false,
   };
@@ -89,12 +103,13 @@ function cliArgs(name: string, step: Step, force: boolean, useLlm: boolean): str
     args.push("--channel", String(p.channel ?? "default"));
     if (!useLlm) args.push("--no-llm");
   }
-  if (force) args.push("--force");
+  // QA always re-checks everything and has no --force option.
+  if (force && step !== "qa") args.push("--force");
   return args;
 }
 
 /** Runs steps as child CLI processes so a crash in one never takes the web server down. */
-async function runJob(name: string, steps: Step[], force: boolean, useLlm: boolean): Promise<void> {
+async function runJob(name: string, steps: Step[], force: boolean, useLlm: boolean, gate = true): Promise<void> {
   reloadEnv();
   const job: Job = { running: true, step: null, failedStep: null, log: [], startedAt: Date.now() };
   jobs.set(name, job);
@@ -104,12 +119,21 @@ async function runJob(name: string, steps: Step[], force: boolean, useLlm: boole
   };
 
   for (const step of steps) {
+    // Plan approval gate: footage is only fetched for a plan the user has approved.
+    if (gate && step === "assets" && gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike) === "waiting") {
+      job.awaitingApproval = true;
+      push("=== plan ready ===");
+      push("Review the scene plan, change searches if you like, then press \"Approve plan & make video\".");
+      break;
+    }
     job.step = step;
     push(`=== ${step} ===`);
     const code = await new Promise<number>((resolve) => {
       const child = spawn(process.execPath, [TSX_CLI, CLI, ...cliArgs(name, step, force, useLlm)], {
         cwd: paths.root,
         windowsHide: true,
+        // Simple UI settings (web crawl on/off and mode) reach every step.
+        env: { ...process.env, ...runEnv(loadAppSettings()) },
       });
       let buf = "";
       const onData = (d: Buffer) => {
@@ -135,15 +159,24 @@ async function runJob(name: string, steps: Step[], force: boolean, useLlm: boole
       push(`!!! ${step} failed (exit ${code})`);
       break;
     }
+    // Scene review gate: projects created with "review before render" stop after the timeline.
+    const pj = readProject(name) ?? {};
+    if (step === "timeline" && steps.includes("render") && pj.review === true && !pj.reviewDone) {
+      job.awaitingReview = true;
+      push("=== review ===");
+      push("Scenes ready: review / swap clips, then press Render.");
+      break;
+    }
   }
   job.running = false;
   job.step = null;
   job.finishedAt = Date.now();
-  push(job.failedStep ? "Stopped." : "All steps finished.");
+  if (!job.awaitingApproval && !job.awaitingReview) push(job.failedStep ? "Stopped." : "All steps finished.");
 }
 
 // Batch queue: one video at a time through every step; waits while any manual run is busy.
 let queue: BatchQueue;
+let ytStatus: Promise<{ ok: boolean; detail: string }> | undefined;
 
 // ---------- HTTP helpers ----------
 
@@ -214,7 +247,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const method = req.method ?? "GET";
 
   if (parts[0] !== "api") {
-    const rel = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+    // "/" is the simple Create UI (web/simple); the full classic UI stays at /index.html.
+    const rel = url.pathname === "/" ? "simple/index.html" : url.pathname.slice(1);
     const file = path.resolve(WEB_DIR, rel);
     if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, "not found", "text/plain");
     return send(res, 200, fs.readFileSync(file), MIME[path.extname(file)] ?? "application/octet-stream");
@@ -222,7 +256,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (parts[1] === "status" && method === "GET") {
     reloadEnv(); // keys added to .env while the server runs show up without a restart
-    return send(res, 200, { anthropicKey: hasKey("ANTHROPIC_API_KEY"), pexelsKey: hasKey("PEXELS_API_KEY"), pixabayKey: hasKey("PIXABAY_API_KEY"), unsplashKey: hasKey("UNSPLASH_ACCESS_KEY") });
+    ytStatus ??= youtubeStatus();
+    return send(res, 200, { anthropicKey: hasKey("ANTHROPIC_API_KEY"), storyblocksKey: hasKey("STORYBLOCKS_PUBLIC_KEY") && hasKey("STORYBLOCKS_PRIVATE_KEY"), pexelsKey: hasKey("PEXELS_API_KEY"), pixabayKey: hasKey("PIXABAY_API_KEY"), unsplashKey: hasKey("UNSPLASH_ACCESS_KEY"), youtubeCC: await ytStatus });
+  }
+
+  if (parts[1] === "app-settings") {
+    reloadEnv();
+    if (method === "PUT") return send(res, 200, { settings: saveAppSettings(JSON.parse((await readBody(req)) || "{}")), keys: keyStatus() });
+    if (method === "GET") return send(res, 200, { settings: loadAppSettings(), keys: keyStatus() });
+  }
+
+  if (parts[1] === "style-meta" && method === "GET") return send(res, 200, { cards: ALL_CARDS, fonts: CARD_FONTS });
+
+  if (parts[1] === "footage-modes" && method === "GET") {
+    return send(res, 200, FOOTAGE_MODES.map((m) => ({ name: m, label: FOOTAGE_MODE_LABELS[m] })));
   }
 
   // Own clips / photos uploaded from the computer (tier 1 footage), with a source note per file.
@@ -280,7 +327,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   if (parts[1] === "niches" && method === "GET") {
-    return send(res, 200, listNiches().map((n) => ({ name: n.name, label: n.label, description: n.description ?? "" })));
+    return send(res, 200, listNiches().map((n) => ({ name: n.name, label: n.label, description: n.description ?? "", scenes: n.scenes ?? null })));
   }
 
   if (parts[1] === "channels" && method === "GET" && !parts[2]) {
@@ -390,7 +437,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       ws.on("error", reject);
     });
     // New audio invalidates everything downstream.
-    for (const f of [...Object.values(STEP_OUTPUT), "sections.json", "plan_report.json", "segments.json", "assets_report.json", "license_log.csv"]) {
+    for (const f of [...Object.values(STEP_OUTPUT), "sections.json", "plan_report.json", "segments.json", "assets_report.json", "license_log.csv", "plan_edits.json"]) {
       fs.rmSync(path.join(projDir(name), f), { force: true });
     }
     writeProject(name, { name, audio: dest, originalFilename: fname, createdAt: readProject(name)?.createdAt ?? new Date().toISOString() });
@@ -432,7 +479,105 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const body = JSON.parse((await readBody(req)) || "{}");
     if (body.channel && listChannels().includes(body.channel)) writeProject(name, { channel: body.channel });
     if (body.niche && listNiches().some((n) => n.name === body.niche)) writeProject(name, { niche: body.niche });
+    if ((FOOTAGE_MODES as readonly string[]).includes(body.footage)) writeProject(name, { footage: body.footage });
+    if (typeof body.planGate === "boolean") writeProject(name, { planGate: body.planGate });
+    // Creative brief from the home prompt ("dark atmosphere, archival footage..."): steers the footage agent.
+    if (typeof body.brief === "string") writeProject(name, { brief: body.brief.trim().slice(0, 2000) });
     return send(res, 200, { ok: true });
+  }
+
+  // ----- plan review: estimate, edit a scene's searches, approve -----
+  if (action === "plan") {
+    const dir = projDir(name);
+    const p = (readProject(name) ?? {}) as ProjectLike;
+    if (!fs.existsSync(path.join(dir, "scenes.json"))) return send(res, 400, { error: "no plan yet - run the pipeline first" });
+    if (parts[4] === "estimate" && method === "GET") return send(res, 200, { ...planEstimate(dir, p), gate: gateState(dir, p) });
+    if (parts[4] === "scene" && parts[5] !== undefined && method === "PUT") {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "pipeline is running for this project" });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      try {
+        return send(res, 200, { ok: true, scene: savePlanEdit(dir, Number(parts[5]), cleanQueries(body.queries)) });
+      } catch (err) {
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
+    if (parts[4] === "approve" && method === "POST") {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "pipeline is running for this project" });
+      writeProject(name, { planApproval: approval(dir) });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      void runJob(name, [...STEPS.slice(STEPS.indexOf("assets"))], false, body.useLlm !== false);
+      return send(res, 200, { ok: true });
+    }
+  }
+
+  // Simple UI: one button. Script and/or voiceover; no voiceover -> default Windows TTS voice.
+  if (action === "go" && method === "POST") {
+    if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const st = loadAppSettings();
+    const p00 = readProject(name);
+    const channel = typeof body.channel === "string" && listChannels().includes(body.channel) ? body.channel : String(p00?.channel ?? "auto");
+    const chNiche = String(loadStyle(channel).niche ?? "");
+    const dir = projDir(name);
+    fs.mkdirSync(dir, { recursive: true });
+    const scriptFile = path.join(dir, "script.txt");
+    const script = typeof body.script === "string" ? body.script.trim() : "";
+    if (script) fs.writeFileSync(scriptFile, script + "\n");
+    else fs.rmSync(scriptFile, { force: true });
+    const title = typeof body.title === "string" ? body.title.trim().slice(0, 100) : String(p00?.title ?? "");
+    const p0 = readProject(name);
+    const hasAudio = !!p0?.audio && fs.existsSync(String(p0.audio)) && !(p0.voiceMode === "tts" && script);
+    if (!hasAudio && !script) return send(res, 400, { error: "Script paste karein ya voiceover upload karein" });
+    // Auto channel (or niche=auto): detect category/hints/pacing from script and write project niche.json.
+    const wantsAuto = channel === "auto" || chNiche === "auto" || body.niche === "auto";
+    let nicheName: string;
+    let uiNiche: string;
+    let detectMeta: { source?: string; category?: string; targetShotSec?: number } = {};
+    if (wantsAuto) {
+      const scriptForDetect = script || (fs.existsSync(scriptFile) ? fs.readFileSync(scriptFile, "utf8") : "");
+      const { niche, meta } = await detectAndWriteNiche(dir, { title, script: scriptForDetect }, console.log);
+      nicheName = niche.name || "auto";
+      uiNiche = "auto";
+      detectMeta = meta;
+    } else {
+      const niche: UiNiche = body.niche === "tech" || body.niche === "guns" ? body.niche : chNiche === "tech" ? "tech" : chNiche === "guns" ? "guns" : st.defaultNiche;
+      nicheName = buildUiNiche(niche, st);
+      uiNiche = niche;
+    }
+    writeProject(name, {
+      name,
+      channel,
+      title,
+      review: body.review === true,
+      reviewDone: false,
+      niche: nicheName,
+      uiNiche,
+      detectedCategory: detectMeta.category ?? null,
+      nicheSource: detectMeta.source ?? null,
+      targetShotSec: detectMeta.targetShotSec ?? null,
+      planGate: false,
+      createdAt: p0?.createdAt ?? new Date().toISOString(),
+      voiceMode: hasAudio ? (script ? "both" : "voice") : "tts",
+    });
+    if (channel !== "auto") updateStyle(channel, { captions: { enabled: st.captions } });
+    else updateStyle(channel, { captions: { enabled: st.captions }, pacing: { targetShotSec: detectMeta.targetShotSec ?? 2.3 } });
+    void (async () => {
+      if (!hasAudio) {
+        const job: Job = { running: true, step: null, failedStep: null, log: ["=== voice ===", "Default test voice (Windows TTS) ..."], startedAt: Date.now() };
+        jobs.set(name, job);
+        const wav = path.join(dir, "voiceover.wav");
+        const r = await ttsToWav(scriptFile, wav);
+        if (!r.ok) {
+          job.log.push(`!!! voice failed: ${r.error}`);
+          Object.assign(job, { running: false, failedStep: "transcribe", finishedAt: Date.now() });
+          return;
+        }
+        for (const f of Object.values(STEP_OUTPUT)) fs.rmSync(path.join(dir, f), { force: true });
+        writeProject(name, { audio: wav, originalFilename: "tts.wav" });
+      }
+      await runJob(name, [...STEPS], !!body.force, true, false);
+    })();
+    return send(res, 200, { ok: true, niche: nicheName, detectedCategory: detectMeta.category ?? null, nicheSource: detectMeta.source ?? null });
   }
 
   if (action === "run" && method === "POST") {
@@ -453,6 +598,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       running: job?.running ?? false,
       step: job?.step ?? null,
       failedStep: job?.failedStep ?? null,
+      awaitingApproval: job?.awaitingApproval ?? false,
+      awaitingReview: (job?.awaitingReview ?? false) && !job?.running,
+      planGate: gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike),
       total: job?.log.length ?? 0,
       lines: job ? job.log.slice(since) : [],
       steps: stepStatus(name),
@@ -488,6 +636,49 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return;
   }
 
+  // ----- scene review before render (simple UI) -----
+  if (action === "review") {
+    const dir = projDir(name);
+    if (!fs.existsSync(path.join(dir, "timeline.json"))) return send(res, 404, { error: "no timeline yet" });
+    if (method === "GET" && !parts[4]) {
+      const p = readProject(name) ?? {};
+      return send(res, 200, { awaiting: !!jobs.get(name)?.awaitingReview && !jobs.get(name)?.running, review: p.review === true, reviewDone: p.reviewDone === true, scenes: listReview(dir) });
+    }
+    if (method === "GET" && parts[4] === "thumb") {
+      const alt = url.searchParams.get("alt");
+      const f = alt ? await reviewThumb(dir, { alt }) : await reviewThumb(dir, { scene: Number(url.searchParams.get("scene")), shot: Number(url.searchParams.get("shot") ?? 0) });
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no thumbnail" });
+    }
+    if (method === "POST" && parts[4] === "swap") {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "pipeline is running for this project" });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      try {
+        swapShot(dir, Number(body.scene), Number(body.shot ?? 0), String(body.alt ?? ""));
+        return send(res, 200, { ok: true, scene: listReview(dir).find((s) => s.id === Number(body.scene)) });
+      } catch (err) {
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
+    if (method === "POST" && parts[4] === "render") {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+      writeProject(name, { reviewDone: true });
+      void runJob(name, ["render", "qa"], false, true, false);
+      return send(res, 200, { ok: true });
+    }
+  }
+
+  // ----- publish pack (title, description, thumbnails) -----
+  if (action === "publish" && method === "GET") {
+    const pub = path.join(projDir(name), "publish");
+    if (parts[4]) {
+      const f = path.join(pub, path.basename(parts[4]));
+      if (!/^[A-Za-z0-9_.-]+\.(jpg|txt|json)$/.test(parts[4]) || !fs.existsSync(f)) return send(res, 404, { error: "missing file" });
+      return streamFile(req, res, f);
+    }
+    const f = path.join(pub, "publish.json");
+    return fs.existsSync(f) ? send(res, 200, fs.readFileSync(f)) : send(res, 404, { error: "not generated yet" });
+  }
+
   // ----- review page: swap a scene's footage, fix a caption word -----
 
   if (action === "candidates" && parts[4] !== undefined) {
@@ -498,7 +689,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const body = JSON.parse((await readBody(req)) || "{}");
       if (!String(body.query ?? "").trim()) return send(res, 400, { error: "type something to search for" });
       const p = readProject(name) ?? {};
-      const niche = loadNiche(projectNicheName(p as { niche?: string }, loadStyle(String(p.channel ?? "default"))));
+      const niche = loadProjectNiche(p as ProjectLike, loadStyle(String(p.channel ?? "default")));
       const found = await searchAlternatives(String(body.query).trim(), niche);
       // Keep searched options so a later swap request can find them by id.
       const existing = all[sceneId] ?? [];
@@ -586,7 +777,8 @@ export async function serve(port: number): Promise<void> {
   fs.mkdirSync(paths.workspace, { recursive: true });
   queue = new BatchQueue(
     async (project, useLlm) => {
-      await runJob(project, [...STEPS], false, useLlm);
+      // Batch runs unattended: no plan approval stop.
+      await runJob(project, [...STEPS], false, useLlm, false);
       return { failedStep: jobs.get(project)?.failedStep ?? null };
     },
     () => [...jobs.values()].some((j) => j.running),

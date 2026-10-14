@@ -1,0 +1,51 @@
+{
+  "name": "listicle",
+  "label": "Listicle / Top 10 (any topic)",
+  "description": "Ranked roundups and 'best of' videos on any topic: fast pacing, a title card per item.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.2
+  },
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "city aerial view",
+    "sources": [
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "wikimedia_video",
+      "unsplash",
+      "archive"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "video game"
+    ]
+  },
+  "llmGuidance": "Ranked listicle on any topic (places, foods, inventions, animals...). Each item opens with its title card; then show the item itself first, B-roll of what the narration says about it second. Search with the item's name plus a visual word (e.g. 'Eiffel Tower aerial', 'sushi chef preparing').",
+  "disclaimer": "",
+  "qa": {
+    "stillWarn": 0.5,
+    "stillFail": 0.65
+  }
+}

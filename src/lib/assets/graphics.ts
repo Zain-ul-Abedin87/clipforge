@@ -195,9 +195,13 @@ export interface Layer {
   path: string;
   /** Seconds after the scene starts. */
   delay: number;
-  anim: "slide_up" | "slide_left" | "fade";
+  anim: "slide_up" | "slide_left" | "slide_right" | "fade";
   /** Seconds after the scene starts to fade the layer out (omit to keep it). */
   out?: number;
+  /** path is a video with alpha (Remotion card, ProRes 4444) that animates itself. */
+  video?: boolean;
+  /** Remotion card to render instead of this PNG (cards/); the PNG stays as the fallback. */
+  card?: { comp: "RankCard" | "PriceCard" | "SpecCard" | "LowerThird" | "SpecBars" | "ProsCons" | "PriceTag" | "CompareTable"; props: Record<string, unknown>; seconds?: number };
 }
 
 /** The same card as an empty background plus one transparent layer per text group. */
@@ -239,6 +243,44 @@ export async function renderRankBadge(rank: number, style: CardStyle, outDir: st
     transparent: true,
     panel,
   });
+}
+
+/**
+ * Spec callout on the right side of a product shot ("9MM LUGER", "$389 MSRP"), one chip per fact,
+ * stacked from `index`; each chip is its own layer so they can slide in one after another.
+ */
+export async function renderSpecChip(text: string, index: number, style: CardStyle, outDir: string): Promise<string> {
+  const bold = font(style.titleFont, true);
+  const label = text.toUpperCase();
+  const size = label.length > 20 ? 36 : 42;
+  const w = Math.min(700, Math.round(label.length * size * 0.6) + 80);
+  const h = 84;
+  const x = W - w - 70;
+  const y = 250 + index * 108;
+  const panel = { x, y, w, h, opacity: 0.84, strips: [{ x: w - 10, w: 10, color: color(style.primary) }] };
+  return renderCard([{ text: label, size, font: bold, color: color(style.text), x: String(x + 34), y: String(y + Math.round((h - size) / 2) - 1) }], style.secondary, style.primary, outDir, {
+    transparent: true,
+    panel,
+  });
+}
+
+/**
+ * Info panel on the right of a product photo, replacing the full-screen black card: a small
+ * kicker ("UP NEXT", "PRICE"), the product name, and optionally a big value in an accent box.
+ */
+export async function renderSidePanel(kicker: string, title: string, big: string | undefined, style: CardStyle, outDir: string): Promise<string> {
+  const bold = font(style.titleFont, true);
+  const w = 680;
+  const h = big ? 400 : 290;
+  const x = W - w - 80;
+  const y = Math.round((H - h) / 2) - 40;
+  const panel = { x, y, w, h, opacity: 0.86, strips: [{ x: 0, w: 12, color: color(style.primary) }] };
+  const texts: Text[] = [
+    { text: kicker.toUpperCase(), size: 40, font: bold, color: color(style.primary), x: String(x + 56), y: String(y + 44) },
+    { text: wrap(title.toUpperCase(), 64, w - 100, 2), size: 64, font: bold, color: color(style.text), x: String(x + 56), y: String(y + 104) },
+  ];
+  if (big) texts.push({ text: big, size: 96, font: bold, color: color(style.secondary), x: String(x + 56), y: String(y + 250), box: color(style.primary) });
+  return renderCard(texts, style.secondary, style.primary, outDir, { transparent: true, panel });
 }
 
 /** Fallback card when no footage exists: the product name or the scene's key phrase. */

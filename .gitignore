@@ -27,3 +27,14 @@ inputs/**/*.wav
 inputs/batch/
 inputs/test*/
 inputs/demo*/
+
+# local backups, scratch and large study media
+.bak-newbot/
+.env.*
+!.env.example
+*.orig-newbot
+*.v1-newbot
+data/channel_study/v3/gallery/
+cards/node_modules/
+cards/out/
+

@@ -1,0 +1,53 @@
+{
+  "name": "documentary",
+  "label": "Documentary (history, true stories, deep dives)",
+  "description": "Long-form narrated deep dive: slower pacing, archival and public-domain footage first, few cards.",
+  "structure": {
+    "detectListicle": false,
+    "titleCardPerItem": false,
+    "maxPriceBadgesPerItem": 0,
+    "maxProsConsPerItem": 0,
+    "targetGraphicShare": 0.06
+  },
+  "_scenes": "Documentaries breathe: longer shots than a listicle.",
+  "scenes": {
+    "avgLengthSec": 9,
+    "minLengthSec": 6,
+    "maxLengthSec": 14
+  },
+  "product": {
+    "sources": [
+      "local",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "old city street archive footage",
+    "_sources": "Archival / public-domain film first, then CC video, then stock.",
+    "sources": [
+      "archive",
+      "wikimedia_video",
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "unsplash",
+      "web_crawl"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "video game",
+      "toy"
+    ]
+  },
+  "llmGuidance": "Documentary narration (history, true stories, disasters, psychology). Prefer real places, people's surroundings, period objects and archival-looking shots of what the narration describes; name the era or place in the search when the narration gives it (e.g. '1930s factory workers', 'ocean liner at sea'). Avoid modern-looking stock for historical moments. Use graphics only for a date, a place name or one key number.",
+  "disclaimer": "",
+  "qa": {
+    "stillWarn": 0.5,
+    "stillFail": 0.65
+  }
+}

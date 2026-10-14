@@ -1,0 +1,52 @@
+{
+  "name": "explainer",
+  "label": "Explainer (finance, business, science, tech)",
+  "description": "A complex topic walked through step by step: faster cuts, on-screen text cards for key numbers.",
+  "structure": {
+    "detectListicle": false,
+    "titleCardPerItem": false,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.18
+  },
+  "_scenes": "Explainers keep moving: shorter shots hold attention through the payoff.",
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia",
+      "unsplash"
+    ],
+    "allowStock": true
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "modern office city skyline",
+    "sources": [
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "wikimedia_video",
+      "unsplash",
+      "archive"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "video game"
+    ]
+  },
+  "llmGuidance": "Explainer video (finance, business, science, tech). Show concrete, literal visuals for each idea: money, charts on screens, factories, labs, phones, people working. When the narration states a number, percentage or definition, a short spec_card (2-3 lines, max 5 words each) works well. Keep it moving: avoid the same visual twice in a row.",
+  "disclaimer": "",
+  "qa": {
+    "stillWarn": 0.5,
+    "stillFail": 0.65
+  }
+}

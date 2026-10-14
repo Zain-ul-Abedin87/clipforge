@@ -35,7 +35,7 @@ const Schema = z.object({
   ),
 });
 
-const SYSTEM = `You are a strict video editor choosing B-roll for a faceless YouTube video. For each scene you get the narration line (plus the line before it for context) and several candidate clips, each shown as 1-3 frames. For every candidate answer fits=true only if the footage visibly suits what the narration says (a generic shot that suits the sentence is fine). fits=false if it shows a clearly different subject, a wrong meaning of a word, burned-in text/watermarks/logos dominating the frame, a talking head or presenter, or anything unrelated. reason: max 12 words. Return every scene id and every candidate key you were given.`;
+const SYSTEM = `You are a strict video editor choosing B-roll for a faceless YouTube video. For each scene you get the narration line (plus the line before it for context) and several candidate clips, each shown as 1-3 frames. For every candidate answer fits=true only if the footage visibly suits what the narration says (a generic shot that suits the sentence is fine). fits=false if it shows a clearly different subject, a wrong meaning of a word, burned-in text/watermarks/logos dominating the frame, a talking head, a presenter or anyone looking at / speaking to the camera, a messy mechanic garage or workshop scene, or anything unrelated. When the item asks for a specific product, approve ONLY clean, clear shots of that exact product itself (pure product shots) or cinematic action shots of that specific model in use; reject everything else. reason: max 12 words. Return every scene id and every candidate key you were given.`;
 
 const mime = (f: string) => (/\.png$/i.test(f) ? "image/png" : /\.webp$/i.test(f) ? "image/webp" : "image/jpeg");
 
@@ -45,7 +45,7 @@ export async function verifyCandidates(items: VerifyItem[], topic: string, cache
   if (!visionVerifyEnabled() || !items.length) return out;
   const model = agentModel();
   const cache: Record<string, { fits: boolean; reason: string }> = fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf8")) : {};
-  const keyOf = (it: VerifyItem, cid: string) => crypto.createHash("sha1").update(`${model}|v1|${it.text}|${cid}`).digest("hex").slice(0, 20);
+  const keyOf = (it: VerifyItem, cid: string) => crypto.createHash("sha1").update(`${model}|v2|${it.text}|${cid}`).digest("hex").slice(0, 20);
   const todo: VerifyItem[] = [];
   for (const it of items) {
     const missing = it.cands.filter((c) => !cache[keyOf(it, c.id)] && c.frames.some((f) => fs.existsSync(f)));

@@ -2,7 +2,7 @@ import type { Scene } from "./scenes.js";
 import type { Niche } from "./niche.js";
 import { movingShare } from "./assets/shotQa.js";
 import type { PoolShot } from "./assets/productPool.js";
-import { productRegions } from "./assets/productPool.js";
+import { isVerifiedShot, productRegions } from "./assets/productPool.js";
 
 /**
  * Pacing engine (timeline step). Competitor listicles cut every ~2.4-2.8 s (5-8 spoken words),
@@ -30,6 +30,20 @@ export interface SubShot {
   shotType?: string;
   /** Set when nothing unused was left and a segment had to repeat. */
   reused?: boolean;
+  /** Exact-model verified product footage (pool shot or checked product photo). */
+  verified?: boolean;
+}
+
+/** On-screen share per product chapter (seconds), written to <project>/footage_share.json by the timeline. */
+export interface ChapterShare {
+  product: string;
+  seconds: number;
+  verifiedVideo: number;
+  verifiedPhoto: number;
+  stock: number;
+  reusedVerified: number;
+  verifiedShare: number;
+  stockShare: number;
 }
 
 export interface PacingConfig {
@@ -153,8 +167,11 @@ export function applyPacing(
   pool: PoolShot[],
   cfg: PacingConfig,
   log: (m: string) => void,
-  opts: { photosOf?: (product: string) => string[]; mix?: Record<string, number> } = {},
-): void {
+  opts: { photosOf?: (product: string) => string[]; mix?: Record<string, number>; maxStockShare?: number } = {},
+): ChapterShare[] {
+  // Only exact-model verified pool shots count as (and may be used as) product footage.
+  pool = pool.filter(isVerifiedShot);
+  const maxStock = opts.maxStockShare ?? 0.2;
   const FPS = 30;
   const regions = productRegions(scenes);
   const productOf = new Map<number, string>();
@@ -192,6 +209,26 @@ export function applyPacing(
     if (scenes[i].type === "graphic" && !t.backdrop && a.kind === "image" && a.source !== "graphic") ledger.take(sourceKey(a.path), 0, STILL, t.id);
   });
 
+  // Per chapter: total footage frames, and frames given to stock (capped at maxStock of the chapter).
+  const chapterFrames = new Map<string, number>();
+  const stockFrames = new Map<string, number>();
+  tl.forEach((t, i) => {
+    const pr = productOf.get(scenes[i].id);
+    if (pr && !t.backdrop && t.asset.source !== "graphic" && scenes[i].type !== "graphic") chapterFrames.set(pr, (chapterFrames.get(pr) ?? 0) + (t.endFrame - t.startFrame));
+  });
+  /** Verified product shot reused at a different moment when every free window is taken (never stock). */
+  const reusePick = (product: string, need: number, scId: number): SubShot | undefined => {
+    const shots = pool.filter((p) => p.product === product && p.duration >= Math.min(need, 1.2));
+    if (!shots.length) return undefined;
+    const usedOf = (p: PoolShot) => ledger.used.filter((u) => u.key === (p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url))).length;
+    const p = [...shots].sort((x, y) => usedOf(x) - usedOf(y) || (x.author === lastUp[lastUp.length - 1] ? 1 : 0) - (y.author === lastUp[lastUp.length - 1] ? 1 : 0))[0];
+    const len = Math.min(need, p.duration);
+    const local = p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url);
+    const at = Math.max(0, Math.min(p.duration - len, ((usedOf(p) * 0.9) % Math.max(0.01, p.duration - len + 0.01))));
+    ledger.take(local, (p.srcStart ?? 0) + at, (p.srcStart ?? 0) + at + len, scId);
+    lastUp.push(p.author);
+    return { path: p.path, kind: "video", in: Math.round(at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + at, shotType: p.shotType, verified: true, reused: true };
+  };
   const poolPick = (product: string, need: number, scId: number): SubShot | undefined => {
     const shots = pool.filter((p) => p.product === product); // never another product's shots
     const tu = typeUse.get(product) ?? new Map<string, number>();
@@ -230,14 +267,14 @@ export function applyPacing(
     lastUp.push(p.author);
     tu.set(p.shotType ?? "", (tu.get(p.shotType ?? "") ?? 0) + 1);
     typeUse.set(product, tu);
-    return { path: p.path, kind: "video", in: Math.round(best.at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + best.at, shotType: p.shotType };
+    return { path: p.path, kind: "video", in: Math.round(best.at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + best.at, shotType: p.shotType, verified: true };
   };
   const photoPick = (product: string, scId: number, prefer?: string): SubShot | undefined => {
     const list = [...(prefer ? [prefer] : []), ...(opts.photosOf?.(product) ?? [])];
     const ph = list.find((f) => ledger.free(sourceKey(f), 0, STILL));
     if (!ph) return undefined;
     ledger.take(sourceKey(ph), 0, STILL, scId);
-    return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0 };
+    return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true };
   };
   const clipPick = (path: string, dur: number, source: string, need: number, prefer: number, scId: number): SubShot | undefined => {
     const key = sourceKey(path);
@@ -275,6 +312,10 @@ export function applyPacing(
       continue;
     }
     const product = t.backdrop ? cardProduct(i) : productOf.get(sc.id);
+    // A line outside a chapter that names a product (brand + model, or the model words) shows that
+    // product's verified pool, not "brand" stock.
+    const lower = sc.text.toLowerCase();
+    const mentioned = product ? undefined : names.find((n) => lower.includes(n.toLowerCase()) || (n.split(/\s+/).length > 1 && lower.includes(n.split(/\s+/).slice(1).join(" ").toLowerCase())));
     const st = productOf.has(sc.id) && !t.backdrop ? sentenceType(sc.text, firstSceneOf.has(sc.id)) : "other";
     if (productOf.has(sc.id) && !t.backdrop) sentenceStats[st] = (sentenceStats[st] ?? 0) + 1;
     const cuts = cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
@@ -285,15 +326,31 @@ export function applyPacing(
       const need = f / FPS;
       let s: SubShot | undefined;
       // Price / product-intro lines open on an unused product photo.
-      if (!s && k === 0 && product && (st === "price" || st === "product_intro")) s = photoPick(product, sc.id, a.kind === "image" ? a.path : undefined);
+      if (!s && k === 0 && product && (st === "price" || st === "product_intro")) s = photoPick(product, sc.id, undefined);
       if (!s && product) s = poolPick(product, need, sc.id);
-      if (!s && product) s = photoPick(product, sc.id, a.kind === "image" ? a.path : undefined);
+      if (!s && product) s = photoPick(product, sc.id, undefined);
+      // Product chapter, pool used up: stock only within the chapter's stock budget, else reuse
+      // another moment of a verified source video. Never fill a product chapter with stock silently.
+      if (!s && product && !t.backdrop) {
+        const cf = chapterFrames.get(product) ?? 0;
+        if (cf && (stockFrames.get(product) ?? 0) + f <= cf * maxStock) {
+          s = genericPick(need, sc.id);
+          if (s) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
+        }
+        if (!s) s = reusePick(product, need, sc.id);
+      }
+      if (!s && product && t.backdrop) s = reusePick(product, need, sc.id);
+      if (!s && mentioned && !t.backdrop) s = poolPick(mentioned, need, sc.id);
       if (!s && !product && a.kind === "video" && !t.backdrop) s = clipPick(a.path, a.duration ?? need, a.source, need, (a.in ?? 0) + k * (need + 0.8), sc.id);
       if (!s && !product && a.kind === "image" && !t.backdrop && ledger.free(sourceKey(a.path), 0, STILL)) {
         ledger.take(sourceKey(a.path), 0, STILL, sc.id);
         s = { path: a.path, kind: "image", in: 0, frames: 0, source: a.source, key: sourceKey(a.path), srcIn: 0 };
       }
-      if (!s) s = genericPick(need, sc.id);
+      if (!s && !product) s = genericPick(need, sc.id);
+      if (!s && product && !t.backdrop && (stockFrames.get(product) ?? 0) + f <= (chapterFrames.get(product) ?? 0) * maxStock) {
+        s = genericPick(need, sc.id);
+        if (s) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
+      }
       if (!s) {
         // Nothing unused left: reuse (logged, QA reports it).
         const key = sourceKey(a.path);
@@ -308,6 +365,29 @@ export function applyPacing(
     a.shots = subs;
     (t as TlScene & { sentence?: string }).sentence = st;
     totalShots += subs.length;
+  }
+
+  // On-screen share per product chapter (footage scenes only; cards excluded).
+  const shares: ChapterShare[] = [];
+  for (const n of names) {
+    const sh: ChapterShare = { product: n, seconds: 0, verifiedVideo: 0, verifiedPhoto: 0, stock: 0, reusedVerified: 0, verifiedShare: 0, stockShare: 0 };
+    tl.forEach((t, i) => {
+      if (productOf.get(scenes[i].id) !== n || t.backdrop || scenes[i].type === "graphic" || t.asset.source === "graphic") return;
+      for (const x of t.asset.shots ?? []) {
+        const sec = x.frames / FPS;
+        sh.seconds += sec;
+        if (x.verified && x.kind === "video") sh.verifiedVideo += sec;
+        else if (x.verified) sh.verifiedPhoto += sec;
+        else sh.stock += sec;
+        if (x.verified && x.reused) sh.reusedVerified += sec;
+      }
+    });
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    sh.verifiedShare = sh.seconds ? Math.round(((sh.verifiedVideo + sh.verifiedPhoto) / sh.seconds) * 1000) / 1000 : 0;
+    sh.stockShare = sh.seconds ? Math.round((sh.stock / sh.seconds) * 1000) / 1000 : 0;
+    for (const k of ["seconds", "verifiedVideo", "verifiedPhoto", "stock", "reusedVerified"] as const) sh[k] = r1(sh[k]);
+    shares.push(sh);
+    log(`[pacing] chapter ${n}: ${sh.seconds}s on screen, verified ${Math.round(sh.verifiedShare * 100)}% (video ${sh.verifiedVideo}s, photos ${sh.verifiedPhoto}s, reused moments ${sh.reusedVerified}s), stock/unverified ${Math.round(sh.stockShare * 100)}% (cap ${Math.round(maxStock * 100)}%)`);
   }
 
   // Hard cuts by default; flash + whoosh only where a new product starts.
@@ -336,4 +416,5 @@ export function applyPacing(
   log(`[pacing] sentence types (product scenes): ${JSON.stringify(sentenceStats)}`);
   log(`[pacing] footage ledger: ${ledger.used.length} segments, ${ledger.forced.length} forced reuse(s)${ledger.forced.length ? ": " + ledger.forced.join("; ") : ""}`);
   log(`[pacing] ${totalShots} shots (${poolShots} from product pools), avg ${(dur / totalShots).toFixed(2)} s, ${((totalShots - 1) / (dur / 60)).toFixed(1)} cuts/min, ${flashes} product-boundary flash(es)`);
+  return shares;
 }

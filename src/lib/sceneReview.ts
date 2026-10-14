@@ -17,7 +17,18 @@ import { sourceKey, type SubShot } from "./pacing.js";
  * Only the swapped scene's render segment changes; every other segment comes from the cache.
  */
 
-export interface ReviewShot { index: number; file: string; source: string; seconds: number; shotType?: string; product?: string; reused?: boolean }
+export interface ReviewShot { index: number; file: string; source: string; seconds: number; shotType?: string; product?: string; reused?: boolean; verified?: boolean }
+
+/** Per-chapter footage summary (footage_share.json from the timeline) for the review page and QA. */
+export interface FootageChapter { product: string; seconds: number; verifiedShare: number; stockShare: number; poolVerified: number; poolTarget?: number; insufficient: boolean }
+export function footageSummary(dir: string): FootageChapter[] {
+  const f = path.join(dir, "footage_share.json");
+  try {
+    return fs.existsSync(f) ? readJson<FootageChapter[]>(f) : [];
+  } catch {
+    return [];
+  }
+}
 export interface ReviewAlt { id: string; file: string; product: string; shotType?: string; match: number; author?: string; seconds: number }
 export interface ReviewScene {
   id: number;
@@ -51,7 +62,7 @@ function alternativesFor(sc: Scene, t: TimelineScene, pool: PoolShot[], used: Se
   const product = t.asset.shots?.find((x) => x.product)?.product ?? sc.product_name;
   const id = String(sc.id);
   const list = pool
-    .filter((p) => fs.existsSync(p.path) && !used.has(sourceKey(p.path, p.url)) && !used.has(sourceKey(p.path)))
+    .filter((p) => p.verified === true && fs.existsSync(p.path) && !used.has(sourceKey(p.path, p.url)) && !used.has(sourceKey(p.path)))
     .filter((p) => (product ? p.product === product : p.sceneSim?.[id] !== undefined))
     .map((p) => ({ p, m: p.sceneSim?.[id] ?? p.textSim ?? 0 }))
     .sort((a, b) => b.m - a.m);
@@ -84,7 +95,7 @@ export function listReview(dir: string): ReviewScene[] {
       type: sc?.type ?? "",
       product: sc?.product_name,
       card,
-      shots: shotsOf(t).map((x, i) => ({ index: i, file: path.basename(x.path), source: x.source, seconds: Math.round((x.frames / 30) * 100) / 100, shotType: x.shotType, product: x.product, reused: x.reused })),
+      shots: shotsOf(t).map((x, i) => ({ index: i, file: path.basename(x.path), source: x.source, seconds: Math.round((x.frames / 30) * 100) / 100, shotType: x.shotType, product: x.product, reused: x.reused, verified: x.verified === true })),
       alternatives: card || !sc ? [] : alternativesFor(sc, t, pool, used),
     };
   });
@@ -110,7 +121,7 @@ function applyOne(t: TimelineScene, shotIdx: number, p: PoolShot): Swap | null {
   if (!s) return null;
   const need = s.frames / 30;
   const inn = bestIn(p, need);
-  t.asset.shots[shotIdx] = { ...s, path: p.path, kind: "video", in: inn, source: "web_crawl", url: p.url, author: p.author, key: sourceKey(p.path, p.url), srcIn: (p.srcStart ?? 0) + inn, product: p.product, shotType: p.shotType, reused: false };
+  t.asset.shots[shotIdx] = { ...s, path: p.path, kind: "video", in: inn, source: "web_crawl", url: p.url, author: p.author, key: sourceKey(p.path, p.url), srcIn: (p.srcStart ?? 0) + inn, product: p.product, shotType: p.shotType, reused: false, verified: p.verified === true };
   if (shotIdx === 0) t.asset = { ...t.asset, path: p.path, kind: "video", in: inn };
   return { scene: t.id, shot: shotIdx, alt: p.id, path: p.path, in: inn };
 }

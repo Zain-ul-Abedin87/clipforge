@@ -26,7 +26,7 @@ import { verifyCandidates, visionTopN, visionVerifyEnabled } from "../lib/agent/
 import { loadStyle } from "../lib/style.js";
 import { FOOTAGE_MODE_LABELS, footageMode, isBlocked, loadProjectNiche, nicheFingerprintPath, nicheHints } from "../lib/niche.js";
 import { ffmpegPath, venvPythonPath } from "../lib/tools.js";
-import { buildProductPools, poolConfig } from "../lib/assets/productPool.js";
+import { buildProductPools, exactModelPrompt, poolConfig, productRegions } from "../lib/assets/productPool.js";
 
 export interface AssetsOpts {
   project: string;
@@ -223,7 +223,10 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const candidateFile: CandidateFile = {};
   const genericIds = new Set<number>();
   const sectionText = (secId: number) => scenes.filter((x) => x.section === secId).map((x) => x.text).join(" ");
-  const categoryHints = nicheHints(niche).slice(0, niche.stock.sectionHintCount ?? 0);
+  const productNamesAll = [...new Set(scenes.map((s) => s.product_name).filter((x): x is string => !!x))];
+  const categoryHints = nicheHints(niche, productNamesAll).slice(0, niche.stock.sectionHintCount ?? 0);
+  const productOfScene = new Map<number, string>();
+  for (const [n, list] of productRegions(scenes)) for (const s of list) productOfScene.set(s.id, n);
 
   // AI Footage Agent: Claude writes the searches (exact -> broad) and the ideal-shot sentence.
   const sectionsFile = path.join(dir, "sections.json");
@@ -479,7 +482,10 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
             const top = p.cands.filter((c) => framesOf.has(c.id)).sort((a, b) => sc(b) - sc(a)).slice(0, visionTopN());
             const k = scenes.findIndex((x) => x.id === p.scene.id);
             const before = scenes.slice(Math.max(0, k - 2), k).map((x) => x.text).join(" ");
-            return { sceneId: p.scene.id, text: p.scene.text, before, cands: top.map((c) => ({ id: c.id, frames: framesOf.get(c.id)! })) };
+            // Inside a product chapter every asset gets the strict exact-model check (stock included).
+            const prod = p.scene.product_name ?? productOfScene.get(p.scene.id);
+            const text = prod ? `${exactModelPrompt(prod, poolConfig(niche).category)} Narration: "${p.scene.text}"` : p.scene.text;
+            return { sceneId: p.scene.id, text, before, cands: top.map((c) => ({ id: c.id, frames: framesOf.get(c.id)! })) };
           })
           .filter((i) => i.cands.length),
         project.brief || niche.label,

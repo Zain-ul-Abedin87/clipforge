@@ -30,6 +30,8 @@ export const WEB_CRAWL_LICENSE = "unknown/web";
 const worker = new Worker(WORKER);
 let disabledWhy: string | null = null;
 let searches = 0;
+/** Product-pool searches have their own budget, so stock fallbacks cannot starve a product's pool. */
+let poolSearches = 0;
 const said = new Set<string>();
 const sayOnce = (m: string) => {
   if (!said.has(m)) console.log(m);
@@ -128,7 +130,9 @@ async function preview(hit: Hit): Promise<Preview | null> {
   const metaFile = path.join(PREVIEW_DIR, `${key}.json`);
   if (fs.existsSync(metaFile)) {
     const p = JSON.parse(fs.readFileSync(metaFile, "utf8")) as Preview;
-    if (!p.ok || p.shots.every((s) => s.frames.every((f) => fs.existsSync(f)))) return p.ok ? p : null;
+    // A failed preview (HTTP 403, timeout) is retried once after 30 min instead of being skipped forever.
+    const retry = !p.ok && !/vertical|too long|live/i.test(String(p.error ?? "")) && !(p as Preview & { retried?: boolean }).retried && Date.now() - fs.statSync(metaFile).mtimeMs > 30 * 60_000;
+    if (!retry && (!p.ok || p.shots.every((s) => s.frames.every((f) => fs.existsSync(f))))) return p.ok ? p : null;
   }
   const ff = ffmpegPath();
   if (!ff) return null;
@@ -138,7 +142,7 @@ async function preview(hit: Hit): Promise<Preview | null> {
   console.log(`[web_crawl] preview ${hit.url} ...`);
   const r = await worker.call({ op: "fetch", url: hit.url, start, seconds: secs, out, ffmpeg: ff, max_height: 360, timeout: 90 }, 120_000);
   if (!r.ok || !fs.existsSync(out)) {
-    fs.writeFileSync(metaFile, JSON.stringify({ ok: false, error: r.error, url: hit.url }));
+    fs.writeFileSync(metaFile, JSON.stringify({ ok: false, error: r.error, url: hit.url, retried: fs.existsSync(metaFile) }));
     sayOnce(`[web_crawl] preview ${hit.url}: ${String(r.error ?? "no file").slice(0, 140)}`);
     return null;
   }
@@ -161,21 +165,61 @@ async function preview(hit: Hit): Promise<Preview | null> {
 }
 
 /** Search + low-res preview + shot split. Each kept shot (>= SHOT_MIN_SECONDS) is one candidate. */
-export async function searchWebCrawl(query: string): Promise<Candidate[]> {
+/**
+ * Title filter for a product pool: listicles / compilations / comparisons are skipped unless the
+ * exact product is clearly the subject; review / test / unboxing / hands-on titles with the exact
+ * model come first. Returns hits in preferred order.
+ */
+export function rankHitsForProduct(hits: Hit[], product: string, forbidden: string[] = []): Hit[] {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const name = norm(product);
+  const words = name.split(" ");
+  const model = words.length > 1 ? words.slice(1).join(" ") : name;
+  const scored = hits.map((h) => {
+    const t = norm(h.title || "");
+    const exact = t.includes(name);
+    const hasModel = exact || t.includes(model);
+    const listy = /\btop \d+\b|\bbest\b|\bcompilation\b|\bvs\b|\bversus\b|\bcomparison\b|\bcompared\b|\branked\b|\branking\b/.test(t);
+    const good = /\breview\b|\btest\b|\bunboxing\b|\bhands on\b|\bwalkaround\b|\bdemo\b|\bassembly\b|\bfirst look\b/.test(t);
+    // A listicle is only kept when the title is about this one product (exact name, no "vs"/"top N").
+    const skip = listy && !(exact && !/\bvs\b|\bversus\b|\btop \d+\b|\bcompilation\b/.test(t));
+    // Forbidden title words (case-insensitive, whole word) from the niche / Claude: skip before any download.
+    const bad = forbidden.some((w) => new RegExp(`\\b${w.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim()}\\b`).test(t));
+    return { h, skip: skip || bad, score: (exact ? 3 : hasModel ? 1.5 : 0) + (good ? 1 : 0) - (listy ? 1 : 0) };
+  });
+  return scored.filter((x) => !x.skip).sort((a, b) => b.score - a.score).map((x) => x.h);
+}
+
+export async function searchWebCrawl(query: string, opts: { pool?: boolean; previews?: number; product?: string; forbidden?: string[] } = {}): Promise<Candidate[]> {
+  const previews = opts.previews ?? previewsPerQuery();
+  // A direct video URL (official site / retailer page video) is previewed without a search.
+  if (/^https?:\/\//i.test(query)) {
+    if (disabledWhy || !webCrawlEnabled()) return [];
+    return candidatesFromHits([{ url: query, title: opts.product ?? "", uploader: "", duration: 0, site: "direct" }], 1);
+  }
   if (disabledWhy || !webCrawlEnabled()) return [];
   fs.mkdirSync(SEARCH_CACHE, { recursive: true });
-  const f = path.join(SEARCH_CACHE, `webcrawl-${h16(query)}.json`);
+  const f = path.join(SEARCH_CACHE, `webcrawl-${h16(query)}${previews > previewsPerQuery() ? `-n${previews}` : ""}${opts.product ? "-p" : ""}.json`);
   let hits: Hit[];
   if (fs.existsSync(f) && Date.now() - fs.statSync(f).mtimeMs < TTL) hits = JSON.parse(fs.readFileSync(f, "utf8"));
   else {
-    if (searches >= maxSearches()) {
-      sayOnce(`[web_crawl] search limit reached (${maxSearches()} per run, WEBCRAWL_MAX_SEARCHES)`);
-      return [];
+    if (opts.pool) {
+      const maxPool = num("WEBCRAWL_POOL_MAX_SEARCHES", 40);
+      if (poolSearches >= maxPool) {
+        sayOnce(`[web_crawl] product-pool search limit reached (${maxPool} per run, WEBCRAWL_POOL_MAX_SEARCHES)`);
+        return [];
+      }
+      poolSearches++;
+    } else {
+      if (searches >= maxSearches()) {
+        sayOnce(`[web_crawl] search limit reached (${maxSearches()} per run, WEBCRAWL_MAX_SEARCHES)`);
+        return [];
+      }
+      searches++;
     }
-    searches++;
     let r: Awaited<ReturnType<Worker["call"]>>;
     try {
-      r = await worker.call({ op: "search", query, limit: Math.max(2, previewsPerQuery() + 1) }, 90_000);
+      r = await worker.call({ op: "search", query, limit: Math.max(2, opts.product ? previews * 3 : previews + 1) }, 90_000);
     } catch (err) {
       disabledWhy = String((err as Error).message ?? err);
       sayOnce(`[web_crawl] disabled: ${disabledWhy}`);
@@ -185,8 +229,17 @@ export async function searchWebCrawl(query: string): Promise<Candidate[]> {
     hits = r.results as Hit[];
     fs.writeFileSync(f, JSON.stringify(hits));
   }
+  if (opts.product) {
+    const ranked = rankHitsForProduct(hits, opts.product, opts.forbidden ?? []);
+    if (ranked.length < hits.length) sayOnce(`[web_crawl] "${query}": ${hits.length - ranked.length} listicle/comparison/forbidden-keyword title(s) skipped (title checked before download)`);
+    hits = ranked;
+  }
+  return candidatesFromHits(hits, previews);
+}
+
+async function candidatesFromHits(hits: Hit[], previews: number): Promise<Candidate[]> {
   const out: Candidate[] = [];
-  for (const hit of hits.slice(0, previewsPerQuery())) {
+  for (const hit of hits.slice(0, previews)) {
     const p = await preview(hit);
     if (!p) continue;
     const vid = h16(p.url);
@@ -223,10 +276,20 @@ export async function downloadWebCrawl(c: Candidate): Promise<string> {
   if (fs.existsSync(out)) return out;
   const ff = ffmpegPath();
   if (!ff) throw new Error("ffmpeg not found");
-  const r = await worker.call(
-    { op: "fetch", url: c.location, start: c.shotStart ?? 0, seconds: c.duration ?? pickSeconds(), out, ffmpeg: ff, max_height: Number(env("STOCK_MAX_WIDTH", "1920")) <= 1280 ? 720 : 1080, timeout: 150, max_mb: 250 },
-    200_000,
-  );
-  if (!r.ok || !fs.existsSync(out)) throw new Error(`web crawl ${c.pageUrl}: ${r.error ?? "no file"}`);
-  return out;
+  // HD first; on failure (403 / format not available) retry with lower formats before giving up.
+  const top = Number(env("STOCK_MAX_WIDTH", "1920")) <= 1280 ? 720 : 1080;
+  const errors: string[] = [];
+  for (const h of [top, 720, 480].filter((x, i, a) => x <= top && a.indexOf(x) === i)) {
+    try {
+      const r = await worker.call(
+        { op: "fetch", url: c.location, start: c.shotStart ?? 0, seconds: c.duration ?? pickSeconds(), out, ffmpeg: ff, max_height: h, timeout: 150, max_mb: 250 },
+        200_000,
+      );
+      if (r.ok && fs.existsSync(out)) return out;
+      errors.push(`${h}p: ${String(r.error ?? "no file").slice(0, 80)}`);
+    } catch (err) {
+      errors.push(`${h}p: ${String((err as Error).message ?? err).slice(0, 80)}`);
+    }
+  }
+  throw new Error(`web crawl ${c.pageUrl}: ${errors.join(" | ")}`);
 }

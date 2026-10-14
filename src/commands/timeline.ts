@@ -12,7 +12,8 @@ import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
 import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
-import { productRegions, readProductPool } from "../lib/assets/productPool.js";
+import { exactModelPrompt, productRegions, readPoolStatus, readProductPool } from "../lib/assets/productPool.js";
+import { verifyCandidates, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
 import { loadProjectNiche } from "../lib/niche.js";
 import { env } from "../lib/env.js";
 import { applyRemotionCards } from "../lib/render/remotionCards.js";
@@ -99,7 +100,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
     logo: JSON.stringify(logoOf(style)) + fingerprint(logoOf(style)?.path),
     pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-3-ledger",
-    pool: fingerprint(path.join(dir, "product_pool.json")),
+    pool: fingerprint(path.join(dir, "product_pool.json")) + fingerprint(path.join(dir, "product_pool_status.json")),
     aligned: fingerprint(path.join(dir, "aligned.json")),
   };
   if (!opts.force && isCached(dir, "timeline", inputs, ["timeline.json"])) {
@@ -145,6 +146,9 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     };
   });
 
+  // Exact-model check on every product photo shown under a product (press kit / official / any
+  // image in the presskit folder). Only confirmed photos are used; unchecked = not used.
+  VERIFIED_PHOTOS = await verifyProductPhotos(dir, channel, scenes, poolConfig(loadProjectNiche(project, style)).category, log);
   if (motionCfg.graphics) await addMotionGraphics(tl, scenes, assets, sections, style, path.join(dir, "graphics"), channel);
   const pace = pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off");
   // Channel preset overrides the niche shot length; every chapter start gets the opening pace.
@@ -155,10 +159,15 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     const nicheCfg = loadProjectNiche(project, style) as unknown as { productPool?: { mix?: Record<string, number>; rankCardAtSec?: [number, number] } };
     const niche = loadProjectNiche(project, style);
     const pool = await filterPoolByShotQa(readProductPool(dir), poolConfig(niche).category, log);
-    applyPacing(tl, scenes, words, pool, pace, log, {
+    const shares = applyPacing(tl, scenes, words, pool, pace, log, {
       photosOf: (p) => productPhotos(channel, p),
       mix: nicheCfg.productPool?.mix,
+      maxStockShare: Number(env("MAX_STOCK_SHARE", "0.2")),
     });
+    const status = readPoolStatus(dir);
+    const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
+    writeJson(path.join(dir, "footage_share.json"), report);
+    for (const r of report) if (r.insufficient) log(`[timeline] WARNING insufficient footage for ${r.product}: ${r.poolVerified} verified clip(s) (target ${r.poolTarget ?? "?"}); chapter is ${Math.round(r.verifiedShare * 100)}% verified`);
     if (motionCfg.graphics) await addRankPriceCards(tl, scenes, sections, cardStyleOf(style), path.join(dir, "graphics"), nicheCfg.productPool?.rankCardAtSec ?? [11, 14], log);
   }
   if (motionCfg.graphics && preset.set.size) {
@@ -286,7 +295,9 @@ async function addMotionGraphics(
         const photo = photos[(photoTurn.get(scene.product_name!) ?? 0) % photos.length];
         photoTurn.set(scene.product_name!, (photoTurn.get(scene.product_name!) ?? 0) + 1);
         const kicker = g.kind === "price_badge" ? "Price" : g.kind === "title_card" ? (g.rank !== undefined ? `Number ${g.rank}` : "Up next") : g.kind === "pros_cons" ? "Pros & cons" : "Specs";
-        const big = g.kind === "price_badge" ? g.price : g.kind === "spec_card" ? g.lines?.[0]?.replace(/^[+-]\s*/, "") : undefined;
+        // Values only from the script fact sheet (facts.json), never planner text or web research.
+        const fx = FACTS?.products.find((p) => p.name.toLowerCase() === scene.product_name!.toLowerCase());
+        const big = g.kind === "price_badge" ? fx?.price : g.kind === "spec_card" && fx?.specs[0] ? `${fx.specs[0].label}: ${fx.specs[0].value}` : undefined;
         t.asset = { path: photo, kind: "image", source: "presskit", duration: undefined, in: 0 };
         t.motion = "zoom_in";
         t.overlays = [{ path: await renderSidePanel(kicker, scene.product_name!, big, cs, outDir), delay: 0.2, anim: "slide_right", card: cardFor(g, scene.product_name!) }];
@@ -331,8 +342,9 @@ async function addMotionGraphics(
         t.sfx = [{ kind: "whoosh", at: 0.35 }];
       }
     }
-    // The product's web-researched facts as chips (see chipScene above).
-    const specs = scene.product_name && chipScene.get(scene.product_name) === scene.id ? readResearch(channel, scene.product_name)?.specs ?? [] : [];
+    // The product's script facts as chips (see chipScene above); web research is never shown on screen.
+    const chipFacts = scene.product_name && chipScene.get(scene.product_name) === scene.id ? FACTS?.products.find((p) => p.name.toLowerCase() === scene.product_name!.toLowerCase()) : undefined;
+    const specs = (chipFacts?.specs ?? []).filter((x) => x.value).map((x) => `${x.label} ${x.value}`);
     if (specs.length) {
       const out = Math.min(dur - 0.35, 7);
       const shown = specs.slice(0, dur >= 5 ? 4 : 2);
@@ -380,7 +392,7 @@ async function addRankPriceCards(
     const f = FACTS?.products.find((p) => p.name.toLowerCase() === name.toLowerCase());
     // A planned price card elsewhere in this product's region already shows the price: rank card here.
     const pricedElsewhere = region.some((x) => x.graphic?.kind === "price_badge");
-    const price = pricedElsewhere ? undefined : f?.price ?? region.find((x) => x.graphic?.kind === "price_badge")?.graphic?.price;
+    const price = pricedElsewhere ? undefined : f?.price;
     const sec0 = sections.find((x) => x.id === first.section);
     const sec = sec0?.rank === undefined && f?.rank !== undefined ? { ...sec0!, rank: f.rank } : sec0;
     const kicker = price ? "Price" : sec?.rank !== undefined ? `#${sec.rank}` : "Pick";
@@ -403,28 +415,52 @@ let FACTS: Facts | null = null;
 
 function cardFor(g: Scene["graphic"] & object, name: string): Layer["card"] {
   const f = FACTS?.products.find((p) => p.name.toLowerCase() === name.toLowerCase());
-  if (g.kind === "price_badge" && (f?.price || g.price)) return { comp: "PriceCard", props: { name, price: f?.price ?? g.price } };
+  if (g.kind === "price_badge" && f?.price) return { comp: "PriceCard", props: { name, price: f.price } };
   // Spec card rows from the script facts (label / value pairs), not the planner's one-line text.
   if (g.kind === "pros_cons" && f && f.pros.length + f.cons.length >= 2) return { comp: "ProsCons", props: { title: name, pros: f.pros, cons: f.cons } };
   if (g.kind === "spec_card" && f && f.specs.length >= 2) return { comp: "SpecCard", props: { title: name, rows: f.specs.slice(0, 5).map((x) => [x.label, x.value]) } };
   if (g.kind === "title_card" && g.rank !== undefined) return { comp: "RankCard", props: { rank: g.rank, name } };
-  if (g.kind === "spec_card" && g.lines?.length) {
-    const rows = g.lines.slice(0, 5).map((l) => {
-      const x = l.replace(/^[+-]\s*/, "");
-      const m = x.match(/^([^:]{2,24}):\s*(.+)$/) ?? x.match(/^(.{2,24}?)\s+-\s+(.+)$/);
-      return m ? [m[1].trim(), m[2].trim()] : [x, ""];
-    });
-    return { comp: "SpecCard", props: { title: name, rows } };
-  }
   if (g.kind === "title_card") return { comp: "LowerThird", props: { title: name, sub: "Up next", rank: null } };
   return undefined;
 }
 
-/** The product's photos in the channel press kit (official, press kit uploads), sorted. */
-function productPhotos(channel: string, product: string): string[] {
+/** Product photos that passed the exact-model check (set per run by verifyProductPhotos). */
+let VERIFIED_PHOTOS: Map<string, Set<string>> | null = null;
+
+function allProductPhotos(channel: string, product: string): string[] {
   const dir = path.join(paths.channels, channel, "presskit", slug(product));
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => path.join(dir, f));
+}
+
+/** The product's photos in the channel press kit, only those Claude confirmed show the exact model. */
+function productPhotos(channel: string, product: string): string[] {
+  const ok = VERIFIED_PHOTOS?.get(product);
+  return allProductPhotos(channel, product).filter((f) => ok?.has(f));
+}
+
+async function verifyProductPhotos(dir: string, channel: string, scenes: Scene[], category: string, log: (m: string) => void): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  const names = [...productRegions(scenes).keys()];
+  if (!visionVerifyEnabled()) {
+    log("[photos] exact-model check unavailable (no ANTHROPIC_API_KEY / VISION_VERIFY=off): product photos are not used");
+    for (const n of names) out.set(n, new Set());
+    return out;
+  }
+  for (const [k, n] of names.entries()) {
+    const files = allProductPhotos(channel, n);
+    const set = new Set<string>();
+    out.set(n, set);
+    if (!files.length) continue;
+    const items = [];
+    for (let i = 0; i < files.length; i += 4) items.push({ sceneId: 8000 + k * 100 + i, text: exactModelPrompt(n, category), before: "", cands: files.slice(i, i + 4).map((f) => ({ id: path.basename(f), frames: [f] })) });
+    const v = await verifyCandidates(items, `${n} review`, path.join(dir, "vision_photos.json"), log);
+    files.forEach((f, i) => {
+      if (v.get(`${8000 + k * 100 + Math.floor(i / 4) * 4}|${path.basename(f)}`) === true) set.add(f);
+    });
+    log(`[photos] ${n}: ${set.size}/${files.length} product photo(s) confirmed as the exact model`);
+  }
+  return out;
 }
 
 /** Closest real footage (video first) around scene i, for a card's blurred backdrop. */
@@ -441,5 +477,5 @@ function nearestFootage(tl: TimelineScene[], i: number): TimelineScene | undefin
 /** Changes when any product's saved specs change, so the timeline picks up new research. */
 function specFingerprint(channel: string, scenes: Scene[]): string {
   const names = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))].sort();
-  return names.map((n) => `${n}:${(readResearch(channel, n)?.specs ?? []).join("|")}`).join(";");
+  return names.map((n) => `${n}:${(readResearch(channel, n)?.specs ?? []).join("|")}`).join(";") + "|exact-model-1";
 }

@@ -111,7 +111,7 @@ export async function filterPoolByShotQa(pool: PoolShot[], category: string, log
   if (unsure.length && visionVerifyEnabled()) {
     const items = unsure.map((p, k) => ({
       sceneId: k,
-      text: `Footage that clearly shows a ${category || "product"} itself (handled, fired or in close-up). A person talking to the camera, a title card or no ${category || "product"} = fits false.`,
+      text: `Footage that clearly shows a ${category || "product"} itself (in use, handled or in close-up). A person talking to the camera, a title card or no ${category || "product"} = fits false.`,
       before: "",
       cands: [{ id: p.id, frames: res[p.id].shots.flatMap((x) => x.frames).slice(0, 3) }],
     }));

@@ -101,8 +101,19 @@ export function loadNiche(name = "general"): Niche {
 }
 
 /** The stock hint table compiled to whole-word regexes ("pistol|handgun" -> /\b(?:pistol|handgun)\b/i). */
-export function nicheHints(n: Niche): [RegExp, string][] {
-  return n.stock.hints.map(([words, q]) => [new RegExp("\\b(?:" + words + ")\\b", "i"), q]);
+export function nicheHints(n: Niche, productNames: string[] = []): [RegExp, string][] {
+  // Brand mentions belong to the product pool (exact model), never to "brand comparison" stock.
+  const brandTok = new Set(productNames.flatMap((x) => x.toLowerCase().split(/\s+/)).filter((t) => t.length > 2));
+  return n.stock.hints
+    .filter(([words, q]) => !isBrandHint(words, q) && !words.split("|").some((w) => brandTok.has(w.trim().toLowerCase())))
+    .map(([words, q]) => [new RegExp("\\b(?:" + words + ")\\b", "i"), q]);
+}
+
+/** A stock hint about brands ("mower brand comparison", "Toro|Exmark|Honda") is not stock material. */
+export function isBrandHint(words: string, query: string): boolean {
+  if (/\bbrands?\b|\bcomparison\b|\bvs\.?\b|\bversus\b/i.test(query)) return true;
+  const w = words.split("|").map((x) => x.trim()).filter(Boolean);
+  return w.length >= 2 && w.filter((x) => /^[A-Z][a-z]+$/.test(x)).length === w.length && !/\b(close|engine|motor)\b/i.test(query);
 }
 
 /** True when a stock result's title/tags hit the niche's blocked list. */

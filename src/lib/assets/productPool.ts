@@ -12,6 +12,53 @@ import type { Candidate } from "./types.js";
 import { downloadWebCrawl, searchWebCrawl, webCrawlEnabled } from "./webCrawl.js";
 import { verifyCandidates, visionVerifyEnabled } from "../agent/visionVerify.js";
 import { filterPoolByShotQa } from "./shotQa.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { z } from "zod";
+import { agentEnabled, agentModel } from "../agent/footage.js";
+import { fetchRetailImages } from "./retailImages.js";
+
+/** Haiku writes 3-5 B-roll YouTube searches per product from category words (cached per product). */
+export const DEFAULT_FORBIDDEN = ["Top", "Best", "Vs", "Comparison", "Compilation", "Podcast", "Fix", "Repair", "Maintenance", "Review"];
+interface BrollPlan { queries: string[]; forbidden: string[] }
+async function llmBrollPlan(name: string, category: string, baseForbidden: string[], log: (m: string) => void): Promise<BrollPlan> {
+  if (!agentEnabled()) return { queries: [], forbidden: baseForbidden };
+  const file = path.join(paths.root, "cache", "pools", `q_${slug(name)}_${crypto.createHash("sha1").update(`${name}|${category}|${agentModel()}|v2`).digest("hex").slice(0, 8)}.json`);
+  if (fs.existsSync(file)) {
+    try {
+      const c = JSON.parse(fs.readFileSync(file, "utf8")) as BrollPlan;
+      return { queries: c.queries, forbidden: [...new Set([...baseForbidden, ...c.forbidden])] };
+    } catch { /* regenerate */ }
+  }
+  const Schema = z.object({ queries: z.array(z.string()), forbidden_keywords: z.array(z.string()) });
+  try {
+    const model = agentModel();
+    const res = await new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") }).messages.parse({
+      model,
+      max_tokens: 800,
+      output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low" as const, format: zodOutputFormat(Schema) },
+      system: "You write YouTube searches that find pure B-roll footage of ONE exact product (any kind of product): no presenter, no talking. Return 3-5 searches, 3-8 words each, every one containing the exact model name plus strict B-roll terms and words for that product category, e.g. '<model> cinematic shots', '<model> close up b-roll', '<model> in action no talking', '<model> <typical action for this kind of product> cinematic', '<model> unboxing b-roll'. Never use 'best', 'top', 'vs', 'comparison', 'review'. Also return forbidden_keywords: extra single title words for this product that signal unwanted videos (talking/podcasts/repairs/comparisons/other models), in addition to Top, Best, Vs, Comparison, Compilation, Podcast, Fix, Repair, Maintenance, Review.",
+      messages: [{ role: "user", content: JSON.stringify({ product: name, category }) }],
+    });
+    const q = (res.parsed_output?.queries ?? []).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 4 && !/\b(best|top|vs|comparison|review)\b/i.test(x)).slice(0, 5);
+    const nameWords = new Set(name.toLowerCase().split(/\s+/));
+    const fb = (res.parsed_output?.forbidden_keywords ?? []).map((x) => x.trim()).filter((x) => x && x.length < 25 && !nameWords.has(x.toLowerCase())).slice(0, 12);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ queries: q, forbidden: fb }));
+    log(`[pool] ${name}: Haiku B-roll searches: ${q.join(" | ")}; forbidden title words +${fb.join(", ") || "-"}`);
+    return { queries: q, forbidden: [...new Set([...baseForbidden, ...fb])] };
+  } catch (err) {
+    log(`[pool] ${name}: Haiku B-roll searches failed (${String((err as Error).message ?? err).slice(0, 100)}); using built-in searches`);
+    return { queries: [], forbidden: baseForbidden };
+  }
+}
+
+/** Official product videos found by the official importer (presskit/<product>/youtube_links.txt). */
+function officialVideoLinks(channel: string, name: string): string[] {
+  const f = path.join(paths.channels, channel, "presskit", slug(name), "youtube_links.txt");
+  if (!fs.existsSync(f)) return [];
+  return fs.readFileSync(f, "utf8").split(/\r?\n/).map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x)).slice(0, 6);
+}
 
 /**
  * Product-locked footage pool (assets step). For every product the planner named, the web_crawl
@@ -46,6 +93,48 @@ export interface PoolShot {
   motionFps?: number;
   /** Shot-QA CLIP label of the first shot in the file. */
   qaLabel?: string;
+  /** Claude confirmed this shot shows the exact product (model). Only verified shots count as product footage. */
+  verified?: boolean;
+}
+
+/** Per-product pool result (<project>/product_pool_status.json), read by the timeline, review page and QA. */
+export interface PoolStatus {
+  verified: number;
+  need: number;
+  chapterSec: number;
+  /** Fewer than minTarget verified shots: the chapter is shown with a warning, never filled with stock. */
+  insufficient: boolean;
+  queries?: string[];
+}
+
+/** Strict exact-model prompt for Claude (any product niche). */
+export function exactModelPrompt(name: string, category: string): string {
+  const c = category || "product";
+  return `Footage that clearly shows the exact ${name} ${c} itself (in use, being handled, or a close-up of it). fits=true ONLY if you are confident this is the ${name} specifically: matching brand/model badge, logo, shape, colour and design. A different brand or model, a generic ${c} you cannot identify as the ${name}, a person talking to camera, a presenter looking at the camera, a messy mechanic garage/workshop or repair scene, packaging only, or no ${c} visible = fits false. Approve only clear pure product shots or cinematic action shots of this specific model. When unsure = fits false.`;
+}
+
+/** Search rounds: the niche queries first, then expanded (brand+model, model only, category words, official/retailer). */
+function queryRounds(name: string, cfg: PoolConfig): string[][] {
+  const words = name.split(/\s+/);
+  const model = words.length > 1 ? words.slice(1).join(" ") : name;
+  const c = cfg.category || "";
+  const r1 = cfg.queries.map((x) => x.replace("{name}", name));
+  const r2 = [`${name} ${c}`.trim(), `${name} walkaround`, `${name} demo`, `${name} test`];
+  const r3 = [`${model} ${c}`.trim(), `${name} official video`, `${name} commercial`, `${name} in action`];
+  const r4 = [`${name} ${c} overview`.trim(), `${name} dealer`, `${name} features`, `${words[0]} ${model} ${c} footage`.trim()];
+  return [r1, r2, r3, r4];
+}
+
+/** Product footage = verified shots. Older pools (no flag) count as verified only when vision was off. */
+export const isVerifiedShot = (p: PoolShot) => p.verified === true;
+
+export function readPoolStatus(dir: string): Record<string, PoolStatus> {
+  const f = path.join(dir, "product_pool_status.json");
+  try {
+    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : {};
+  } catch {
+    return {};
+  }
 }
 
 export type ShotType = "closeup" | "field" | "handson" | "lifestyle" | "promo" | "amazon" | "talking";
@@ -80,6 +169,8 @@ export interface PoolConfig {
   closeupBias: number;
   closeupShare: number;
   closeupMargin: number;
+  /** Title words that skip a video before download (niche productPool.forbiddenKeywords). */
+  forbidden: string[];
 }
 
 export function poolConfig(niche: Niche): PoolConfig {
@@ -98,6 +189,7 @@ export function poolConfig(niche: Niche): PoolConfig {
     closeupMargin: p.closeupMargin ?? 0.03,
     mix: p.mix ?? {},
     dropTypes: p.dropTypes ?? ["talking"],
+    forbidden: (p as { forbiddenKeywords?: string[] }).forbiddenKeywords ?? DEFAULT_FORBIDDEN,
   };
 }
 
@@ -157,117 +249,171 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
   const outFile = path.join(dir, "product_pool.json");
   const regions = productRegions(scenes);
   const all: PoolShot[] = [];
+  const status: Record<string, PoolStatus> = {};
+  const needOf = new Map<string, { need: number; chapterSec: number; queries?: string[] }>();
+  const shotSec = Number((niche as unknown as { pacing?: { targetShotSec?: number } }).pacing?.targetShotSec ?? 2.3) || 2.3;
   for (const [name, region] of regions) {
+    {
+      const b = region.filter((s) => s.type !== "graphic");
+      const cs = b.reduce((a, s) => a + (s.end - s.start), 0);
+      needOf.set(name, { need: Math.max(cfg.minTarget, Math.ceil((cs / shotSec) * 1.3)), chapterSec: cs });
+    }
     const t0 = Date.now();
     const refs = productPhotos(channel, name);
     // Pool cache: same product, config and reference photos -> reuse (re-runs take seconds, not ~28 min).
-    const key = crypto.createHash("sha1").update(JSON.stringify({ name, cfg, refs: refs.map((r) => [path.basename(r), fs.statSync(r).size]), v: "pool-4" })).digest("hex").slice(0, 10);
+    const key = crypto.createHash("sha1").update(JSON.stringify({ name, cfg, refs: refs.map((r) => [path.basename(r), fs.statSync(r).size]), v: "pool-5-exact", need: needOf.get(name)?.need })).digest("hex").slice(0, 10);
     const cacheFile = path.join(paths.root, "cache", "pools", `${slug(name)}_${key}.json`);
     if (env("POOL_CACHE", "on").toLowerCase() !== "off" && fs.existsSync(cacheFile)) {
       const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as PoolShot[];
-      if (cached.length && cached.every((p) => fs.existsSync(p.path))) {
+      if (cached.length && cached.every((p) => fs.existsSync(p.path)) && cached.some((p) => p.verified)) {
         all.push(...cached);
         log(`[pool] ${name}: ${cached.length} shot(s) from cache ${path.basename(cacheFile)}`);
         continue;
       }
     }
-    const cands = new Map<string, Candidate>();
-    for (const q of cfg.queries.map((x) => x.replace("{name}", name))) {
-      try {
-        for (const c of await searchWebCrawl(q)) if (!cands.has(c.id)) cands.set(c.id, c);
-      } catch (err) {
-        log(`[pool] ${name}: search "${q}" failed: ${String(err).slice(0, 120)}`);
-      }
-    }
-    // Real shot length (webCrawl.ts sets shotLen); long uncut shots give two pool entries.
-    const shots: Candidate[] = [];
-    for (const c of cands.values()) {
-      if (!(c.frames ?? []).some((f) => fs.existsSync(f))) continue;
-      const len = (c as Candidate & { shotLen?: number }).shotLen ?? c.duration ?? cfg.maxShotSec;
-      if (len < 1.5) continue;
-      shots.push(Object.assign({ ...c }, { shotLen: Math.min(len, 6) }));
-      if (len >= 7) shots.push(Object.assign({ ...c, id: `${c.id}_b`, shotStart: (c.shotStart ?? 0) + len / 2, frames: (c.frames ?? []).slice(-2) }, { shotLen: len / 2 - 0.3 }));
-    }
-    log(`[pool] ${name}: ${shots.length} shots from ${new Set(shots.map((c) => c.pageUrl)).size} videos, ${refs.length} reference photo(s)`);
-    if (!shots.length) continue;
     const body = region.filter((s) => s.type !== "graphic");
-    const texts: Record<string, string> = { product: `${name} ${cfg.category}`.trim() };
-    for (const s of body) texts[`s${s.id}`] = `${name} ${cfg.category}. ${s.text.split(/\s+/).slice(0, 20).join(" ")}`;
-    const tt = typeTexts(name, cfg.category);
-    for (const [k, v] of Object.entries(tt)) texts[`type_${k}`] = v;
-    const images: Record<string, string | string[]> = {};
-    for (const c of shots) images[c.id] = (c.frames ?? []).filter((f) => fs.existsSync(f)).slice(0, 3);
-    refs.forEach((r, k) => (images[`ref${k}`] = r));
-    const pairs = shots.flatMap((c) => Object.keys(texts).map((t) => [t, c.id]));
-    const res = await clipJob({ texts, images, pairs, return_image_embeddings: true }, log);
-    if (!res) continue;
-    const emb = res.image_embeddings ?? {};
-    const refEmb = refs.map((_, k) => emb[`ref${k}`]).filter(Boolean);
-    type Scored = { c: Candidate; img: number; txt: number; score: number; type: ShotType };
-    const types = Object.keys(tt) as ShotType[];
-    const scored: Scored[] = shots.map((c) => {
-      const e = emb[c.id];
-      const img = e && refEmb.length ? Math.max(...refEmb.map((r) => cos(e, r))) : 0;
-      const txt = res.scores[`product|${c.id}`] ?? 0;
-      // Close-ups lose narrowly to "hands" whenever a finger is in frame; give them a small edge.
-      const bias = (k: ShotType) => (res.scores[`type_${k}|${c.id}`] ?? 0) + (k === "closeup" ? cfg.closeupBias : 0);
-      const type = types.reduce((b, k) => (bias(k) > bias(b) ? k : b), types[0]);
-      return { c, img, txt, score: refEmb.length ? img + 0.5 * txt : txt, type };
-    });
-    // CLIP almost never ranks "close-up" first in absolute terms, so also label close-ups
-    // relatively: shots whose close-up score is highest relative to their best other type (top
-    // closeupShare of the non-talking shots, within closeupMargin of the winner).
-    const cuGap = (c: Candidate) => (res.scores[`type_closeup|${c.id}`] ?? 0) - Math.max(...types.filter((k) => k !== "closeup" && k !== "talking").map((k) => res.scores[`type_${k}|${c.id}`] ?? 0));
-    const cand = scored.filter((x) => x.type !== "talking" && x.type !== "closeup").sort((x, y) => cuGap(y.c) - cuGap(x.c));
-    const nCu = Math.round(scored.length * cfg.closeupShare) - scored.filter((x) => x.type === "closeup").length;
-    let relabeled = 0;
-    for (const x of cand.slice(0, Math.max(0, nCu))) if (cuGap(x.c) > -cfg.closeupMargin) (x.type = "closeup"), relabeled++;
-    const gaps = cand.map((x) => cuGap(x.c)).sort((p, q) => q - p);
-    log(`[pool] ${name}: close-up gap p10 ${(gaps[Math.floor(gaps.length * 0.1)] ?? 0).toFixed(3)} / p50 ${(gaps[Math.floor(gaps.length * 0.5)] ?? 0).toFixed(3)}, ${relabeled} relabeled close-up`);
-    scored.sort((a, b) => b.score - a.score);
-    const best = scored[0]?.img ?? 0;
-    // Exact product: close to its photo (absolute floor, and not far below the best shot found).
-    // Range/handling shots score well below a white-background packshot, so the CLIP floor is a
-    // loose pre-filter; Claude (below) is the exact-model check.
-    const imgFloor = refEmb.length ? Math.min(cfg.imgMin, Math.max(0.6, best - 0.2)) : 0;
-    const txtFloor = 0.18;
-    const dropped = scored.filter((s) => cfg.dropTypes.includes(s.type)).length;
-    let passed = scored.filter((s) => s.img >= imgFloor && s.txt >= txtFloor && !cfg.dropTypes.includes(s.type));
-    if (dropped) log(`[pool] ${name}: ${dropped} talking-head/dropped-type shot(s) removed`);
-    log(`[pool] ${name}: CLIP img sim best ${best.toFixed(3)}, floor ${imgFloor.toFixed(3)} -> ${passed.length}/${scored.length} pass`);
+    const chapterSec = body.reduce((a, s) => a + (s.end - s.start), 0);
+    const need = Math.max(cfg.minTarget, Math.ceil((chapterSec / shotSec) * 1.3));
+    const cands = new Map<string, Candidate>();
+    const tried = new Set<string>();
+    // Sources in order: official/retailer (direct video links + product images), Haiku B-roll
+    // searches, then the niche searches and expanded rounds.
+    const official = officialVideoLinks(channel, name);
+    await fetchRetailImages(channel, name, cfg.category, 6, log).catch((err) => log(`[retail] ${name}: skipped (${String(err).slice(0, 100)})`));
+    const plan = await llmBrollPlan(name, cfg.category, cfg.forbidden, log);
+    const base = queryRounds(name, cfg);
+    // Strict rounds (forbidden title words incl. "Review"), then a safeguard pass that allows
+    // "Review" titles (talking heads are still dropped by CLIP + Claude) when the pool stays short.
+    const rounds = [[...official, ...plan.queries, ...base[0]], ...base.slice(1), [`${name} review`, `${name} ${cfg.category} review`.trim(), `${name} hands on review`]];
+    const relaxedFrom = rounds.length - 1;
+    type Picked = { c: Candidate; img: number; txt: number; score: number; type: ShotType };
+    let bestChosen: Picked[] = [];
+    let lastRes: { scores: Record<string, number> } | null = null;
+    let verifiedRun = false;
+    needOf.set(name, { need, chapterSec });
+    log(`[pool] ${name}: chapter ${chapterSec.toFixed(0)} s / ${shotSec} s per shot -> target ${need} verified shot(s)`);
+    for (let round = 0; round < rounds.length; round++) {
+      const before = cands.size;
+      for (const q of rounds[round]) {
+        if (tried.has(q.toLowerCase())) continue;
+        tried.add(q.toLowerCase());
+        try {
+          for (const c of await searchWebCrawl(q, { pool: true, previews: round ? 4 : undefined, product: name, forbidden: round >= relaxedFrom ? plan.forbidden.filter((w) => w.toLowerCase() !== "review") : plan.forbidden })) if (!cands.has(c.id)) cands.set(c.id, c);
+        } catch (err) {
+          log(`[pool] ${name}: search "${q}" failed: ${String(err).slice(0, 120)}`);
+        }
+      }
+      if (round && cands.size === before) {
+        log(`[pool] ${name}: round ${round + 1} found no new videos`);
+        continue;
+      }
+      // Real shot length (webCrawl.ts sets shotLen); long uncut shots give two pool entries.
+      const shots: Candidate[] = [];
+      for (const c of cands.values()) {
+        if (!(c.frames ?? []).some((f) => fs.existsSync(f))) continue;
+        const len = (c as Candidate & { shotLen?: number }).shotLen ?? c.duration ?? cfg.maxShotSec;
+        if (len < 1.5) continue;
+        shots.push(Object.assign({ ...c }, { shotLen: Math.min(len, 6) }));
+        if (len >= 7) shots.push(Object.assign({ ...c, id: `${c.id}_b`, shotStart: (c.shotStart ?? 0) + len / 2, frames: (c.frames ?? []).slice(-2) }, { shotLen: len / 2 - 0.3 }));
+      }
+      log(`[pool] ${name}: ${shots.length} shots from ${new Set(shots.map((c) => c.pageUrl)).size} videos, ${refs.length} reference photo(s)`);
+      if (!shots.length) continue;
+      const texts: Record<string, string> = { product: `${name} ${cfg.category}`.trim() };
+      for (const s of body) texts[`s${s.id}`] = `${name} ${cfg.category}. ${s.text.split(/\s+/).slice(0, 20).join(" ")}`;
+      const tt = typeTexts(name, cfg.category);
+      for (const [k, v] of Object.entries(tt)) texts[`type_${k}`] = v;
+      const images: Record<string, string | string[]> = {};
+      for (const c of shots) images[c.id] = (c.frames ?? []).filter((f) => fs.existsSync(f)).slice(0, 3);
+      refs.forEach((r, k) => (images[`ref${k}`] = r));
+      const pairs = shots.flatMap((c) => Object.keys(texts).map((t) => [t, c.id]));
+      const res = await clipJob({ texts, images, pairs, return_image_embeddings: true }, log);
+      if (!res) continue;
+      const emb = res.image_embeddings ?? {};
+      const refEmb = refs.map((_, k) => emb[`ref${k}`]).filter(Boolean);
+      type Scored = { c: Candidate; img: number; txt: number; score: number; type: ShotType };
+      const types = Object.keys(tt) as ShotType[];
+      const scored: Scored[] = shots.map((c) => {
+        const e = emb[c.id];
+        const img = e && refEmb.length ? Math.max(...refEmb.map((r) => cos(e, r))) : 0;
+        const txt = res.scores[`product|${c.id}`] ?? 0;
+        // Close-ups lose narrowly to "hands" whenever a finger is in frame; give them a small edge.
+        const bias = (k: ShotType) => (res.scores[`type_${k}|${c.id}`] ?? 0) + (k === "closeup" ? cfg.closeupBias : 0);
+        const type = types.reduce((b, k) => (bias(k) > bias(b) ? k : b), types[0]);
+        return { c, img, txt, score: refEmb.length ? img + 0.5 * txt : txt, type };
+      });
+      // CLIP almost never ranks "close-up" first in absolute terms, so also label close-ups
+      // relatively: shots whose close-up score is highest relative to their best other type (top
+      // closeupShare of the non-talking shots, within closeupMargin of the winner).
+      const cuGap = (c: Candidate) => (res.scores[`type_closeup|${c.id}`] ?? 0) - Math.max(...types.filter((k) => k !== "closeup" && k !== "talking").map((k) => res.scores[`type_${k}|${c.id}`] ?? 0));
+      const cand = scored.filter((x) => x.type !== "talking" && x.type !== "closeup").sort((x, y) => cuGap(y.c) - cuGap(x.c));
+      const nCu = Math.round(scored.length * cfg.closeupShare) - scored.filter((x) => x.type === "closeup").length;
+      let relabeled = 0;
+      for (const x of cand.slice(0, Math.max(0, nCu))) if (cuGap(x.c) > -cfg.closeupMargin) (x.type = "closeup"), relabeled++;
+      const gaps = cand.map((x) => cuGap(x.c)).sort((p, q) => q - p);
+      log(`[pool] ${name}: close-up gap p10 ${(gaps[Math.floor(gaps.length * 0.1)] ?? 0).toFixed(3)} / p50 ${(gaps[Math.floor(gaps.length * 0.5)] ?? 0).toFixed(3)}, ${relabeled} relabeled close-up`);
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0]?.img ?? 0;
+      // Exact product: close to its photo (absolute floor, and not far below the best shot found).
+      // Range/handling shots score well below a white-background packshot, so the CLIP floor is a
+      // loose pre-filter; Claude (below) is the exact-model check.
+      const imgFloor = refEmb.length ? Math.min(cfg.imgMin, Math.max(0.6, best - 0.2)) : 0;
+      const txtFloor = 0.18;
+      const dropped = scored.filter((s) => cfg.dropTypes.includes(s.type)).length;
+      let passed = scored.filter((s) => s.img >= imgFloor && s.txt >= txtFloor && !cfg.dropTypes.includes(s.type));
+      if (dropped) log(`[pool] ${name}: ${dropped} talking-head/dropped-type shot(s) removed`);
+      log(`[pool] ${name}: CLIP img sim best ${best.toFixed(3)}, floor ${imgFloor.toFixed(3)} -> ${passed.length}/${scored.length} pass`);
 
-    // Near-duplicates (same shot found twice / static shots) and uploader cap.
-    const chosen: Scored[] = [];
-    const perUp = new Map<string, number>();
-    for (const s of passed) {
-      if (chosen.length >= cfg.target * 2) break;
-      const up = s.c.author ?? s.c.pageUrl;
-      if ((perUp.get(up) ?? 0) >= cfg.maxPerUploader) continue;
-      const e = emb[s.c.id];
-      if (e && chosen.some((x) => emb[x.c.id] && cos(emb[x.c.id], e) > 0.96)) continue;
-      chosen.push(s);
-      perUp.set(up, (perUp.get(up) ?? 0) + 1);
+      // Near-duplicates (same shot found twice / static shots) and uploader cap.
+      const chosen: Scored[] = [];
+      const perUp = new Map<string, number>();
+      for (const s of passed) {
+        if (chosen.length >= Math.max(cfg.target, need) * 2) break;
+        const up = s.c.author ?? s.c.pageUrl;
+        if ((perUp.get(up) ?? 0) >= Math.max(cfg.maxPerUploader, Math.ceil(need / 6))) continue;
+        const e = emb[s.c.id];
+        if (e && chosen.some((x) => emb[x.c.id] && cos(emb[x.c.id], e) > 0.96)) continue;
+        chosen.push(s);
+        perUp.set(up, (perUp.get(up) ?? 0) + 1);
+      }
+
+      // Exact-model check (Claude, required): only shots Claude confirms show this exact product are
+      // product footage. Unknown (not checked / failed batch) counts as NOT verified.
+      if (visionVerifyEnabled() && env("PRODUCT_VISION", "on").toLowerCase() !== "off" && chosen.length) {
+        const text = exactModelPrompt(name, cfg.category);
+        const items = [];
+        for (let k = 0; k < chosen.length; k += 4)
+          items.push({ sceneId: 9000 + k, text, before: "", cands: chosen.slice(k, k + 4).map((s) => ({ id: s.c.id, frames: (s.c.frames ?? []).slice(0, 3) })) });
+        const verdict = await verifyCandidates(items, `${name} review`, path.join(dir, "vision_pool.json"), log);
+        const n0 = chosen.length;
+        const keep = chosen.filter((s, i) => verdict.get(`${9000 + Math.floor(i / 4) * 4}|${s.c.id}`) === true);
+        log(`[pool] ${name}: Claude confirmed exact model ${keep.length}/${n0}`);
+        chosen.splice(0, chosen.length, ...keep);
+      } else if (chosen.length) {
+        log(`[pool] ${name}: exact-model check unavailable (no ANTHROPIC_API_KEY / PRODUCT_VISION=off): ${chosen.length} shot(s) kept but NOT verified`);
+      }
+      verifiedRun = visionVerifyEnabled() && env("PRODUCT_VISION", "on").toLowerCase() !== "off";
+      bestChosen = chosen;
+      lastRes = res;
+      log(`[pool] ${name}: round ${round + 1}/${rounds.length}: ${chosen.length} verified shot(s) (need ${need})`);
+      if (chosen.length >= need) break;
+      if (round + 1 === relaxedFrom && chosen.length >= cfg.minTarget) break; // strict pass reached the minimum: no Review titles
+    if (round + 1 === relaxedFrom) log(`[pool] ${name}: strict pass gave ${chosen.length} verified (< min ${cfg.minTarget}); second pass allows 'Review' titles (talking heads still rejected)`);
+    else if (round + 1 < rounds.length) log(`[pool] ${name}: below ${need}, retrying with expanded queries: ${rounds[round + 1].join(" | ")}`);
     }
-
-    // Optional Claude confirm: does the shot clearly show this product?
-    if (visionVerifyEnabled() && env("PRODUCT_VISION", "on").toLowerCase() !== "off" && chosen.length) {
-      const text = `Footage that clearly shows the ${name} ${cfg.category} itself (shooting it, handling it, or a close-up of it). A different gun model, a person talking to camera, packaging only, or no gun = fits false.`;
-      const items = [];
-      for (let k = 0; k < chosen.length; k += 4)
-        items.push({ sceneId: 9000 + k, text, before: "", cands: chosen.slice(k, k + 4).map((s) => ({ id: s.c.id, frames: (s.c.frames ?? []).slice(0, 3) })) });
-      const verdict = await verifyCandidates(items, `${name} review`, path.join(dir, "vision_pool.json"), log);
-      const before = chosen.length;
-      const keep = chosen.filter((s, i) => verdict.get(`${9000 + Math.floor(i / 4) * 4}|${s.c.id}`) !== false);
-      log(`[pool] ${name}: Claude confirmed ${keep.length}/${before}`);
-      chosen.splice(0, chosen.length, ...keep);
+    const chosen = bestChosen;
+    const res = lastRes;
+    if (!res || !chosen.length) {
+      needOf.set(name, { need, chapterSec, queries: [...tried] });
+      log(`[pool] ${name}: INSUFFICIENT FOOTAGE - 0 verified clips after ${tried.size} searches; this chapter will not be filled with stock`);
+      continue;
     }
     // Shot-type mix: fill by the niche's weights (largest deficit first), then top up by score.
     const wsum = Object.values(cfg.mix).reduce((a, b) => a + (b ?? 0), 0);
     if (wsum > 0) {
-      const picked: Scored[] = [];
+      const picked: Picked[] = [];
       const cnt = new Map<ShotType, number>();
       const left = [...chosen];
-      while (picked.length < cfg.target && left.length) {
+      while (picked.length < Math.max(cfg.target, need) && left.length) {
         const need = (k: ShotType) => (cfg.mix[k] === undefined ? -2 : 0) + ((cfg.mix[k] ?? 0) / wsum) * (picked.length + 1) - (cnt.get(k) ?? 0);
         let bi = 0;
         for (let k = 1; k < left.length; k++) if (need(left[k].type) > need(left[bi].type) + 1e-9) bi = k;
@@ -277,9 +423,9 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
       }
       chosen.splice(0, chosen.length, ...picked);
     }
-    chosen.splice(cfg.target);
+    chosen.splice(Math.max(cfg.target, need));
     const mixLog = chosen.reduce<Record<string, number>>((m, x) => ((m[x.type] = (m[x.type] ?? 0) + 1), m), {});
-    log(`[pool] ${name}: shot types ${JSON.stringify(mixLog)}${chosen.length < cfg.minTarget ? ` (below min ${cfg.minTarget})` : ""}`);
+    log(`[pool] ${name}: shot types ${JSON.stringify(mixLog)}${chosen.length < cfg.minTarget ? ` (below target ${need})` : ""}`);
 
     // HD: only the shot itself (<= maxShotSec + a little), partial download.
     let ok = 0;
@@ -293,14 +439,15 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
         ok++;
         const sceneSim: Record<string, number> = {};
         for (const sc of body) sceneSim[String(sc.id)] = res.scores[`s${sc.id}|${c.id}`] ?? 0;
-        all.push({ id, product: name, path: file, url: c.pageUrl, author: c.author, license: c.license, duration: secs, imgSim: Math.round(s.img * 1000) / 1000, textSim: Math.round(s.txt * 1000) / 1000, sceneSim, frames: c.frames ?? [], shotType: s.type, srcStart: c.shotStart ?? 0 });
+        all.push({ id, product: name, path: file, url: c.pageUrl, author: c.author, license: c.license, duration: secs, imgSim: Math.round(s.img * 1000) / 1000, textSim: Math.round(s.txt * 1000) / 1000, sceneSim, frames: c.frames ?? [], shotType: s.type, srcStart: c.shotStart ?? 0, verified: verifiedRun });
       } catch (err) {
         log(`[pool] ${name}: HD fetch failed: ${String(err).slice(0, 120)}`);
       }
     }
+    needOf.set(name, { need, chapterSec, queries: [...tried] });
     const mine = all.filter((p) => p.product === name);
     const ups = new Set(mine.map((p) => p.author));
-    if (mine.length) {
+    if (mine.some((p) => p.verified)) {
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       fs.writeFileSync(cacheFile, JSON.stringify(mine, null, 1));
     }
@@ -309,6 +456,14 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
   // Per-shot QA (PySceneDetect + CLIP + motion): drop talking heads / frozen shots.
   const final = await filterPoolByShotQa(all, cfg.category, log);
   fs.writeFileSync(outFile, JSON.stringify(final, null, 1));
+  // Pool gate: verified shots per product after QA. Below minTarget = insufficient footage (warned on
+  // the review page and in QA; the timeline reuses other moments of the verified videos, never stock).
+  for (const [name, n] of needOf) {
+    const verified = final.filter((p) => p.product === name && isVerifiedShot(p)).length;
+    status[name] = { verified, need: n.need, chapterSec: Math.round(n.chapterSec), insufficient: verified < cfg.minTarget, queries: n.queries };
+    log(`[pool] gate ${name}: ${verified} verified / target ${n.need}${verified < cfg.minTarget ? ` -> INSUFFICIENT FOOTAGE (< ${cfg.minTarget})` : verified < n.need ? " (short: verified moments will be reused)" : " ok"}`);
+  }
+  fs.writeFileSync(path.join(dir, "product_pool_status.json"), JSON.stringify(status, null, 1));
   return final.length;
 }
 

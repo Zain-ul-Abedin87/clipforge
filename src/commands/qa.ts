@@ -6,6 +6,7 @@ import { paths } from "../lib/paths.js";
 import { projectDir, readJson, writeJson } from "../lib/project.js";
 import type { Assets } from "../lib/assets/types.js";
 import type { Scene, Section } from "../lib/scenes.js";
+import { footageSummary } from "../lib/sceneReview.js";
 import { loadStyle } from "../lib/style.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import type { Timeline } from "./timeline.js";
@@ -230,6 +231,11 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   // ---- 7. products ----
   const products = scenes.filter((s) => s.type === "product");
   const noMedia = products.filter((s) => assets[String(s.id)]?.source === "graphic");
+  // Exact-model footage per product chapter (footage_share.json from the timeline).
+  for (const ch of footageSummary(dir)) {
+    add("Products", `Verified footage: ${ch.product}`, ch.insufficient ? "fail" : ch.verifiedShare >= 0.8 ? "pass" : "warn",
+      `${Math.round(ch.verifiedShare * 100)}% verified exact-model footage, ${Math.round(ch.stockShare * 100)}% stock/unverified; pool ${ch.poolVerified} verified clip(s)${ch.poolTarget ? ` of target ${ch.poolTarget}` : ""}${ch.insufficient ? " - INSUFFICIENT FOOTAGE: add own clips or press-kit media for this product" : ""}`);
+  }
   add("Products", "Product shots with real media", !products.length || noMedia.length === 0 ? "pass" : noMedia.length / products.length <= 0.3 ? "warn" : "fail",
     products.length ? `${products.length - noMedia.length}/${products.length} (missing: ${[...new Set(noMedia.map((s) => s.product_name))].join(", ") || "-"})` : "no product scenes");
 

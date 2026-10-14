@@ -198,16 +198,29 @@ let rvSel = {};
 const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 function rvRow(name, sc) {
   const sel = rvSel[sc.id] ?? 0;
-  const shots = sc.shots.map((x) => `<div class="tile ${x.index === sel ? "sel" : ""} ${x.reused ? "reused" : ""}" data-shot="${x.index}" data-scene="${sc.id}" title="${esc(x.file)}"><img loading="lazy" src="/api/projects/${name}/review/thumb?scene=${sc.id}&shot=${x.index}"><span>${x.seconds}s \u00b7 ${esc(x.shotType || x.source)}</span></div>`).join("");
+  const shots = sc.shots.map((x) => `<div class="tile ${x.index === sel ? "sel" : ""} ${x.reused ? "reused" : ""}" data-shot="${x.index}" data-scene="${sc.id}" title="${esc(x.file)}"><img loading="lazy" src="/api/projects/${name}/review/thumb?scene=${sc.id}&shot=${x.index}"><span>${x.seconds}s \u00b7 ${x.verified ? "\u2713 " : x.product ? "stock \u00b7 " : ""}${esc(x.shotType || x.source)}</span></div>`).join("");
   const alts = sc.card ? "<span class='help'>Card scene (graphic)</span>" : sc.alternatives.length ? sc.alternatives.map((a) => `<div class="tile alt" data-alt="${esc(a.id)}" data-scene="${sc.id}" title="${esc(a.author || "")}"><img loading="lazy" src="/api/projects/${name}/review/thumb?alt=${encodeURIComponent(a.id)}"><span>${esc(a.shotType || "")} \u00b7 ${a.match}</span></div>`).join("") : "<span class='help'>No unused alternatives in the pool.</span>";
   return `<div class="rv-row" id="rv-${sc.id}"><div class="rv-meta"><b>#${sc.id}</b>${fmtT(sc.start)}-${fmtT(sc.end)}${sc.product ? `<br>${esc(sc.product)}` : ""}</div>
     <div><div class="rv-text">${esc(sc.text)}</div><div class="rv-shots">${shots}</div><div class="rv-alts">${alts}</div></div></div>`;
+}
+// Exact-model footage per product chapter; insufficient footage is a clear warning, never hidden.
+function footageBanner(list) {
+  if (!list || !list.length) return "";
+  const rows = list.map((c) => {
+    const v = Math.round(c.verifiedShare * 100), st = Math.round(c.stockShare * 100);
+    const warn = c.insufficient
+      ? `<b style="color:#c0392b">\u26a0 Insufficient footage:</b> sirf ${c.poolVerified} verified clip(s) mile${c.poolTarget ? ` (target ${c.poolTarget})` : ""}. Apni clips ya press-kit media add karein.`
+      : `${c.poolVerified} verified clip(s)${c.poolTarget ? ` / target ${c.poolTarget}` : ""}`;
+    return `<div style="padding:6px 0;border-bottom:1px solid rgba(127,127,127,.2)"><b>${esc(c.product)}</b>: ${v}% verified exact model, ${st}% stock \u00b7 ${warn}</div>`;
+  }).join("");
+  const bad = list.some((c) => c.insufficient);
+  return `<div class="rv-footage" style="margin:0 0 14px;padding:10px 14px;border-radius:10px;border:1px solid ${bad ? "#c0392b" : "rgba(127,127,127,.35)"}"><div style="font-weight:600;margin-bottom:4px">Product footage check</div>${rows}</div>`;
 }
 async function showReview(name) {
   const box = $("#review-box");
   box.hidden = false;
   const r = await api(`/api/projects/${name}/review`).catch((e) => ({ scenes: [], error: e.message }));
-  $("#rv").innerHTML = r.scenes.map((sc) => rvRow(name, sc)).join("") || `<p class="help">${esc(r.error || "No scenes.")}</p>`;
+  $("#rv").innerHTML = footageBanner(r.footage) + (r.scenes.map((sc) => rvRow(name, sc)).join("") || `<p class="help">${esc(r.error || "No scenes.")}</p>`);
   box.dataset.name = name;
   box._scenes = r.scenes;
 }

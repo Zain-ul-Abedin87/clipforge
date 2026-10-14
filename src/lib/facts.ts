@@ -80,12 +80,18 @@ export async function extractFacts(dir: string, scenes: Scene[], log: (m: string
   if (fs.existsSync(file)) {
     try {
       const c = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (c.key === key && c.facts) return c.facts as Facts;
+      // A heuristic sheet is only reused when the LLM is still unavailable; earlier it was cached
+      // under the same key forever, so one failed call meant script facts were never extracted.
+      if (c.key === key && c.facts && (c.facts.source === "llm" || !agentEnabled() || env("FACTS", "on").toLowerCase() === "off")) return c.facts as Facts;
+      if (c.key === key && c.facts?.source === "heuristic") log(`[facts] cached sheet is heuristic${c.error ? ` (last error: ${String(c.error).slice(0, 120)})` : ""}; retrying the LLM`);
     } catch { /* re-extract */ }
   }
   let facts: Facts | null = null;
+  let error = "";
+  if (!agentEnabled()) error = "ANTHROPIC_API_KEY not set or FOOTAGE_AGENT=off";
+  else if (env("FACTS", "on").toLowerCase() === "off") error = "FACTS=off";
   if (agentEnabled() && env("FACTS", "on").toLowerCase() !== "off") {
-    try {
+    for (let attempt = 1; attempt <= 2 && !facts; attempt++) try {
       const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
       const res = await client.messages.parse({
         model: agentModel(),
@@ -112,11 +118,14 @@ export async function extractFacts(dir: string, scenes: Scene[], log: (m: string
         log(`[facts] ${facts.products.length} product(s) from the script (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
       }
     } catch (err) {
-      log(`[facts] LLM extraction failed, using planner card text: ${String((err as Error).message ?? err).slice(0, 160)}`);
+      error = String((err as Error).message ?? err).slice(0, 300);
+      log(`[facts] LLM extraction attempt ${attempt} failed: ${error.slice(0, 160)}`);
     }
+    if (!facts && !error) error = "LLM returned no products";
   }
+  if (!facts) log(`[facts] using heuristic fallback (planner card text): ${error}`);
   facts ??= heuristicFacts(scenes, products);
-  fs.writeFileSync(file, JSON.stringify({ key, facts }, null, 1));
+  fs.writeFileSync(file, JSON.stringify({ key, facts, ...(facts.source === "heuristic" ? { error } : {}) }, null, 1));
   return facts;
 }
 

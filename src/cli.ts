@@ -12,6 +12,37 @@ import { serve } from "./server/server.js";
 import { testNvenc } from "./commands/testNvenc.js";
 import { transcribe } from "./commands/transcribe.js";
 
+// Per-project run log: every step run with -p/--project appends its console output (with time and
+// step name) to workspace/<project>/run.log, so a video's whole history is in one file.
+{
+  const argv = process.argv.slice(2);
+  const i = argv.findIndex((x) => x === "-p" || x === "--project");
+  const name = i >= 0 ? argv[i + 1] : argv.find((x) => x.startsWith("--project="))?.slice(10);
+  if (name && /^[\w.\- ]+$/.test(name)) {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { paths } = await import("./lib/paths.js");
+    const dir = path.join(paths.workspace, name);
+    if (fs.existsSync(dir)) {
+      const file = path.join(dir, "run.log");
+      const step = argv[0] ?? "?";
+      const stamp = () => new Date().toISOString().replace("T", " ").slice(0, 19);
+      const write = (lvl: string, args: unknown[]) => {
+        try {
+          const text = args.map((a) => (typeof a === "string" ? a : a instanceof Error ? a.stack ?? a.message : JSON.stringify(a))).join(" ");
+          fs.appendFileSync(file, text.split(/\r?\n/).map((l) => `${stamp()} [${step}]${lvl} ${l}`).join("\n") + "\n");
+        } catch { /* logging must never break a step */ }
+      };
+      write("", [`=== ${argv.join(" ")} (pid ${process.pid}) ===`]);
+      for (const [k, lvl] of [["log", ""], ["info", ""], ["warn", " WARN"], ["error", " ERROR"]] as const) {
+        const orig = console[k].bind(console);
+        console[k] = (...args: unknown[]) => (write(lvl, args), orig(...args));
+      }
+      process.on("exit", (code) => write("", [`=== exit ${code ?? process.exitCode ?? 0} ===`]));
+    }
+  }
+}
+
 const program = new Command();
 
 program.name("clipforge").description("Voiceover -> faceless YouTube video pipeline").version("0.0.1");

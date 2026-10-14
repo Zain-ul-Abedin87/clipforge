@@ -18,7 +18,7 @@ import { createChannel, listMusic, removeLogo, removeMusic, saveLogo, saveMusic,
 import { BatchQueue } from "./queue.js";
 import { importOfficial } from "../lib/assets/official.js";
 import { parseScriptHtml, scriptSections, scriptText } from "../lib/scriptImport.js";
-import { listReview, reviewThumb, swapShot } from "../lib/sceneReview.js";
+import { footageSummary, listReview, reviewThumb, swapShot } from "../lib/sceneReview.js";
 import { ALL_CARDS, CARD_FONTS } from "../lib/stylePreset.js";
 import { buildUiNiche, keyStatus, loadAppSettings, runEnv, saveAppSettings, ttsToWav, UiNiche } from "./simpleUi.js";
 import { detectAndWriteNiche } from "../lib/nicheDetect.js";
@@ -642,7 +642,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!fs.existsSync(path.join(dir, "timeline.json"))) return send(res, 404, { error: "no timeline yet" });
     if (method === "GET" && !parts[4]) {
       const p = readProject(name) ?? {};
-      return send(res, 200, { awaiting: !!jobs.get(name)?.awaitingReview && !jobs.get(name)?.running, review: p.review === true, reviewDone: p.reviewDone === true, scenes: listReview(dir) });
+      return send(res, 200, { awaiting: !!jobs.get(name)?.awaitingReview && !jobs.get(name)?.running, review: p.review === true, reviewDone: p.reviewDone === true, footage: footageSummary(dir), scenes: listReview(dir) });
     }
     if (method === "GET" && parts[4] === "thumb") {
       const alt = url.searchParams.get("alt");

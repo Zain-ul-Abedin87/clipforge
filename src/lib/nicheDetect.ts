@@ -11,7 +11,7 @@ import { z } from "zod";
 import { env, hasKey } from "./env.js";
 import { agentEnabled, agentModel } from "./agent/footage.js";
 import type { Niche } from "./niche.js";
-import { nichesDir } from "./niche.js";
+import { isBrandHint, nichesDir } from "./niche.js";
 
 export interface DetectMeta {
   source: "llm" | "heuristic";
@@ -57,7 +57,7 @@ Return JSON with:
 - allowStock: false ONLY when every product shot must be the exact named model (typical for firearms). true for most consumer niches where stock B-roll of the category is fine.
 - productCategory: one word for the product pool (pistol, gadget, blender, drill, ...)
 - productQueries: 5 YouTube/web search templates that include the literal token {name} (e.g. "{name} review", "{name} unboxing", "{name} close up", "{name} official", "{name} hands on"). Match the category.
-- stockHints: up to 16 objects {words, query}. words is |separated whole-word stems from the narration; query is a 2-5 word stock search. Cover category B-roll, close-ups, lifestyle, retail, price.
+- stockHints: up to 16 objects {words, query}. words is |separated whole-word stems from the narration; query is a 2-5 word stock search. Cover category B-roll, close-ups, lifestyle, retail, price. Never a hint about brands or brand comparisons and no brand names in words: brand/product mentions are handled by the exact-model product pool.
 - blockedTerms: titles/tags to reject (toys, cartoons, wrong domains for the niche)
 - llmGuidance: 1-3 sentences for the planner about what to show
 - disclaimer: legal/safety line if needed (firearms, knives, supplements), else ""
@@ -185,6 +185,7 @@ function assembleNiche(d: DetectOut): Niche & Record<string, unknown> {
   const hints: [string, string][] = (d.stockHints ?? [])
     .map((h) => [String(h.words ?? ""), String(h.query ?? "")] as [string, string])
     .filter((h) => h[0] && h[1])
+    .filter((h) => !isBrandHint(h[0], h[1]))
     .slice(0, 20);
   const mixRaw = d.mix && typeof d.mix === "object"
     ? Object.fromEntries(Object.entries(d.mix).filter(([, v]) => typeof v === "number"))

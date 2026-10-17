@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClipForge Editor</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body class="ed">
+  <header class="ed-top">
+    <a class="ed-back" href="index.html" id="edBack">‹ ClipForge</a>
+    <b id="edProject">Editor</b>
+    <span id="edRev" class="muted small"></span>
+    <div class="ed-actions">
+      <button id="edUndo" class="btn small" title="Undo (Ctrl+Z)">↶ Undo</button>
+      <button id="edRedo" class="btn small" title="Redo (Ctrl+Y)">↷ Redo</button>
+      <label class="small muted">Zoom <input id="edZoom" type="range" min="1" max="24" value="6"></label>
+      <button id="edPlay" class="btn small" title="Play / pause (Space)">▶</button>
+      <span id="edTime" class="mono small">0:00.00</span>
+      <span class="ed-sep"></span>
+      <button id="edSplit" class="btn small" title="Split the clip under the playhead (S)">✂ Split</button>
+      <button id="edDelete" class="btn small" title="Delete the selected clip (Delete)">🗑 Delete</button>
+      <span class="ed-sep"></span>
+      <button id="edIn" class="btn small" title="Mark the start of a part to cut out (I)">[ In</button>
+      <button id="edOut" class="btn small" title="Mark the end of a part to cut out (O)">Out ]</button>
+      <button id="edCut" class="btn small" title="Cut the marked part out of the video: voice, pictures and cards (X)" disabled>Cut out part</button>
+      <button id="edClear" class="btn small" title="Clear In / Out (Esc)" hidden>✕</button>
+      <button id="edRender" class="btn small primary" title="Re-render only the edited scenes">Render changes</button>
+    </div>
+  </header>
+
+  <main class="ed-main">
+    <section class="ed-preview">
+      <div id="edStage" class="ed-stage"><video id="edVideo" muted playsinline preload="auto"></video><img id="edImg" alt="" hidden><div id="edCard" class="ed-card" hidden></div><div id="edEmpty" class="muted">Loading…</div></div>
+      <div id="edSceneText" class="ed-scene-text muted small"></div>
+    </section>
+    <aside id="edInspector" class="ed-inspector">
+      <p class="muted small"><b>Space</b> play / pause · click or drag on the timeline to move the playhead.<br><b>S</b> split the clip under the playhead · <b>Delete</b> remove the selected clip (the neighbour fills its time).<br><b>I</b> / <b>O</b> mark a part, <b>X</b> cut it out of the whole video (voice too) · <b>Ctrl+Z</b> undo.<br>Select a picture to change its scene's transition (Cut / Fade / Flash) or replace it.</p>
+    </aside>
+  </main>
+
+  <section class="ed-timeline-wrap">
+    <div class="ed-labels" id="edLabels"></div>
+    <div class="ed-scroll" id="edScroll">
+      <div class="ed-canvas" id="edCanvas">
+        <div class="ed-ruler" id="edRuler"></div>
+        <div class="ed-scenes" id="edScenes"></div>
+        <div id="edTracks"></div>
+        <div class="ed-range" id="edRange" hidden></div>
+        <div class="ed-playhead" id="edPlayhead"></div>
+      </div>
+    </div>
+  </section>
+
+  <audio id="edAudio" preload="auto"></audio>
+  <div id="toast" class="toast hidden"></div>
+  <script src="editor.js"></script>
+</body>
+</html>

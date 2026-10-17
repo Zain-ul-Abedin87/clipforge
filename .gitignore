@@ -38,3 +38,11 @@ data/channel_study/v3/gallery/
 cards/node_modules/
 cards/out/
 
+
+cookies.txt
+*.cookies.txt
+tools/
+*cookies*.txt
+
+# AI model settings / spend (Settings page)
+llm_settings.json

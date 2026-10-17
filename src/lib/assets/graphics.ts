@@ -201,7 +201,7 @@ export interface Layer {
   /** path is a video with alpha (Remotion card, ProRes 4444) that animates itself. */
   video?: boolean;
   /** Remotion card to render instead of this PNG (cards/); the PNG stays as the fallback. */
-  card?: { comp: "RankCard" | "PriceCard" | "SpecCard" | "LowerThird" | "SpecBars" | "ProsCons" | "PriceTag" | "CompareTable"; props: Record<string, unknown>; seconds?: number };
+  card?: { comp: "RankCard" | "PriceCard" | "SpecCard" | "LowerThird" | "SpecBars" | "ProsCons" | "PriceTag" | "CompareTable" | "GaugeCard" | "PartCallout"; props: Record<string, unknown>; seconds?: number };
 }
 
 /** The same card as an empty background plus one transparent layer per text group. */

@@ -6,7 +6,7 @@
  * Missing keys fall back to the old look, so older style.json files keep working.
  */
 
-export const ALL_CARDS = ["RankCard", "PriceCard", "SpecCard", "LowerThird", "SpecBars", "ProsCons", "PriceTag", "CompareTable"] as const;
+export const ALL_CARDS = ["RankCard", "PriceCard", "SpecCard", "LowerThird", "SpecBars", "ProsCons", "PriceTag", "CompareTable", "GaugeCard", "PartCallout"] as const;
 export type CardComp = (typeof ALL_CARDS)[number];
 export const CARD_FONTS = ["Anton", "Impact", "Arial Black", "Segoe UI Black", "Georgia", "Verdana"];
 
@@ -24,6 +24,8 @@ export interface CardPreset {
 export function cardPreset(style: Record<string, unknown>): CardPreset {
   const c = (style.cards ?? null) as Record<string, unknown> | null;
   const set = Array.isArray(c?.set) ? (c!.set as string[]).filter((x): x is CardComp => (ALL_CARDS as readonly string[]).includes(x)) : [...ALL_CARDS];
+  // Spec visuals (gauge / part callout) follow the spec cards: older presets without them still get them.
+  if (Array.isArray(c?.set) && (set.includes("SpecBars") || set.includes("SpecCard"))) for (const x of ["GaugeCard", "PartCallout"] as const) if (!set.includes(x)) set.push(x);
   const every = Number(c?.graphicsEverySec);
   return {
     font: typeof c?.font === "string" && c.font ? c.font : "Anton",

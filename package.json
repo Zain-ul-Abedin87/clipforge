@@ -12,6 +12,7 @@
     "doctor": "tsx src/cli.ts doctor",
     "test:nvenc": "tsx src/cli.ts test-nvenc",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts",
     "serve": "tsx src/cli.ts serve --port 4173"
   },
   "engines": {
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "playwright": "^1.64.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

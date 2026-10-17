@@ -1,0 +1,142 @@
+{
+  "name": "tech-amazon",
+  "label": "Tech / Amazon products (exact-model, affiliate roundups)",
+  "description": "Best-of and versus videos about Amazon tech products: every product shot must show the exact manufacturer, model and variant; affiliate links never drive footage search.",
+  "structure": {
+    "detectListicle": true,
+    "titleCardPerItem": true,
+    "maxPriceBadgesPerItem": 1,
+    "maxProsConsPerItem": 1,
+    "targetGraphicShare": 0.2
+  },
+  "scenes": {
+    "avgLengthSec": 7,
+    "minLengthSec": 5,
+    "maxLengthSec": 10
+  },
+  "product": {
+    "sources": [
+      "local",
+      "presskit",
+      "official",
+      "wikimedia"
+    ],
+    "allowStock": false,
+    "genericFallback": false
+  },
+  "stock": {
+    "_comment": "B-roll hints: first matching line wins. Left side = words separated by | (whole-word match, case-insensitive).",
+    "hints": [],
+    "sectionHintCount": 0,
+    "fallbackQuery": "city aerial view",
+    "sources": [
+      "storyblocks",
+      "pexels",
+      "pixabay",
+      "wikimedia_video",
+      "unsplash",
+      "archive"
+    ],
+    "blockedTerms": [
+      "cartoon",
+      "video game",
+      "knockoff",
+      "clone",
+      "replica",
+      "fake",
+      "toy"
+    ]
+  },
+  "llmGuidance": "Amazon tech product roundup / versus video. Product scenes must show the exact product named (manufacturer + model + variant + generation, e.g. \"Apple AirPods Pro 2\" not \"AirPods 3\"). Never search with affiliate links or ASINs. B-roll between products: people using the type of device, desks, homes; never another brand's product. Use spec_card only for specs the narration states; never invent specs or prices.",
+  "disclaimer": "As an Amazon Associate I earn from qualifying purchases. Prices and availability change; check the current listing.",
+  "qa": {
+    "stillWarn": 0.5,
+    "stillFail": 0.65,
+    "unverifiedProduct": "fail",
+    "maxClipUses": 3
+  },
+  "pacing": {
+    "enabled": true,
+    "targetShotSec": 2.1,
+    "minShotSec": 1.1,
+    "maxShotSec": 3,
+    "openingSec": 30,
+    "openingFactor": 0.95,
+    "laterFactor": 1.04,
+    "_source": "data/channel_study/rules_v3.json (tech: 2.07 s median, cuts/min start 21.5 / mid 18 / end 17.5)",
+    "micro": {
+      "minSec": 2.5,
+      "maxSec": 4,
+      "targetSec": 3.2
+    },
+    "_micro": "2.5-4 s micro-scenes cut on voice silences / word starts (src/lib/engine/pacing/autoEditor.ts), each with its active subject + spec (micro_scenes.json)."
+  },
+  "productPool": {
+    "enabled": true,
+    "target": 40,
+    "maxPerUploader": 8,
+    "maxShotSec": 3,
+    "category": "gadget",
+    "imgMin": 0.72,
+    "queries": [
+      "{name} official video",
+      "{name} promo",
+      "{name} review",
+      "{name} hands on",
+      "{name} lifestyle"
+    ],
+    "minTarget": 12,
+    "mix": {
+      "handson": 41,
+      "lifestyle": 14,
+      "amazon": 12,
+      "promo": 11,
+      "field": 10,
+      "closeup": 8
+    },
+    "dropTypes": [
+      "talking"
+    ],
+    "rankCardAtSec": [
+      12,
+      15
+    ]
+  },
+  "productMatch": {
+    "_comment": "Exact-model rules (src/lib/productResearch.ts). A clip/photo whose title names another generation, variant or model number is rejected; one that only names the family goes to manual review.",
+    "strict": true,
+    "requireManufacturer": true,
+    "requireModel": true,
+    "requireVariant": true,
+    "onConflict": "reject",
+    "onUnverified": "manual_review",
+    "variantWords": [
+      "pro",
+      "max",
+      "plus",
+      "mini",
+      "ultra",
+      "lite",
+      "air",
+      "se",
+      "xl",
+      "fe",
+      "neo",
+      "gen",
+      "generation",
+      "mk",
+      "mark",
+      "edition",
+      "compact"
+    ]
+  },
+  "affiliate": {
+    "_comment": "Amazon URLs/ASINs are recorded per product in product_research.json for the description only; they are never used as footage search terms.",
+    "separateFromFootage": true,
+    "disclosure": "As an Amazon Associate I earn from qualifying purchases."
+  },
+  "music": {
+    "enabled": false,
+    "_comment": "Background music OFF by default; turn it on per channel in style.json music.enabled."
+  }
+}

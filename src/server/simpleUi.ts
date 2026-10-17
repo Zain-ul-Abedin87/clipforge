@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { hasKey } from "../lib/env.js";
 import { paths } from "../lib/paths.js";
 import { nichesDir } from "../lib/niche.js";
@@ -8,8 +7,8 @@ import { nichesDir } from "../lib/niche.js";
 /**
  * Simple web UI ("Create" page) helpers: app-wide settings (ui_settings.json), the niche the run
  * uses (niches/ui-<guns|tech>.json, derived from guns_web / tech_web with the settings applied),
- * env overrides for the CLI steps, the default Windows TTS voice (script-only mode) and the
- * read-only API key status (never the keys themselves).
+ * env overrides for the CLI steps and the read-only API key status (never the keys themselves).
+ * Script-only narration (Mode B) lives in src/lib/tts.ts.
  */
 
 export type UiNiche = "guns" | "tech";
@@ -81,25 +80,6 @@ export function runEnv(s: AppSettings): Record<string, string> {
   return { WEB_CRAWL: s.sources.webCrawl ? "on" : "off", WEBCRAWL_MODE: s.webCrawlMode };
 }
 
-/** Default test voice: Windows System.Speech reads script.txt into a WAV (robotic, testing only). */
-export function ttsToWav(scriptFile: string, outWav: string): Promise<{ ok: boolean; error?: string }> {
-  const ps = `Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = 1;
-$t = Get-Content -Raw -Encoding UTF8 '${scriptFile.replace(/'/g, "''")}';
-$t = $t -replace '\\.380','three eighty' -replace '\\bP365\\b','P three sixty-five';
-$s.SetOutputToWaveFile('${outWav.replace(/'/g, "''")}'); $s.Speak($t); $s.Dispose()`;
-  return new Promise((resolve) => {
-    const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], { windowsHide: true });
-    let err = "";
-    child.stderr.on("data", (d) => (err += d));
-    const timer = setTimeout(() => child.kill(), 15 * 60_000);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve(code === 0 && fs.existsSync(outWav) ? { ok: true } : { ok: false, error: err.trim().slice(-300) || `exit ${code}` });
-    });
-    child.on("error", (e) => resolve({ ok: false, error: String(e) }));
-  });
-}
-
 export function keyStatus(): Record<string, boolean> {
   return {
     ANTHROPIC_API_KEY: hasKey("ANTHROPIC_API_KEY"),
@@ -108,5 +88,7 @@ export function keyStatus(): Record<string, boolean> {
     UNSPLASH_ACCESS_KEY: hasKey("UNSPLASH_ACCESS_KEY"),
     STORYBLOCKS: hasKey("STORYBLOCKS_PUBLIC_KEY") && hasKey("STORYBLOCKS_PRIVATE_KEY"),
     ELEVENLABS_API_KEY: hasKey("ELEVENLABS_API_KEY"),
+    OPENAI_API_KEY: hasKey("OPENAI_API_KEY"),
+    TTS_PROVIDER: hasKey("TTS_PROVIDER"),
   };
 }

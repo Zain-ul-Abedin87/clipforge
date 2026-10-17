@@ -44,7 +44,7 @@ function mode() {
 }
 function refreshModes() {
   const m = mode();
-  $("#mode-note").textContent = m === "both" ? "Script + voiceover: best timing." : m === "voice" ? "Voiceover only: words are transcribed." : m === "tts" ? "Script only: computer test voice." : "No voiceover? A computer test voice reads the script.";
+  $("#mode-note").textContent = m === "both" ? "Script + voiceover: best timing." : m === "voice" ? "Voiceover only: words are transcribed." : m === "tts" ? "Script only: computer voice reads it (set TTS_PROVIDER in .env for ElevenLabs / OpenAI / Piper)." : "No voiceover? The computer voice reads the script.";
   const n = $("#script").value.trim().split(/\s+/).filter(Boolean).length;
   $("#wordcount").textContent = `${n} words` + (n ? ` \u00b7 about ${Math.max(1, Math.round(n / 150))} min of narration` : "");
 }
@@ -337,7 +337,77 @@ async function showSettings() {
   $("#keys").innerHTML = Object.entries(r.keys).map(([k, v]) => `<li><span class="dot ${v ? "y" : "n"}"></span>${k}<span class="help">${v ? "set" : "missing"}</span></li>`).join("");
   $("#s-msg").textContent = "";
   showChannelStyle();
+  showAi();
 }
+
+// ---------- AI model (Claude / Qwen, backup, credit budget) ----------
+let ai = null;
+const money = (v) => (v === null || v === undefined ? "" : `$${Number(v).toFixed(2)}`);
+const numOrNull = (el) => (el.value.trim() === "" ? null : Number(el.value));
+async function showAi(state) {
+  ai = state || (await api("/api/llm"));
+  const s = ai.settings;
+  setToggle($("#ai-primary"), s.primary);
+  setToggle($("#ai-fallback"), s.fallback);
+  setToggle($("#ai-qmode"), s.qwen.mode);
+  $("#ai-qurl").value = s.qwen.baseUrl;
+  $("#ai-qmodel").value = s.qwen.model;
+  $("#ai-qvision").value = s.qwen.visionModel;
+  $("#ai-qpin").value = s.qwen.priceIn;
+  $("#ai-qpout").value = s.qwen.priceOut;
+  $("#ai-ccredit").value = s.budget.claude.creditUsd ?? "";
+  $("#ai-cstop").value = s.budget.claude.stopBelowUsd;
+  $("#ai-qcredit").value = s.budget.qwen.creditUsd ?? "";
+  $("#ai-qstop").value = s.budget.qwen.stopBelowUsd;
+  const row = (p, label) => {
+    const st = ai.status[p];
+    const using = ai.active === p ? " · <b>abhi yahi chal raha hai</b>" : "";
+    const spend = `kharcha ${money(st.spentUsd)}${st.remainingUsd !== null ? ` · bacha ~${money(st.remainingUsd)}` : ""} · ${st.calls} calls`;
+    return `<li><span class="dot ${st.blocked ? "n" : "y"}"></span><b>${label}</b><span class="help">${st.blocked ? esc(st.blocked) : "ready"}${using} · ${spend}</span>
+      <span class="ai-actions">${st.disabled ? `<button class="btn small" data-enable="${p}">Re-enable</button>` : ""}<button class="btn small ghost" data-test="${p}">Test</button></span></li>`;
+  };
+  $("#ai-status").innerHTML = row("claude", "Claude") + row("qwen", `Qwen (${s.qwen.mode === "local" ? "local" : "cloud"})`) +
+    (ai.order.length ? "" : `<li><span class="help">Koi model available nahi: pipeline free rules se chalegi.</span></li>`);
+}
+onToggle($("#ai-primary"), (v) => (ai.settings.primary = v));
+onToggle($("#ai-fallback"), (v) => (ai.settings.fallback = v));
+onToggle($("#ai-qmode"), async (v) => {
+  // Switching cloud / local loads that mode's preset (endpoint + model names).
+  showAi(await api("/api/llm", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ qwen: { mode: v } }) }));
+});
+$("#ai-status").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    if (b.dataset.enable) {
+      showAi(await api("/api/llm/enable", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: b.dataset.enable }) }));
+      $("#ai-msg").textContent = "Re-enabled.";
+    } else if (b.dataset.test) {
+      $("#ai-msg").textContent = "Testing…";
+      const r = await api("/api/llm/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: b.dataset.test }) });
+      showAi(r.state);
+      $("#ai-msg").textContent = r.ok ? `${b.dataset.test} OK (${r.model}, ${r.ms} ms): "${r.reply}"` : `${b.dataset.test} failed: ${r.error}`;
+    }
+  } catch (err) {
+    $("#ai-msg").textContent = err.message;
+  } finally {
+    b.disabled = false;
+  }
+});
+$("#ai-save").addEventListener("click", async () => {
+  const body = {
+    primary: ai.settings.primary,
+    fallback: ai.settings.fallback,
+    qwen: { baseUrl: $("#ai-qurl").value, model: $("#ai-qmodel").value, visionModel: $("#ai-qvision").value, priceIn: Number($("#ai-qpin").value || 0), priceOut: Number($("#ai-qpout").value || 0) },
+    budget: {
+      claude: { creditUsd: numOrNull($("#ai-ccredit")), stopBelowUsd: Number($("#ai-cstop").value || 0) },
+      qwen: { creditUsd: numOrNull($("#ai-qcredit")), stopBelowUsd: Number($("#ai-qstop").value || 0) },
+    },
+  };
+  showAi(await api("/api/llm", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+  $("#ai-msg").textContent = "Saved. Agla step naye model se chalega.";
+});
 onToggle($("#s-niche"), (v) => (settings.defaultNiche = v));
 onToggle($("#s-mode"), (v) => (settings.webCrawlMode = v));
 $("#s-save").addEventListener("click", async () => {

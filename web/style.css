@@ -347,3 +347,27 @@ input[type=range] { padding: 0; }
   .cp-tag { font-size: 13.5px; }
 }
 @media (max-width: 900px) { #main { order: -1; } }
+
+/* Input modes, discrepancies, product research, asset confidence */
+.inputs-box { display: grid; gap: 10px; }
+.inputs-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; }
+.mode-badge { display: inline-block; min-width: 22px; text-align: center; padding: 1px 7px; border-radius: 6px; background: #33373d; color: #fff; font-weight: 700; margin-right: 6px; }
+.mode-badge.A { background: var(--stock); } .mode-badge.B { background: var(--graphic); } .mode-badge.C { background: var(--product); color: var(--accent-ink); }
+.disc-list, .products-list { display: grid; gap: 6px; margin: 8px 0; }
+.disc { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; font-size: 13px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,.03); }
+.disc.significant { border-left: 3px solid #e05c5c; }
+.disc .why { font-size: 11px; color: #e3b45c; }
+.disc del { color: #e08a8a; } .disc ins { color: #8fd18f; text-decoration: none; }
+.product-rec { display: grid; gap: 4px; padding: 8px; border-radius: 6px; background: rgba(255,255,255,.03); font-size: 13px; }
+.product-rec input, .product-rec textarea, .product-rec select { width: 100%; box-sizing: border-box; }
+.conf { padding: 1px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.conf.high { background: #1f5f3a; color: #bff0cf; } .conf.medium { background: #6a5a1c; color: #ffe9a6; } .conf.low { background: #6b2525; color: #ffc9c9; }
+.scene-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+
+/* Model vault */
+#vaultBox input { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+.vault-log { max-height: 160px; overflow: auto; font-size: 11px; white-space: pre-wrap; }
+.vault-list { display: grid; gap: 8px; margin-top: 8px; }
+.vault { font-size: 12px; padding: 6px; border-radius: 6px; background: rgba(255,255,255,.03); }
+.vault-thumbs { display: flex; gap: 4px; margin-top: 4px; overflow-x: auto; }
+.vault-thumbs img { height: 44px; border-radius: 3px; }

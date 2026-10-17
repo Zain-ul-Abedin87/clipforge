@@ -12,6 +12,7 @@ import { env, hasKey } from "./env.js";
 import { agentEnabled, agentModel } from "./agent/footage.js";
 import type { Niche } from "./niche.js";
 import { isBrandHint, nichesDir } from "./niche.js";
+import { llm } from "./agents/llm/llm.js";
 
 export interface DetectMeta {
   source: "llm" | "heuristic";
@@ -267,7 +268,7 @@ function assembleNiche(d: DetectOut): Niche & Record<string, unknown> {
 async function llmDetect(title: string, script: string, log: (m: string) => void): Promise<DetectOut | null> {
   if (!agentEnabled()) return null;
   try {
-    const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+    const client = llm();
     const model = agentModel();
     const res = await client.messages.parse({
       model,

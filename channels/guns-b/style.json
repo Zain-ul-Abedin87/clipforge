@@ -25,6 +25,7 @@
     "background": "rgba(0,0,0,0.55)"
   },
   "music": {
+    "enabled": false,
     "folder": "music",
     "volumeDb": -20,
     "duckDb": -12

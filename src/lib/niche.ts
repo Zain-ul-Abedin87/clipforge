@@ -16,8 +16,17 @@ export interface Niche {
   };
   product: { sources: string[]; allowStock: boolean; genericFallback?: boolean };
   stock: { hints: [string, string][]; sectionHintCount?: number; fallbackQuery: string; blockedTerms: string[] };
-  /** QA limits: share of running time that may be still images/cards before warn / fail. */
-  qa?: { stillWarn?: number; stillFail?: number };
+  /**
+   * QA limits: share of running time that may be still images/cards before warn / fail; how an
+   * unverified product model counts; how often one clip may appear in a video.
+   */
+  qa?: { stillWarn?: number; stillFail?: number; unverifiedProduct?: "warn" | "fail"; maxClipUses?: number };
+  /** Exact-model rules for product media (src/lib/productResearch.ts). */
+  productMatch?: { strict?: boolean; requireManufacturer?: boolean; requireModel?: boolean; requireVariant?: boolean; onConflict?: "reject" | "manual_review"; onUnverified?: "manual_review" | "accept"; variantWords?: string[] };
+  /** Background music for this video type; false switches it off even when the channel enables it. */
+  music?: { enabled?: boolean };
+  /** Affiliate settings: links are kept for the description only, never used for footage search. */
+  affiliate?: { separateFromFootage?: boolean; disclosure?: string };
   /** Official photo importer: brand name -> manufacturer domain. */
   official?: { brands: Record<string, string> };
   llmGuidance: string;

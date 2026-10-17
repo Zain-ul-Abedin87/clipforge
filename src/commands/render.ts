@@ -7,18 +7,22 @@ import { run } from "../lib/exec.js";
 import { paths } from "../lib/paths.js";
 import { projectDir, readJson, writeJson } from "../lib/project.js";
 import { AlignedWord } from "./align.js";
-import { buildAss, captionLines, CaptionLine } from "../lib/render/captions.js";
+import { buildAss, captionLines, CaptionLine, CaptionStyle } from "../lib/render/captions.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
 import { duckGraph } from "../audio/duck.js";
-import type { Layer } from "../lib/assets/graphics.js";
-import type { Timeline, TimelineScene } from "./timeline.js";
+import { CachedSegment, sceneContentHash, SegmentCache } from "../lib/compiler/incrementalCache.js";
+import { concatInput, muxDuration, writeConcatList } from "../lib/compiler/concatDemuxer.js";
+import { compileTimeline, CompiledLayer, CompiledScene, CompiledTimeline, limitFrames, loadTimeline } from "../lib/compiler/timelineCompiler.js";
+import { toNumber } from "../domain/rational.math.js";
 
 export interface RenderOpts {
   project: string;
   /** Render only the first N seconds (quick preview). */
   limitSeconds?: number;
   force?: boolean;
+  /** Re-render only these scene ids (their cached segments are dropped); every other segment is reused. */
+  scenes?: number[];
 }
 
 const W = 1920;
@@ -28,7 +32,7 @@ const FADE = 0.25;
 const fpath = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 
 /** Gentle Ken Burns on stills via zoompan over an upscaled frame (upscaling avoids zoompan jitter). */
-function motionFilter(s: TimelineScene, frames: number): string {
+function motionFilter(s: CompiledScene, frames: number): string {
   if (s.motion === "none") return `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
   // Mild moves (channel study: still motion mostly static / slow zoom).
   const Z = s.asset.source === "graphic" ? 1.03 : 1.06;
@@ -66,7 +70,7 @@ const BG_PAD_Y = 68;
  * cropped, so a wide shotgun or a tall phone stays whole) grows slowly and drifts the other way.
  * Inputs: [0:v] backdrop, [1:v] photo with shadow. Output label [pv].
  */
-function showcaseGraph(s: TimelineScene, frames: number, sc: Showcase): string[] {
+function showcaseGraph(s: CompiledScene, frames: number, sc: Showcase): string[] {
   const D = Math.max(1, frames - 1) / 30;
   const p = `min(1,t/${D.toFixed(3)})`;
   const grow = s.motion === "zoom_out" ? `(1.06-0.06*${p})` : `(1+0.06*${p})`;
@@ -110,10 +114,10 @@ export async function prepareShowcase(ff: string, fp: string, src: string, outDi
 }
 
 export interface SegmentJob {
-  logo?: Timeline["logo"];
+  logo?: CompiledTimeline["logo"];
   /** Non-16:9 product photo: parallax showcase instead of a baked blurred-background still. */
   showcase?: Showcase;
-  scene: TimelineScene;
+  scene: CompiledScene;
   frames: number;
   startSec: number;
   fadeIn: boolean;
@@ -126,11 +130,20 @@ export interface SegmentJob {
 const ease = (d: number, len: number) => `pow(1-min(1,max(0,(t-${d.toFixed(3)})/${len})),3)`;
 
 /** Position expressions for a layer's entrance; the fade filter supplies the opacity. */
-function layerPosition(l: Layer): string {
+function layerPosition(l: CompiledLayer): string {
   if (l.anim === "slide_up") return `x=0:y='70*${ease(l.delay, 0.4)}'`;
   if (l.anim === "slide_left") return `x='-760*${ease(l.delay, 0.45)}':y=0`;
   if (l.anim === "slide_right") return `x='820*${ease(l.delay, 0.4)}':y=0`;
   return "x=0:y=0";
+}
+
+/** Reused verified moment: mirror and/or a 12% punch-in crop so it does not read as a repeat. */
+function variantFilter(v?: string): string {
+  if (!v) return "";
+  const f: string[] = [];
+  if (v.includes("mirror")) f.push("hflip");
+  if (v.includes("punch")) f.push(`scale=${Math.round(W * 1.12)}:${Math.round(H * 1.12)},crop=${W}:${H}`);
+  return "," + f.join(",");
 }
 
 export function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[] {
@@ -164,7 +177,7 @@ export function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[
         ...subs.map((x, k) =>
           x.kind === "image"
             ? `[${k}:v]scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,crop=${W * 1.5}:${H * 1.5},zoompan=z='1+0.05*on/${Math.max(1, x.frames - 1)}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${W}x${H}:fps=30,setsar=1,trim=end_frame=${x.frames},setpts=PTS-STARTPTS[ss${k}]`
-            : `[${k}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=30,setsar=1,trim=end_frame=${x.frames},setpts=PTS-STARTPTS[ss${k}]`,
+            : `[${k}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}${variantFilter(x.variant)},fps=30,setsar=1,trim=end_frame=${x.frames},setpts=PTS-STARTPTS[ss${k}]`,
         ),
         `${subs.map((_, k) => `[ss${k}]`).join("")}concat=n=${subs.length}:v=1:a=0[cat]`,
         `[cat]${["fps=30", "setsar=1", ...base.slice(subs ? 3 : 0)].join(",")}[v0]`,
@@ -252,9 +265,18 @@ async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): P
 
 export async function render(opts: RenderOpts, log: (m: string) => void = console.log): Promise<number> {
   const dir = projectDir(opts.project);
-  const tlFile = path.join(dir, "timeline.json");
-  if (!fs.existsSync(tlFile)) {
-    log(`[render] ${tlFile} missing. Run \`clipforge timeline\` first.`);
+  // The multi-track v3 timeline (timeline.v3.json) is the source of truth; older projects with only
+  // timeline.json are migrated on the fly (frame-identical).
+  const loaded = loadTimeline(dir);
+  if (!loaded) {
+    log(`[render] no timeline in ${dir}. Run \`clipforge timeline\` first.`);
+    return 1;
+  }
+  let compiledFull: CompiledTimeline;
+  try {
+    compiledFull = compileTimeline(loaded.tl);
+  } catch (err) {
+    log(`[render] ${String((err as Error).message ?? err)}`);
     return 1;
   }
   const ff = ffmpegPath();
@@ -269,11 +291,12 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   const baselineFree = os.freemem();
   let minFree = baselineFree;
   const ramTimer = setInterval(() => (minFree = Math.min(minFree, os.freemem())), 1000);
-  const tl = readJson<Timeline>(tlFile);
-  const limitFrames = opts.limitSeconds ? Math.round(opts.limitSeconds * 30) : Infinity;
-  const scenes = tl.scenes.filter((s) => s.startFrame < limitFrames);
-  const totalFrames = Math.min(scenes[scenes.length - 1].endFrame, limitFrames);
-  const duration = totalFrames / 30;
+  const tl = opts.limitSeconds ? limitFrames(compiledFull, Math.round(opts.limitSeconds * 30)) : compiledFull;
+  const srcLabel = { v3: "timeline.v3.json", v2: "timeline.json (v2, migrated)", "v2-synced": "timeline.json edited after timeline.v3.json - v3 rewritten from it" }[loaded.source];
+  log(`[render] timeline ${srcLabel}: ${tl.scenes.length} scenes, ${tl.totalFrames} frames`);
+  const scenes = tl.scenes;
+  const totalFrames = tl.totalFrames;
+  const duration = toNumber(tl.duration);
 
   const segDir = path.join(dir, "render");
   fs.mkdirSync(segDir, { recursive: true });
@@ -281,11 +304,13 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   // Captions: one ASS for the whole video; each segment burns only its own time range.
   let assFile: string | null = null;
   let lines: CaptionLine[] = [];
-  if (tl.captions.enabled && fs.existsSync(path.join(dir, "aligned.json"))) {
+  // The timeline stores the channel's caption style as written by the timeline step (CaptionStyle).
+  const capStyle = tl.captions as unknown as CaptionStyle;
+  if (capStyle.enabled && fs.existsSync(path.join(dir, "aligned.json"))) {
     const words = readJson<{ words: AlignedWord[] }>(path.join(dir, "aligned.json")).words;
-    lines = captionLines(words, tl.captions.maxWordsPerLine);
+    lines = captionLines(remapWords(words, tl.audio.voiceParts), capStyle.maxWordsPerLine);
     assFile = path.join(segDir, "captions.ass");
-    fs.writeFileSync(assFile, buildAss(lines, tl.captions), "utf8");
+    fs.writeFileSync(assFile, buildAss(lines, capStyle), "utf8");
   }
 
   // Non-16:9 product stills (press kit, official, Wikimedia, own photos) get the parallax showcase;
@@ -304,26 +329,49 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     else s.asset = { ...a, path: await fitToFrame(ff, a.path, segDir) };
   }
 
-  // Segment jobs. A segment's file name hashes everything that affects its pixels, so an edited
-  // scene (or swapped asset) re-renders only that segment; unchanged ones are reused.
-  const jobs: SegmentJob[] = scenes.map((s, i) => {
-    const endFrame = Math.min(s.endFrame, limitFrames);
+  // Segment jobs. Each segment is cached under cache/segments/ by a SHA-256 of everything that
+  // affects it (audio slice, asset files + mtimes, captions, overlays, transition, motion), so an
+  // edited scene (or swapped asset) re-renders only that segment; unchanged ones are reused.
+  const cache = new SegmentCache(path.join(dir, "cache", "segments"));
+  const jobs: (SegmentJob & { hash: string })[] = scenes.map((s, i) => {
+    const endFrame = s.endFrame;
     const frames = endFrame - s.startFrame;
     const startSec = s.startFrame / 30;
     const fadeIn = s.transition === "fade" || s.transition === "flash";
     const fadeOut = scenes[i + 1]?.transition === "fade";
     const segLines = lines.filter((l) => l.end > startSec && l.start < endFrame / 30);
     const showcase = showcases.get(s.id);
-    const key = crypto
-      .createHash("sha1")
-      .update(JSON.stringify({ a: s.asset, m: s.motion, tr: s.transition, ov: s.overlays ?? [], lg: tl.logo ?? null, f: frames, st: s.startFrame, fadeIn, fadeOut, segLines, cap: assFile ? tl.captions : null, v: 4, bd: s.backdrop ?? null, ...(showcase ? { sc: showcase } : {}) }))
-      .digest("hex")
-      .slice(0, 12);
-    return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, out: path.join(segDir, `seg_${String(s.id).padStart(4, "0")}_${key}.mp4`), assFile: segLines.length ? assFile : null };
+    const hash = sceneContentHash({
+      sceneId: s.id,
+      audio: { file: tl.audio.voice, start: startSec, end: endFrame / 30 },
+      asset: s.asset,
+      captions: segLines.length ? { lines: segLines, style: capStyle } : null,
+      overlays: s.overlays ?? [],
+      transition: s.transition,
+      motion: s.motion,
+      frames,
+      fadeIn,
+      fadeOut,
+      backdrop: s.backdrop ?? null,
+      logo: tl.logo ?? null,
+      showcase: showcase ?? null,
+      version: 5,
+    });
+    return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, hash, out: cache.file(s.id, hash), assFile: segLines.length ? assFile : null };
   });
+  const segs: CachedSegment[] = jobs.map((j) => ({ sceneId: j.scene.id, hash: j.hash, frames: j.frames, out: j.out }));
 
-  if (opts.force) for (const j of jobs) for (const f of [j.out, `${j.out}.enc`]) fs.rmSync(f, { force: true });
+  if (opts.force) cache.invalidate(segs);
+  if (opts.scenes?.length) {
+    const want = new Set(opts.scenes);
+    const unknown = opts.scenes.filter((id) => !jobs.some((j) => j.scene.id === id));
+    if (unknown.length) log(`[render] no scene ${unknown.join(", ")} in the timeline (ignored)`);
+    cache.invalidate(segs.filter((x) => want.has(x.sceneId)));
+    log(`[render] single-scene rerender: ${[...want].filter((id) => !unknown.includes(id)).join(", ")}`);
+  }
   const todo = jobs.filter((j) => !fs.existsSync(j.out));
+  const changed = cache.changed(segs);
+  if (cache.previous && changed.length && changed.length < jobs.length) log(`[render] scenes changed since the last render: ${changed.join(", ")}`);
   log(`[render] ${jobs.length} segments (${jobs.length - todo.length} reused from cache), ${(duration / 60).toFixed(1)} min`);
 
   // The GPU on this laptop throws sporadic CUDA errors: retry NVENC once, then fall back to x264.
@@ -358,26 +406,23 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     log(`[render] FAILED: could not render scenes ${missing.map((j) => j.scene.id).join(", ")}`);
     return 1;
   }
+  // Full renders own the manifest (and prune unreferenced segments); a --limit preview leaves it alone.
+  if (!opts.limitSeconds) cache.commit(segs);
 
   // Concat. Cached segments from earlier runs may have used another encoder; mixed H.264 streams
   // are re-encoded once at the end instead of stream-copied, so the file is always clean.
-  const list = path.join(segDir, "concat.txt");
-  // Explicit per-file durations: without them the concat demuxer drops the last frame's duration of
-  // every segment, so the video drifts ~30 ms ahead of the voice per scene (seconds over 20 minutes).
-  fs.writeFileSync(
-    list,
-    jobs.map((j) => `file '${j.out.replace(/\\/g, "/").replace(/'/g, "'\\''")}'\nduration ${(j.frames / 30).toFixed(6)}`).join("\n") + "\n",
-  );
+  // Exact per-file durations (rational): see compiler/concatDemuxer.ts.
+  const list = writeConcatList(path.join(segDir, "concat.txt"), jobs.map((j) => ({ file: j.out, frames: j.frames })));
   const encOf = (out: string) => encoders.get(out) ?? (fs.existsSync(`${out}.enc`) ? fs.readFileSync(`${out}.enc`, "utf8").trim() : "nvenc");
   const segEncoders = new Set(jobs.map((j) => encOf(j.out)));
   const mixed = fallbacks > 0 || segEncoders.size > 1;
 
   // Music bed: concatenate the channel's tracks once, then loop it under the voice.
   let bed: string | null = null;
-  if (tl.music.files.length) {
+  if (tl.audio.music.files.length) {
     bed = path.join(segDir, "music_bed.wav");
-    const inputs = tl.music.files.flatMap((f) => ["-i", f]);
-    const n = tl.music.files.length;
+    const inputs = tl.audio.music.files.flatMap((f) => ["-i", f]);
+    const n = tl.audio.music.files.length;
     const filt = `${Array.from({ length: n }, (_, i) => `[${i}:a]aresample=48000,aformat=channel_layouts=stereo[m${i}]`).join(";")};${Array.from({ length: n }, (_, i) => `[m${i}]`).join("")}concat=n=${n}:v=0:a=1[out]`;
     const r = await run(ff, ["-hide_banner", "-loglevel", "error", "-y", ...inputs, "-filter_complex", filt, "-map", "[out]", bed]);
     if (r.code !== 0) {
@@ -386,17 +431,15 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     }
   }
 
-  const D = duration.toFixed(3);
+  // Exact cut length (rational), not a rounded float sum.
+  const D = muxDuration(tl.duration);
 
   // Sound effects: one input per kind, split and delayed to every event time.
-  const sfxOn = tl.motion?.sfx !== false;
-  const events = sfxOn
-    ? scenes.flatMap((s) => (s.sfx ?? []).map((e) => ({ kind: e.kind, at: s.startFrame / 30 + e.at }))).filter((e) => e.at < duration - 0.2)
-    : [];
+  const events = tl.audio.sfx.enabled ? tl.audio.sfx.events.filter((e) => e.at < duration - 0.2) : [];
   const sfxFiles = events.length ? await ensureSfx(ff) : null;
   const sfxKinds = [...new Set(events.map((e) => e.kind))];
   const firstSfxInput = 2 + (bed ? 1 : 0);
-  const sfxInputs = sfxKinds.flatMap((k) => ["-i", sfxFiles![k]]);
+  const sfxInputs = sfxKinds.flatMap((k) => ["-i", sfxFiles![k as keyof typeof sfxFiles]]);
   const sfxGraph: string[] = [];
   const sfxLabels: string[] = [];
   sfxKinds.forEach((k, ki) => {
@@ -405,14 +448,20 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     sfxGraph.push(`[${firstSfxInput + ki}:a]aresample=48000,aformat=channel_layouts=stereo,asplit=${evs.length}${outs}`);
     evs.forEach((e, j) => {
       const ms = Math.round(e.at * 1000);
-      sfxGraph.push(`[${k}${j}]adelay=${ms}|${ms},volume=${tl.motion?.sfxDb ?? -14}dB[e${k}${j}]`);
+      sfxGraph.push(`[${k}${j}]adelay=${ms}|${ms},volume=${tl.audio.sfx.gainDb}dB[e${k}${j}]`);
       sfxLabels.push(`[e${k}${j}]`);
     });
   });
   if (sfxLabels.length) sfxGraph.push(`${sfxLabels.join("")}amix=inputs=${sfxLabels.length}:duration=longest:normalize=0,atrim=0:${D}[sfx]`);
-  const voiceChain = `[1:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`;
+  // Parts cut out in the editor: play only the kept pieces of the voice file, back to back.
+  const vp = tl.audio.voiceParts;
+  const voiceChain = vp?.length
+    ? `[1:a]asplit=${vp.length}${vp.map((_, i) => `[vp${i}]`).join("")};` +
+      vp.map((p, i) => `[vp${i}]atrim=start=${p.in.toFixed(6)}:duration=${p.dur.toFixed(6)},asetpts=PTS-STARTPTS[vq${i}]`).join(";") +
+      `;${vp.map((_, i) => `[vq${i}]`).join("")}concat=n=${vp.length}:v=0:a=1,aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`
+    : `[1:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`;
   const filter = bed
-    ? duckGraph({ voiceChain, musicIn: "[2:a]", duration, volumeDb: tl.music.volumeDb, out: "pre" })
+    ? duckGraph({ voiceChain, musicIn: "[2:a]", duration, volumeDb: tl.audio.music.volumeDb, out: "pre" })
     : `${voiceChain}[pre]`;
   const finalAudio = sfxLabels.length
     ? `${sfxGraph.join(";")};[pre][sfx]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[aout]`
@@ -420,14 +469,12 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
 
   fs.mkdirSync(paths.output, { recursive: true });
   const outFile = path.join(paths.output, `${opts.project}${opts.limitSeconds ? `_first${opts.limitSeconds}s` : ""}.mp4`);
-  const videoCodec = mixed
-    ? ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-profile:v", "high", "-pix_fmt", "yuv420p"]
-    : ["-c:v", "copy"];
+  const { input: concatIn, videoCodec } = concatInput(list, mixed);
   log(`[render] muxing${bed ? " voice + ducked music" : " voice"}${mixed ? " (re-encoding mixed segments)" : ""} ...`);
   const mux = await run(ff, [
     "-hide_banner", "-loglevel", "error", "-y",
-    "-f", "concat", "-safe", "0", "-i", list,
-    "-i", tl.voice,
+    ...concatIn,
+    "-i", tl.audio.voice,
     ...(bed ? ["-stream_loop", "-1", "-i", bed] : []),
     ...sfxInputs,
     "-filter_complex", `${filter};${finalAudio}`,
@@ -453,6 +500,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   const report = {
     output: outFile,
     durationTimeline: Number(D),
+    timelineSource: loaded.source,
     durationVideo: vDur,
     durationAudio: aDur,
     avDiff: Math.round(Math.abs(vDur - aDur) * 1000) / 1000,
@@ -460,6 +508,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     framesExpected: totalFrames,
     segments: jobs.length,
     segmentsRendered: todo.length,
+    scenesRerendered: todo.map((j) => j.scene.id),
     x264Fallbacks: fallbacks,
     music: !!bed,
     soundEffects: events.length,
@@ -479,4 +528,22 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   log(`[render] RAM: ${report.ramFreeAtStartGB} GB free at start, lowest ${report.ramLowestFreeGB} GB -> render used ~${report.ramPeakUsedByRenderGB} GB`);
   log(`[render] ${report.sync ? "A/V in sync" : "A/V MISMATCH"} -> ${outFile}`);
   return report.sync ? 0 : 1;
+}
+
+/** Aligned words (voice-file time) -> timeline time after editor cuts; words in a cut part are dropped. */
+export function remapWords<W extends { start: number; end: number }>(words: W[], parts?: { in: number; dur: number }[]): W[] {
+  if (!parts?.length) return words;
+  const out: W[] = [];
+  for (const w of words) {
+    let at = 0;
+    for (const p of parts) {
+      if (w.start >= p.in - 1e-6 && w.start < p.in + p.dur) {
+        const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+        out.push({ ...w, start: r6(at + (w.start - p.in)), end: r6(at + Math.min(w.end, p.in + p.dur) - p.in) });
+        break;
+      }
+      at += p.dur;
+    }
+  }
+  return out;
 }

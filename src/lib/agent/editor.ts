@@ -5,6 +5,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
+import { llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * The editor's two judgement calls that keyword search and CLIP cannot make:
@@ -22,7 +23,7 @@ export interface SceneSubject {
   shot: Shot;
 }
 
-const client = () => new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+const client = () => llm();
 function outputConfig<T extends z.ZodType>(schema: T) {
   return agentModel().startsWith("claude-haiku") ? { format: zodOutputFormat(schema) } : { effort: "low" as const, format: zodOutputFormat(schema) };
 }
@@ -100,7 +101,8 @@ export interface VetItem {
 /** Accepted candidate ids per scene; scenes missing from the map were not judged (keep CLIP's pick). */
 export async function vetCandidates(items: VetItem[], topic: string, log: (m: string) => void): Promise<Map<number, Set<string>>> {
   const out = new Map<number, Set<string>>();
-  if (!agentEnabled()) return out;
+  // Thumbnails are images: only a vision-capable model can judge them.
+  if (!agentEnabled() || !llmAvailable({ vision: true })) return out;
   const usage = { in: 0, out: 0 };
   for (let i = 0; i < items.length; i += 5) {
     const batch = items.slice(i, i + 5).filter((b) => b.thumbs.length);

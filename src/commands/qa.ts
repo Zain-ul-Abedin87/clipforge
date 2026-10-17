@@ -17,6 +17,9 @@ import { sourceKey } from "../lib/pacing.js";
 import { readFacts } from "../lib/facts.js";
 import { readChapters, youtubeChapters } from "../lib/chapters.js";
 import { buildPublishPack } from "../lib/publish.js";
+import { preflightChecks } from "../lib/qaGate.js";
+import { readLedger } from "../lib/assets/licenseLedger.js";
+import { musicEnabled } from "./timeline.js";
 
 export type Status = "pass" | "warn" | "fail";
 export interface Check {
@@ -115,10 +118,14 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   const silences = [...snd.stderr.matchAll(/silence_start: ([\d.]+)[\s\S]*?silence_duration: ([\d.]+)/g)].map((m) => ({ start: +m[1], dur: +m[2] }));
   const lufs = Number(snd.stderr.match(/I:\s+(-?[\d.]+) LUFS/g)?.pop()?.match(/-?[\d.]+/)?.[0]);
   const peak = Number(snd.stderr.match(/Peak:\s+(-?[\d.]+) dBFS/g)?.pop()?.match(/-?[\d.]+/)?.[0]);
-  add("Sound", "Long silences", silences.length ? "warn" : "pass", silences.length ? silences.map((s) => `${fmt(s.start)} (${s.dur.toFixed(1)} s)`).join(", ") : "no gap of 2.5 s+");
+  const deadAir = silences.filter((s) => s.dur >= 5);
+  add("Sound", "Silent gaps", deadAir.length ? "fail" : silences.length ? "warn" : "pass",
+    silences.length ? `${silences.map((s) => `${fmt(s.start)} (${s.dur.toFixed(1)} s)`).join(", ")}${deadAir.length ? " - gaps of 5 s+ are dead air" : ""}` : "no gap of 2.5 s+");
   add("Sound", "Loudness (YouTube ~ -14 LUFS)", Math.abs(lufs + 14) <= 2 ? "pass" : "warn", `${lufs.toFixed(1)} LUFS`);
   add("Sound", "Clipping", peak <= -0.5 ? "pass" : "warn", `true peak ${peak.toFixed(1)} dBFS`);
-  add("Sound", "Background music", tl.music.files.length ? "pass" : "warn", tl.music.files.length ? tl.music.files.map((f) => path.basename(f)).join(", ") : "none - add tracks to channels/<channel>/music");
+  const musicOn = musicEnabled(style, niche);
+  add("Sound", "Background music", tl.music.files.length || !musicOn ? "pass" : "warn",
+    tl.music.files.length ? tl.music.files.map((f) => path.basename(f)).join(", ") : musicOn ? "none - add tracks to channels/<channel>/music" : "off (default; style.json music.enabled)");
 
   // ---- 4. captions ----
   if (tl.captions.enabled) {
@@ -210,6 +217,9 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     writeJson(path.join(dir, "frame_check.json"), verdicts);
   } else add("Footage", "Picture matches narration", "warn", "skipped (needs ANTHROPIC_API_KEY)");
 
+  // ---- 5c. pre-approval gate: files, reuse, exact product model, licence ledger, discrepancies ----
+  for (const c of await preflightChecks(dir, { scenes, assets, timelineScenes: tl.scenes, niche, ledger: readLedger(dir) }, probeReadable(fp))) add(c.group, c.name, c.status, c.detail);
+
   // ---- 6. licences ----
   const notRecorded = scenes.filter((s) => /not recorded/i.test(assets[String(s.id)]?.license ?? ""));
   const testOnly = scenes.filter((s) => /test only/i.test(assets[String(s.id)]?.license ?? ""));
@@ -226,6 +236,10 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   const crawled = [...new Map(scenes.map((s) => assets[String(s.id)]).filter((x) => x && (x.source === "web_crawl" || /unknown\/web/i.test(x.license))).map((x) => [x!.url, x!])).values()];
   add("Licences", "Web-crawled footage (copyright risk)", crawled.length ? "warn" : "pass",
     crawled.length ? `${crawled.length} clip(s) with UNKNOWN licence from the open web - you may not have the right to use them (copyright claims/strikes, demonetisation); replace them or get permission: ${crawled.map((x) => `${x.author ?? "?"} ${x.url}`).join(" | ")}` : "none used");
+  // Exact-model clips cut from other people's YouTube reviews / walkarounds: not licensed to you.
+  const ytExact = [...new Map(scenes.map((s) => assets[String(s.id)]).filter((x) => x?.source === "youtube_exact_model").map((x) => [x!.url.replace(/&t=\d+s$/, ""), x!])).values()];
+  add("Licences", "Exact-model YouTube clips (rights)", ytExact.length ? "warn" : "pass",
+    ytExact.length ? `${ytExact.length} source video(s) from other channels - transformative commentary helps but Content ID claims are possible; ask the channel / brand for permission or replace: ${ytExact.map((x) => `${x.author ?? "?"} ${x.url}`).join(" | ")}` : "none used");
   add("Licences", "Credits needed (CC BY)", ccBy.length ? "warn" : "pass", ccBy.length ? `${new Set(ccBy.map((x) => x.url)).size} file(s) - credits are in the description below` : "none");
 
   // ---- 7. products ----
@@ -332,4 +346,40 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   // Problems are for the reviewer (the approval button stays blocked while there are failures);
   // they do not mark the pipeline step as failed, so a batch shows "done, N QA issues".
   return 0;
+}
+
+/** A file ffprobe can open and that has a video stream (photos count). */
+function probeReadable(fp: string): (file: string) => Promise<boolean> {
+  return async (file) => {
+    const r = await run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", file], { timeoutMs: 30_000 });
+    return r.code === 0 && r.stdout.includes("video");
+  };
+}
+
+/**
+ * Pre-render gate (`qa --preflight`): the checks that need no rendered video. Writes preflight.json;
+ * exit code 1 when anything fails, so a script can stop before spending a render on it.
+ */
+export async function qaPreflight(opts: { project: string }, log: (m: string) => void = console.log): Promise<number> {
+  const dir = projectDir(opts.project);
+  for (const f of ["project.json", "scenes.json", "assets.json", "timeline.json"]) {
+    if (!fs.existsSync(path.join(dir, f))) {
+      log(`[qa] ${f} missing - run the pipeline through the timeline step first`);
+      return 1;
+    }
+  }
+  const project = readJson<{ name?: string; channel?: string; niche?: string; footage?: string }>(path.join(dir, "project.json"));
+  if (!project.name) project.name = opts.project;
+  const niche = loadProjectNiche(project, loadStyle(project.channel ?? "default"));
+  const fp = ffprobePath();
+  const checks = await preflightChecks(
+    dir,
+    { scenes: readJson<Scene[]>(path.join(dir, "scenes.json")), assets: readJson<Assets>(path.join(dir, "assets.json")), timelineScenes: readJson<Timeline>(path.join(dir, "timeline.json")).scenes, niche, ledger: readLedger(dir) },
+    fp ? probeReadable(fp) : undefined,
+  );
+  const summary = { pass: checks.filter((c) => c.status === "pass").length, warn: checks.filter((c) => c.status === "warn").length, fail: checks.filter((c) => c.status === "fail").length };
+  writeJson(path.join(dir, "preflight.json"), { createdAt: new Date().toISOString(), summary, checks });
+  for (const c of checks) log(`[qa] ${c.status.toUpperCase()} ${c.group}: ${c.name} - ${c.detail}`);
+  log(`[qa] preflight: ${summary.pass} pass, ${summary.warn} warn, ${summary.fail} fail`);
+  return summary.fail ? 1 : 0;
 }

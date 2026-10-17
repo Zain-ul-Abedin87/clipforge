@@ -3,8 +3,10 @@ import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
 import { loadGlossary } from "../lib/glossary.js";
+import { buildMicroPlan, microConfig, microPlanFile } from "../lib/planner/activeSubject.js";
 import { paths } from "../lib/paths.js";
 import { heuristicLabels, llmLabels } from "../lib/planner/label.js";
+import { routeSegments } from "../lib/planner/segmentRoute.js";
 import { detectSections, splitIntoScenes } from "../lib/planner/structure.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { Scene, Section, validateScenes } from "../lib/scenes.js";
@@ -12,8 +14,9 @@ import { loadStyle } from "../lib/style.js";
 import { loadProjectNiche, nicheFingerprintPath } from "../lib/niche.js";
 import { applyPlanEdits } from "../lib/planEdits.js";
 import type { ScriptSection } from "../lib/scriptImport.js";
-import { ffprobePath } from "../lib/tools.js";
+import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import type { Aligned } from "./align.js";
+import { activeProvider, llmAvailable } from "../lib/agents/llm/llm.js";
 
 export interface PlanOpts {
   project: string;
@@ -129,7 +132,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
   const channel = opts.channel ?? project.channel ?? "default";
   const style = loadStyle(channel);
   const glossaryFile = path.join(paths.inputs, "glossary.txt");
-  const useLlm = !opts.noLlm && hasKey("ANTHROPIC_API_KEY");
+  const useLlm = !opts.noLlm && llmAvailable();
   const niche = loadProjectNiche(project, style);
 
   const inputs = {
@@ -138,7 +141,8 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     glossary: fingerprint(glossaryFile),
     scriptSections: fingerprint(path.join(dir, "script_sections.json")),
     niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
-    labels: `${useLlm ? env("LLM_MODEL", "claude-opus-5-5") : "heuristic-v5"}:cards-v2`,
+    labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v2:route-v1`,
+    micro: JSON.stringify(microConfig(niche)) + "micro-v1",
   };
   if (!opts.force && isCached(dir, "plan", inputs, ["scenes.json"])) {
     log(`[plan] cached -> ${path.join(dir, "scenes.json")} (use --force to redo)`);
@@ -187,6 +191,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
 
   scenes = capGraphics(scenes, niche.structure.targetGraphicShare, duration, niche.stock.fallbackQuery, log);
   scenes = splitAdjacentCards(scenes, niche.stock.fallbackQuery, log);
+  scenes = await routeSegments(scenes, niche, project.name ?? opts.project, useLlm, log);
   const kept = applyPlanEdits(dir, scenes);
   if (kept) log(`[plan] kept ${kept} footage search edit(s) from the plan review`);
 
@@ -201,6 +206,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     maxLength: Math.max(...lengths).toFixed(2),
     avgLength: (duration / scenes.length).toFixed(2),
     types: typeCounts,
+    segments: scenes.reduce<Record<string, number>>((m, s) => (s.segment ? ((m[s.segment] = (m[s.segment] ?? 0) + 1), m) : m), {}),
     labeledBy: scenes.some((s) => s.labeledBy === "llm") ? "llm" : "heuristic",
     llmCostUsd: Math.round(cost * 1000) / 1000,
     valid: v.ok,
@@ -218,6 +224,17 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     v.errors.slice(0, 10).forEach((e) => log(`[plan]   ${e}`));
     return 1;
   }
+  // Fast-paced niches: 2.5-4 s micro-scenes cut on silences / words, each with its active subject.
+  const micro = microConfig(niche);
+  const ff = ffmpegPath();
+  if (micro.enabled && ff) {
+    try {
+      await buildMicroPlan(dir, { ffmpeg: ff, audio: project.audio, words: aligned.words, scenes, ...micro }, log);
+    } catch (err) {
+      log(`[micro] skipped: ${String((err as Error).message ?? err).slice(0, 200)}`);
+      fs.rmSync(microPlanFile(dir), { force: true });
+    }
+  } else fs.rmSync(microPlanFile(dir), { force: true });
   markDone(dir, "plan", inputs);
   log(`[plan] schema valid, no gaps, all scenes ${limits.minLengthSec}-${limits.maxLengthSec}s`);
   log(`[plan] wrote ${path.join(dir, "scenes.json")}`);

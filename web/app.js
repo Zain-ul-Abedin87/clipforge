@@ -568,6 +568,7 @@ async function openProject(name) {
   $("empty").classList.add("hidden");
   $("projectView").classList.remove("hidden");
   $("pvName").textContent = name;
+  $("openEditor").href = `editor.html?project=${encodeURIComponent(name)}`;
   const nicheName = p.niche || "general";
   $("pvNiche").value = nicheName;
   $("pvFootage").value = p.footage || "stock_cc";
@@ -703,6 +704,9 @@ async function loadResults(steps) {
   state.sections = steps.plan === "done" ? (await get("sections.json")) || [] : [];
   const planReport = steps.plan === "done" ? await get("plan_report.json") : null;
   state.assets = steps.assets === "done" ? await get("assets.json") : null;
+  state.timeline = steps.timeline === "done";
+  state.verifications = (await get("model_verifications.json")) || {};
+  refreshInputs();
   const assetsReport = steps.assets === "done" ? await get("assets_report.json") : null;
   $("stageNote").textContent = state.assets ? "Preview · assets from step 4 (render comes next)" : "Preview · real footage arrives in step 4 (Assets)";
   const drift = await get("drift_report.json");
@@ -1018,10 +1022,16 @@ function renderScenes() {
               ${s.product_name ? `<span>· ${esc(s.product_name)}</span>` : ""}
               <span class="badge llm">${s.labeledBy}</span>
             </div>
+            ${state.assets?.[s.id] && s.type !== "graphic" ? confidenceBadge(s, state.assets[s.id]) : ""}
             ${state.assets?.[s.id]?.note ? `<div class="note">⚠ ${esc(state.assets[s.id].note)}</div>` : ""}
             <div class="text">${esc(s.text)}</div>
             <div class="qs">${s.queries.map((x) => `<span class="q${s.edited ? " edited" : ""}">${esc(x)}</span>`).join("")}</div>
-            ${state.assets && s.type !== "graphic" ? `<button class="btn small swap-btn" data-id="${s.id}">⇄ Swap footage</button>` : ""}
+            ${state.assets && s.type !== "graphic" ? `<div class="scene-tools">
+              <button class="btn small swap-btn" data-id="${s.id}">⇄ Swap footage</button>
+              <button class="btn small replace-btn" data-id="${s.id}" title="Use your own clip or photo for this scene">⬆ Replace with my file</button>
+              ${s.type === "product" ? `<button class="btn small verify-btn" data-id="${s.id}" data-verdict="match" title="I checked: this is the exact model">✓ Exact model</button><button class="btn small verify-btn" data-id="${s.id}" data-verdict="conflict" title="Wrong generation / variant / model">✕ Wrong model</button>` : ""}
+              ${state.timeline ? `<button class="btn small rerender-btn" data-id="${s.id}" title="Render only this scene again and re-stitch">⟳ Re-render scene</button>` : ""}
+            </div>` : ""}
             ${!state.assets && s.type !== "graphic" && !state.running ? `<button class="btn small edit-btn" data-id="${s.id}">✎ Edit searches</button>` : ""}
             <div class="edit-qs hidden" id="edit-${s.id}"></div>
             <div class="swap-panel hidden" id="swap-${s.id}"></div>
@@ -1031,11 +1041,14 @@ function renderScenes() {
       .join("") || `<p class="muted">No scenes${state.scenes.length ? " match the filter" : " yet - run the Plan step"}.</p>`;
   for (const el of $("sceneList").querySelectorAll(".scene")) {
     el.onclick = (e) => {
-      if (e.target.closest(".swap-panel, .swap-btn, .edit-btn, .edit-qs")) return;
+      if (e.target.closest(".swap-panel, .scene-tools, .edit-btn, .edit-qs")) return;
       seek(state.scenes[Number(el.dataset.id)].start + 0.01);
     };
   }
   for (const b of $("sceneList").querySelectorAll(".swap-btn")) b.onclick = () => toggleSwap(Number(b.dataset.id));
+  for (const b of $("sceneList").querySelectorAll(".replace-btn")) b.onclick = () => replaceSceneFile(Number(b.dataset.id));
+  for (const b of $("sceneList").querySelectorAll(".rerender-btn")) b.onclick = () => rerenderScene(Number(b.dataset.id));
+  for (const b of $("sceneList").querySelectorAll(".verify-btn")) b.onclick = () => verifyScene(Number(b.dataset.id), b.dataset.verdict);
   for (const b of $("sceneList").querySelectorAll(".edit-btn")) b.onclick = () => toggleEdit(Number(b.dataset.id));
 }
 
@@ -1268,6 +1281,243 @@ function renderStats(plan, drift, assetsReport) {
   }
   $("stats").innerHTML = cards.join("") || `<p class="muted">No stats yet.</p>`;
 }
+
+// ---------- asset confidence, manual replacement, single-scene rerender, model verification ----------
+
+/** high / medium / low from the exact-model check, a human verdict and the CLIP match. */
+function confidenceOf(s, a) {
+  const human = state.verifications?.[a.path];
+  if (human === "match") return ["high", "verified by you"];
+  if (human === "conflict" || a.modelCheck === "conflict") return ["low", "model conflict"];
+  if (a.source === "graphic") return ["low", "text card fallback"];
+  if (a.modelCheck === "match") return ["high", "exact model"];
+  if (a.source === "local" || a.source === "presskit") return ["high", a.source === "local" ? "your media" : "press kit"];
+  if (s.type === "product" && a.modelCheck !== "match") return ["medium", a.modelCheck === "needs_review" ? "model needs review" : "model unverified"];
+  if (a.match === undefined || a.match === null) return ["medium", "not scored"];
+  if (a.match >= 0.27) return ["high", `match ${Math.round(a.match * 100)}`];
+  if (a.match >= 0.22) return ["medium", `match ${Math.round(a.match * 100)}`];
+  return ["low", `weak match ${Math.round(a.match * 100)}`];
+}
+
+function confidenceBadge(s, a) {
+  const [level, why] = confidenceOf(s, a);
+  return `<div><span class="conf ${level}" title="${esc(a.license || "")}">● ${level}</span> <span class="muted small">${esc(why)}</span></div>`;
+}
+
+function replaceSceneFile(sceneId) {
+  if (state.running) return toast("Wait for the current run to finish", true);
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".mp4,.mov,.m4v,.webm,.mkv,.jpg,.jpeg,.png,.webp";
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const note = prompt("Where is this file from? (source / licence - saved in licenses.json)", "Own footage");
+    if (!note || !note.trim()) return toast("A source note is required", true);
+    try {
+      toast(`Uploading ${file.name}…`);
+      await rawUpload(`/api/projects/${encodeURIComponent(state.current)}/scenes/${sceneId}/replace`, file, { "X-Source-Note": note.trim() });
+      toast(`Scene #${sceneId} replaced. Re-rendering only that scene…`);
+      $("logBox").open = true;
+      startPolling();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  };
+  input.click();
+}
+
+async function rerenderScene(sceneId) {
+  if (state.running) return toast("Wait for the current run to finish", true);
+  try {
+    await api(`/projects/${encodeURIComponent(state.current)}/scenes/${sceneId}/rerender`, { method: "POST" });
+    toast(`Re-rendering scene #${sceneId} only…`);
+    $("logBox").open = true;
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function verifyScene(sceneId, verdict) {
+  try {
+    const r = await api(`/projects/${encodeURIComponent(state.current)}/scenes/${sceneId}/verify`, { method: "POST", body: JSON.stringify({ verdict }) });
+    state.verifications = r.verifications;
+    renderScenes();
+    toast(verdict === "match" ? `Scene #${sceneId}: exact model confirmed` : `Scene #${sceneId}: marked wrong model - swap or replace it`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------- input modes, discrepancies, product research ----------
+
+async function refreshInputs() {
+  if (!state.current) return;
+  const name = encodeURIComponent(state.current);
+  const info = await api(`/projects/${name}/inputs`).catch(() => null);
+  if (!info) return;
+  $("modeBadge").textContent = info.mode || "?";
+  $("modeBadge").className = `mode-badge ${info.mode || ""}`;
+  $("modeLabel").textContent = info.label;
+  $("ttsState").textContent = info.tts.configured ? `TTS: ${info.tts.provider} ready` : `TTS: ${info.tts.detail}`;
+  $("ttsRun").classList.toggle("hidden", !(info.hasScript && (info.mode === "B" || !info.hasAudio)));
+  $("ttsRun").disabled = !info.tts.configured;
+
+  const disc = await api(`/projects/${name}/discrepancies`).catch(() => ({ items: [] }));
+  $("discBox").classList.toggle("hidden", !disc.items.length);
+  const sig = disc.items.filter((d) => d.severity === "significant");
+  $("discCount").textContent = `${disc.items.length} difference(s), ${sig.length} significant, ${sig.filter((d) => !d.resolution).length} unresolved`;
+  // Significant first, then by time.
+  const items = [...disc.items].sort((a, b) => (a.severity === b.severity ? a.start - b.start : a.severity === "significant" ? -1 : 1));
+  $("discList").innerHTML = items
+    .map(
+      (d) => `<div class="disc ${d.severity}">
+        <span class="muted">${fmt(d.start)}</span>
+        <div><b>${esc(d.type)}</b> ${d.reasons.length ? `<span class="why">${esc(d.reasons.join(", "))}</span>` : ""}<br>
+          script: <del>${esc(d.script || "—")}</del> · heard: <ins>${esc(d.heard || "—")}</ins></div>
+        <select data-id="${esc(d.id)}">
+          <option value="">unresolved</option>
+          ${disc.resolutions.map((r) => `<option value="${r}"${d.resolution === r ? " selected" : ""}>${r}</option>`).join("")}
+        </select>
+      </div>`,
+    )
+    .join("");
+  for (const sel of $("discList").querySelectorAll("select")) {
+    sel.onchange = async () => {
+      try {
+        await api(`/projects/${name}/discrepancies/${encodeURIComponent(sel.dataset.id)}`, { method: "PUT", body: JSON.stringify({ resolution: sel.value || null }) });
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  }
+
+  const products = state.scenes.some((s) => s.product_name) ? await api(`/projects/${name}/products`).catch(() => []) : [];
+  $("productsBox").classList.toggle("hidden", !products.length);
+  $("productsList").innerHTML = products
+    .map(
+      (p, i) => `<div class="product-rec" data-i="${i}">
+        <b>${esc(p.name)}</b> <span class="muted small">${esc(p.status)}${p.asin ? ` · ASIN ${esc(p.asin)}` : ""}</span>
+        <input data-k="manufacturer" placeholder="Manufacturer" value="${esc(p.manufacturer)}">
+        <input data-k="model" placeholder="Model" value="${esc(p.model)}">
+        <input data-k="variant" placeholder="Variant (Pro / Max / …)" value="${esc(p.variant || "")}">
+        <input data-k="generation" placeholder="Generation (e.g. 3)" value="${esc(p.generation || "")}">
+        <input data-k="amazon" placeholder="Amazon URL (your affiliate link is kept separately, never searched)" value="${esc(p.affiliateUrl || p.amazonUrl || "")}">
+        <textarea data-k="specUrls" rows="2" placeholder="Manufacturer spec pages, one per line">${esc((p.specUrls || []).join("\n"))}</textarea>
+        <select data-k="status">${["unverified", "needs_review", "verified"].map((x) => `<option${p.status === x ? " selected" : ""}>${x}</option>`).join("")}</select>
+        <button class="btn small save-rec">Save</button>
+        <button class="btn small harvest-rec" title="Fill the model vault with real clips of this exact model (brand + model above)">Harvest clips</button>
+      </div>`,
+    )
+    .join("");
+  for (const box of $("productsList").querySelectorAll(".product-rec")) {
+    box.querySelector(".harvest-rec").onclick = () => {
+      const val = (k) => box.querySelector(`[data-k="${k}"]`).value.trim();
+      const model = val("model");
+      const variant = val("variant");
+      startHarvest(val("manufacturer"), variant && !model.toLowerCase().includes(variant.toLowerCase()) ? `${model} ${variant}` : model);
+    };
+    box.querySelector(".save-rec").onclick = async () => {
+      const p = products[Number(box.dataset.i)];
+      const val = (k) => box.querySelector(`[data-k="${k}"]`).value.trim();
+      const body = { name: p.name, manufacturer: val("manufacturer"), model: val("model"), variant: val("variant"), generation: val("generation"), status: val("status"), specUrls: val("specUrls").split(/\n+/).filter(Boolean) };
+      if (val("amazon") && val("amazon") !== (p.affiliateUrl || p.amazonUrl || "")) body.amazon = val("amazon");
+      try {
+        await api(`/projects/${name}/products`, { method: "PUT", body: JSON.stringify(body) });
+        toast(`${p.name} saved`);
+        refreshInputs();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  }
+}
+
+$("discApply").onclick = async () => {
+  try {
+    await api(`/projects/${encodeURIComponent(state.current)}/discrepancies/apply`, { method: "POST" });
+    toast("Re-aligning with your choices…");
+    $("logBox").open = true;
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+$("ttsRun").onclick = async () => {
+  try {
+    await api(`/projects/${encodeURIComponent(state.current)}/tts`, { method: "POST", body: JSON.stringify({}) });
+    toast("Narrating the script, then running every step…");
+    $("logBox").open = true;
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+$("preflightRun").onclick = async () => {
+  try {
+    await api(`/projects/${encodeURIComponent(state.current)}/preflight`, { method: "POST" });
+    toast("Pre-render check running - results in the log");
+    $("logBox").open = true;
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  }
+};
+
+// ---------- model vault (exact-model YouTube clips) ----------
+
+async function refreshVaults() {
+  const r = await api("/vaults").catch(() => null);
+  if (!r) return;
+  $("stockPolicy").textContent = r.genericStock ? "Generic stock is ON (GENERIC_STOCK=on)." : "Generic stock (Pexels, Unsplash, Wikimedia, Archive…) is OFF.";
+  $("vaultList").innerHTML =
+    r.vaults
+      .map(
+        (v) => `<div class="vault"><b>${esc(v.brand)} ${esc(v.model)}</b> · ${v.clips} clips, ${v.stills} stills
+          <div class="muted">${v.stats.talkingHeads} talking heads / ${v.stats.offTopic} off-topic shots rejected${v.features?.length ? ` · ${esc(v.features.join(", "))}` : ""}</div>
+          <div class="vault-thumbs">${v.sample.map((id) => `<img loading="lazy" src="/api/vaults/${encodeURIComponent(v.name)}/thumb/${encodeURIComponent(id)}" alt="">`).join("")}</div>
+          <button class="btn small vault-more" data-brand="${esc(v.brand)}" data-model="${esc(v.model)}">Harvest more</button></div>`,
+      )
+      .join("") || `<p class="muted small">No models harvested yet.</p>`;
+  for (const b of $("vaultList").querySelectorAll(".vault-more")) b.onclick = () => startHarvest(b.dataset.brand, b.dataset.model);
+}
+
+async function startHarvest(brand, model) {
+  if (!brand || !model) return toast("Brand and exact model are required", true);
+  try {
+    const r = await api("/vaults/harvest", {
+      method: "POST",
+      body: JSON.stringify({ brand, model, features: $("vaultFeatures").value, category: $("vaultCategory").value }),
+    });
+    toast(`Harvesting ${brand} ${model}… (a few minutes per video)`);
+    $("vaultBox").open = true;
+    pollHarvest(r.name);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function pollHarvest(name) {
+  const log = $("vaultLog");
+  log.classList.remove("hidden");
+  const t = setInterval(async () => {
+    const r = await api(`/vaults/${encodeURIComponent(name)}/log`).catch(() => null);
+    if (!r) return;
+    log.textContent = r.lines.slice(-40).join("\n");
+    log.scrollTop = log.scrollHeight;
+    if (!r.running) {
+      clearInterval(t);
+      toast(r.failed ? "Harvest failed - see the vault log" : "Harvest finished");
+      refreshVaults();
+    }
+  }, 2000);
+}
+
+$("vaultHarvest").onclick = () => startHarvest($("vaultBrand").value.trim(), $("vaultModel").value.trim());
+refreshVaults();
 
 // ---------- tabs ----------
 

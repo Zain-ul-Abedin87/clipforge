@@ -3,6 +3,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
+import { llm } from "../agents/llm/llm.js";
+import { llmAvailable } from "../agents/llm/llm.js";
 
 /** Small Claude helpers for the official photo importer (only used when the agent is on). */
 
@@ -15,7 +17,7 @@ function outputConfig<T extends z.ZodType>(schema: T) {
   return model.startsWith("claude-haiku") ? { format: zodOutputFormat(schema) } : { effort: "low" as const, format: zodOutputFormat(schema) };
 }
 
-const client = () => new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+const client = () => llm();
 
 /** Picks the manufacturer page that is the product page of `product` (or -1 when none is). */
 export async function choosePage(product: string, pages: { url: string; label?: string }[]): Promise<number> {
@@ -42,7 +44,7 @@ export interface ImageIn {
 
 /** Looks at the images and returns the indexes that are product photos of `product`. */
 export async function pickProductPhotos(product: string, images: ImageIn[]): Promise<number[]> {
-  if (!agentEnabled() || !images.length) return [];
+  if (!agentEnabled() || !llmAvailable({ vision: true }) || !images.length) return [];
   const content: Anthropic.ContentBlockParam[] = [];
   images.forEach((img, i) => {
     content.push({ type: "text", text: `Image ${i}:` });

@@ -25,6 +25,7 @@
     "background": "rgba(0,0,0,0.55)"
   },
   "music": {
+    "enabled": false,
     "folder": "music",
     "volumeDb": -18,
     "duckDb": -10
@@ -35,7 +36,7 @@
     "maxLengthSec": 12
   },
   "pacing": {
-    "targetShotSec": 2.3
+    "targetShotSec": 2.5
   },
   "intro": null,
   "outro": null,

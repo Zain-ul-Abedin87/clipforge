@@ -16,13 +16,49 @@ export interface Correction {
   score: number;
 }
 
-export function loadGlossary(file: string | null | undefined): string[] {
+function glossaryLines(file: string | null | undefined): string[] {
   if (!file || !fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, "utf8")
+    .replace(/^﻿/, "")
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
+}
+
+/**
+ * Product spellings, one per line. A line may add a TTS pronunciation after " = "
+ * ("Sig Sauer P365 = Sig Sauer P three sixty-five"); only the spelling is returned here.
+ */
+export function loadGlossary(file: string | null | undefined): string[] {
+  return glossaryLines(file).map((l) => l.split(" = ", 1)[0].trim()).filter(Boolean);
+}
+
+/** Spelling -> spoken form, from "Name = spoken form" glossary lines (used by TTS only). */
+export function loadPronunciations(file: string | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const l of glossaryLines(file)) {
+    const i = l.indexOf(" = ");
+    if (i < 0) continue;
+    const [from, to] = [l.slice(0, i).trim(), l.slice(i + 3).trim()];
+    if (from && to) out[from] = to;
+  }
+  return out;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Rewrites the text that is sent to a TTS engine (never the script itself): every glossary term is
+ * replaced by its spoken form, longest term first, whole words only, case-insensitive.
+ */
+export function applyPronunciations(text: string, overrides: Record<string, string>): string {
+  const terms = Object.keys(overrides).sort((a, b) => b.length - a.length);
+  if (!terms.length) return text;
+  // One pass with an alternation, so a replacement is never rewritten again by a shorter term.
+  const re = new RegExp(`(?<![\\w])(?:${terms.map(escapeRe).join("|")})(?![\\w])`, "gi");
+  const lower = new Map(terms.map((t) => [t.toLowerCase(), overrides[t]]));
+  return text.replace(re, (m) => lower.get(m.toLowerCase()) ?? m);
 }
 
 const digitsOf = (s: string) => s.replace(/[^0-9]/g, "");

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import type { Niche } from "../niche.js";
 import type { Scene } from "../scenes.js";
+import { llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * AI Footage Agent: Claude reads each scene and writes stock-footage searches the way a human
@@ -52,11 +53,11 @@ const BROADEN = `Some scenes got only poor footage. For each scene you get the n
 
 const hash = (s: string) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 16);
 
-export const agentEnabled = () => hasKey("ANTHROPIC_API_KEY") && env("FOOTAGE_AGENT", "on").toLowerCase() !== "off";
+export const agentEnabled = () => llmAvailable() && env("FOOTAGE_AGENT", "on").toLowerCase() !== "off";
 export const agentModel = () => env("LLM_MODEL", "claude-haiku-4-5");
 
 function client(): Anthropic {
-  return new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+  return llm();
 }
 
 async function ask(
@@ -137,7 +138,7 @@ export async function planFootage(
     }));
     const res = await ask(system, payload, log, usage);
     if (!res) {
-      if (!hasKey("ANTHROPIC_API_KEY")) return null;
+      if (!llmAvailable()) return null;
       continue; // the rule-based queries stay for this batch
     }
     for (const r of res.scenes) {

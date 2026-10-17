@@ -146,6 +146,20 @@
       </section>
 
       <section class="card">
+        <details id="vaultBox" open>
+          <summary><h2 class="inline">Model vault</h2> <small>real clips of the exact model</small></summary>
+          <p class="muted small">Searches YouTube walkarounds / reviews / brand channels whose title names the exact model, cuts camera shots, and keeps only machine B-roll (CLIP rejects talking heads, logos, title cards). Scenes about that model then use only these clips. <span id="stockPolicy"></span></p>
+          <input id="vaultBrand" placeholder="Brand, e.g. Scag">
+          <input id="vaultModel" placeholder="Exact model, e.g. Turf Tiger II">
+          <input id="vaultFeatures" placeholder="Features (optional): deck, engine, zero turn, blades">
+          <input id="vaultCategory" placeholder="Kind of machine (default: lawn mower)">
+          <button id="vaultHarvest" class="btn small primary">Harvest clips</button>
+          <pre id="vaultLog" class="vault-log hidden"></pre>
+          <div id="vaultList" class="vault-list"></div>
+        </details>
+      </section>
+
+      <section class="card">
         <details>
           <summary><h2 class="inline">Glossary</h2> <small>product names</small></summary>
           <textarea id="glossary" rows="10"></textarea>
@@ -199,6 +213,7 @@
             <select id="pvNiche" class="btn" title="Video type"></select>
             <select id="pvFootage" class="btn" title="Where footage may come from"></select>
             <button id="runAll" class="btn primary">▶ Run pipeline</button>
+            <a id="openEditor" class="btn" href="editor.html" title="Block-based multi-track timeline editor">✂ Open editor</a>
             <select id="rerunStep" class="btn">
               <option value="">Re-run step…</option>
               <option value="transcribe">1 · Transcribe</option>
@@ -213,6 +228,30 @@
         </div>
 
         <ol id="stepper" class="stepper"></ol>
+
+        <section id="inputsBox" class="card inputs-box">
+          <div class="inputs-head">
+            <div>
+              <span id="modeBadge" class="mode-badge">?</span>
+              <b id="modeLabel">Input mode</b>
+              <div id="ttsState" class="muted small"></div>
+            </div>
+            <div class="actions">
+              <button id="ttsRun" class="btn small hidden" title="Read the saved script with TTS_PROVIDER, then run every step">🔊 Narrate script &amp; run (Mode B)</button>
+              <button id="preflightRun" class="btn small" title="Files, clip reuse, product models, licences and discrepancies - no render needed">Pre-render check</button>
+            </div>
+          </div>
+          <details id="discBox" class="hidden">
+            <summary><b>Script vs voiceover</b> <span id="discCount" class="muted small"></span></summary>
+            <p class="muted small">The voiceover is the timing truth. For each difference pick: <b>keep_audio</b> (captions show what was said), <b>correct_transcript</b> (Whisper misheard; keep the script words), or <b>modify_script</b> (rewrite script.txt to match the audio; a backup is kept). Significant = numbers, negations or model variants differ; QA blocks approval until those are resolved.</p>
+            <div id="discList" class="disc-list"></div>
+            <button id="discApply" class="btn small primary">Apply choices &amp; re-align</button>
+          </details>
+          <details id="productsBox" class="hidden">
+            <summary><b>Product research</b> <span class="muted small">exact model, Amazon link (affiliate kept out of footage search), spec pages</span></summary>
+            <div id="productsList" class="products-list"></div>
+          </details>
+        </section>
 
         <section id="planBox" class="card plan-box hidden">
           <div class="plan-head">

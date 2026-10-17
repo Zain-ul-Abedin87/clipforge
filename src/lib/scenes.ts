@@ -37,6 +37,11 @@ export interface Scene {
   labeledBy: "llm" | "heuristic";
   /** Set when the user changed the searches in the plan review: the footage agent keeps them. */
   edited?: boolean;
+  /** Media routing (plan step): generic_hook = broad cinematic stock only (no yt-dlp); specific_product = strict exact-model pool. */
+  segment?: "generic_hook" | "specific_product";
+  segmentReason?: string;
+  /** Broad cinematic stock queries for generic_hook scenes (derived from the niche). */
+  cinematicQueries?: string[];
 }
 
 export interface ValidationResult {

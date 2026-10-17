@@ -7,6 +7,8 @@ import { z } from "zod";
 import { env } from "../env.js";
 import { run } from "../exec.js";
 import { agentEnabled, agentModel } from "./footage.js";
+import { llm } from "../agents/llm/llm.js";
+import { llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * Final-picture check (QA): one frame from the middle of every scene of the rendered video is shown
@@ -62,7 +64,7 @@ export async function checkFrames(
   outDir: string,
   log: (m: string) => void,
 ): Promise<FrameVerdict[] | null> {
-  if (!agentEnabled()) return null;
+  if (!agentEnabled() || !llmAvailable({ vision: true })) return null;
   fs.mkdirSync(outDir, { recursive: true });
   const stamp = fs.statSync(video).mtimeMs;
   const cacheFile = path.join(outDir, "frame_check.json");
@@ -72,7 +74,7 @@ export async function checkFrames(
   // New render: frames grabbed from the previous video must not be judged again.
   for (const f of fs.readdirSync(outDir)) if (/^frame_\d+\.jpg$/.test(f)) fs.rmSync(path.join(outDir, f), { force: true });
 
-  const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+  const client = llm();
   const model = agentModel();
   const verdicts: FrameVerdict[] = [];
   const usage = { in: 0, out: 0 };

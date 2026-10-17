@@ -204,7 +204,7 @@ export async function searchWebCrawl(query: string, opts: { pool?: boolean; prev
   if (fs.existsSync(f) && Date.now() - fs.statSync(f).mtimeMs < TTL) hits = JSON.parse(fs.readFileSync(f, "utf8"));
   else {
     if (opts.pool) {
-      const maxPool = num("WEBCRAWL_POOL_MAX_SEARCHES", 40);
+      const maxPool = num("WEBCRAWL_POOL_MAX_SEARCHES", 80);
       if (poolSearches >= maxPool) {
         sayOnce(`[web_crawl] product-pool search limit reached (${maxPool} per run, WEBCRAWL_POOL_MAX_SEARCHES)`);
         return [];

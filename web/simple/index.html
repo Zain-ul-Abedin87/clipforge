@@ -34,7 +34,7 @@
           <span id="drop-text">Click or drop your voiceover file here</span>
         </label>
         <button class="link" id="clear-audio" hidden>Remove file</button>
-        <p class="help" id="mode-note">No voiceover? A computer test voice reads the script.</p>
+        <p class="help" id="mode-note">No voiceover? The computer voice reads the script.</p>
       </div>
       <div class="card">
         <label class="lbl" for="script"><span class="num">2</span>Script</label>
@@ -148,6 +148,34 @@
       <label class="lbl">Cards / graphics</label>
       <div class="chips" id="cs-set"></div>
       <div class="row"><button class="btn ghost" id="cs-save">Save channel style</button><span class="ok" id="cs-msg"></span></div>
+    </div>
+    <div class="card" id="ai-card">
+      <h2>AI model</h2>
+      <p class="help">Scene labels, footage searches, product checks aur diagrams isi model se bante hain. "Off" par sab free rules se chalta hai.</p>
+      <label class="lbl">Active model</label>
+      <div class="toggle" id="ai-primary"><button data-v="claude">Claude</button><button data-v="qwen">Qwen</button><button data-v="off">Off (free rules)</button></div>
+      <label class="lbl">Backup (jab active ruk jaye)</label>
+      <div class="toggle" id="ai-fallback"><button data-v="qwen">Qwen</button><button data-v="claude">Claude</button><button data-v="none">None</button></div>
+      <ul class="keys ai-status" id="ai-status"></ul>
+
+      <label class="lbl">Qwen kahan chale</label>
+      <div class="toggle" id="ai-qmode"><button data-v="cloud">Cloud (Alibaba, QWEN_API_KEY)</button><button data-v="local">Local (Ollama, free)</button></div>
+      <div class="grid2 tight">
+        <div><span class="help">Endpoint</span><input id="ai-qurl" type="text"></div>
+        <div><span class="help">Text model</span><input id="ai-qmodel" type="text"></div>
+        <div><span class="help">Vision model (images)</span><input id="ai-qvision" type="text"></div>
+        <div><span class="help">Qwen price $/1M tokens (in / out)</span><div class="row tight-row"><input id="ai-qpin" type="number" step="0.01" min="0"><input id="ai-qpout" type="number" step="0.01" min="0"></div></div>
+      </div>
+
+      <label class="lbl">Credit budget (auto-disable)</label>
+      <p class="help">Jitna credit bacha hai likh dein. Har call ka kharcha tokens se gina jata hai; jab bachat "stop below" se kam ho, woh model khud band ho jata hai aur backup chal parta hai. "Credit balance too low" error par bhi foran band hota hai. Khaali = koi limit nahi.</p>
+      <div class="grid2 tight">
+        <div><span class="help">Claude credit left ($)</span><input id="ai-ccredit" type="number" step="0.01" min="0" placeholder="no limit"></div>
+        <div><span class="help">Claude stop below ($)</span><input id="ai-cstop" type="number" step="0.01" min="0"></div>
+        <div><span class="help">Qwen credit left ($)</span><input id="ai-qcredit" type="number" step="0.01" min="0" placeholder="no limit"></div>
+        <div><span class="help">Qwen stop below ($)</span><input id="ai-qstop" type="number" step="0.01" min="0"></div>
+      </div>
+      <div class="row"><button class="btn ghost" id="ai-save">Save AI settings</button><span class="ok" id="ai-msg"></span></div>
     </div>
     <div class="card">
       <h2>API keys</h2>

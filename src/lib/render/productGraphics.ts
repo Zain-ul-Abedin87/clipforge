@@ -6,6 +6,7 @@ import type { Facts, ProductFacts } from "../facts.js";
 import { numOf } from "../facts.js";
 import type { CardComp, CardPreset } from "../stylePreset.js";
 import { themeOf } from "../stylePreset.js";
+import type { ProductVisuals } from "./specVisuals.js";
 
 /**
  * More motion graphics per product chapter (any niche): spec bars, pros/cons, price tag, and one
@@ -56,7 +57,7 @@ export function compareRows(products: ProductFacts[]): { label: string; values: 
   return rows;
 }
 
-export function placeChapterGraphics(tl: TimelineScene[], scenes: Scene[], chapters: Chapter[], facts: Facts | null, preset: CardPreset, png: string, log: (m: string) => void): number {
+export function placeChapterGraphics(tl: TimelineScene[], scenes: Scene[], chapters: Chapter[], facts: Facts | null, preset: CardPreset, png: string, log: (m: string) => void, visuals?: Map<string, ProductVisuals>): number {
   if (!facts?.products.length) {
     log("[graphics] no facts: extra product graphics skipped");
     return 0;
@@ -84,6 +85,46 @@ export function placeChapterGraphics(tl: TimelineScene[], scenes: Scene[], chapt
   const hasComp = (c: Chapter, comp: string) => tl.some((t) => t.start >= c.start && t.start < c.end && (t.overlays ?? []).some((l) => l.card?.comp === comp));
   const priceShown = (c: Chapter) => tl.some((t) => t.start >= c.start && t.start < c.end && (t.overlays ?? []).some((l) => l.card?.comp === "PriceCard" || l.card?.comp === "PriceTag"));
   const productChapters = chapters.filter((c) => c.product);
+  // Spec mentions first: a scene whose narration names a spec gets a gauge (numeric value) or a part
+  // callout (named part located on a verified photo; plain spec card when the part was not found).
+  let gauges = 0, callouts = 0, fallbacks = 0;
+  for (const c of productChapters) {
+    const v = visuals?.get(c.product!.toLowerCase());
+    const f = facts.products.find((p) => p.name.toLowerCase() === c.product!.toLowerCase());
+    if (!v || !f) continue;
+    const used = new Set<string>();
+    const mentions = (text: string, label: string, value: string) => {
+      const t = ` ${text.toLowerCase().replace(/[^a-z0-9.$ ]+/g, " ")} `;
+      const lab = label.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").trim();
+      const num = (value.match(/\d[\d,.]*/) ?? [""])[0].replace(/,/g, "");
+      return (lab.length > 2 && t.includes(` ${lab}`)) || (num.length >= 2 && t.replace(/,/g, "").includes(` ${num}`));
+    };
+    for (const [i, t] of tl.entries()) {
+      if (t.start < c.start + 4 || t.start > c.end - 4 || !isFootage(i)) continue;
+      const text = scenes[i]?.text ?? "";
+      const g = preset.set.has("GaugeCard") ? v.gauges.find((x) => !used.has(x.label) && mentions(text, x.label, x.value)) : undefined;
+      if (g) {
+        if (place(t.start, t.start, "GaugeCard", { title: f.name, label: g.label, value: g.value, pct: g.pct, compare: g.compare ?? [] }, 4.5) !== null) (used.add(g.label), gauges++);
+        continue;
+      }
+      const co = v.callouts.find((x) => !used.has(x.label) && mentions(text, x.label, x.value));
+      if (!co) continue;
+      if (co.box && co.photo && preset.set.has("PartCallout")) {
+        if (place(t.start, t.start, "PartCallout", { photo: co.photo, box: co.box, aspect: co.aspect ?? 1.5, title: f.name, label: co.label, value: co.value }, 4.8) !== null) (used.add(co.label), callouts++);
+      } else if (preset.set.has("SpecCard")) {
+        if (place(t.start, t.start, "SpecCard", { title: f.name, rows: [[co.label, co.value]] }, 3.5) !== null) (used.add(co.label), fallbacks++);
+      }
+    }
+    // Narration never named a numeric spec: still show the chapter's first gauge (value from facts.json)
+    // on a footage scene in the middle of the chapter, so every product gets one numeric visual.
+    if (preset.set.has("GaugeCard") && ![...used].some((l) => v.gauges.some((g) => g.label === l))) {
+      const g = v.gauges[0];
+      const mid = (c.start + c.end) / 2;
+      const order = [...tl.entries()].filter(([i, t]) => t.start >= c.start + 4 && t.start <= c.end - 6 && isFootage(i)).sort((a, b) => Math.abs(a[1].start - mid) - Math.abs(b[1].start - mid));
+      for (const [, t] of order) if (g && place(t.start, t.start, "GaugeCard", { title: f.name, label: g.label, value: g.value, pct: g.pct, compare: g.compare ?? [] }, 4.5) !== null) { used.add(g.label); gauges++; break; }
+    }
+  }
+  if (visuals?.size) log(`[graphics] spec mentions: ${gauges} gauge(s), ${callouts} part callout(s), ${fallbacks} plain spec card fallback(s)`);
   for (const c of productChapters) {
     const f = facts.products.find((p) => p.name.toLowerCase() === c.product!.toLowerCase());
     if (!f) continue;

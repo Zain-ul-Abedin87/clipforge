@@ -16,14 +16,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { agentEnabled, agentModel } from "../agent/footage.js";
-import { fetchRetailImages } from "./retailImages.js";
+import { fetchRetailImages, productWebVideos } from "./retailImages.js";
+import { browserProduct } from "./browserProduct.js";
+import { llm } from "../agents/llm/llm.js";
 
 /** Haiku writes 3-5 B-roll YouTube searches per product from category words (cached per product). */
 export const DEFAULT_FORBIDDEN = ["Top", "Best", "Vs", "Comparison", "Compilation", "Podcast", "Fix", "Repair", "Maintenance", "Review"];
 interface BrollPlan { queries: string[]; forbidden: string[] }
 async function llmBrollPlan(name: string, category: string, baseForbidden: string[], log: (m: string) => void): Promise<BrollPlan> {
   if (!agentEnabled()) return { queries: [], forbidden: baseForbidden };
-  const file = path.join(paths.root, "cache", "pools", `q_${slug(name)}_${crypto.createHash("sha1").update(`${name}|${category}|${agentModel()}|v2`).digest("hex").slice(0, 8)}.json`);
+  const file = path.join(paths.root, "cache", "pools", `q_${slug(name)}_${crypto.createHash("sha1").update(`${name}|${category}|${agentModel()}|v4`).digest("hex").slice(0, 8)}.json`);
   if (fs.existsSync(file)) {
     try {
       const c = JSON.parse(fs.readFileSync(file, "utf8")) as BrollPlan;
@@ -33,14 +35,14 @@ async function llmBrollPlan(name: string, category: string, baseForbidden: strin
   const Schema = z.object({ queries: z.array(z.string()), forbidden_keywords: z.array(z.string()) });
   try {
     const model = agentModel();
-    const res = await new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") }).messages.parse({
+    const res = await llm().messages.parse({
       model,
-      max_tokens: 800,
+      max_tokens: 1200,
       output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low" as const, format: zodOutputFormat(Schema) },
-      system: "You write YouTube searches that find pure B-roll footage of ONE exact product (any kind of product): no presenter, no talking. Return 3-5 searches, 3-8 words each, every one containing the exact model name plus strict B-roll terms and words for that product category, e.g. '<model> cinematic shots', '<model> close up b-roll', '<model> in action no talking', '<model> <typical action for this kind of product> cinematic', '<model> unboxing b-roll'. Never use 'best', 'top', 'vs', 'comparison', 'review'. Also return forbidden_keywords: extra single title words for this product that signal unwanted videos (talking/podcasts/repairs/comparisons/other models), in addition to Top, Best, Vs, Comparison, Compilation, Podcast, Fix, Repair, Maintenance, Review.",
+      system: "You write YouTube searches that find pure B-roll footage of ONE exact product (any kind of product): no presenter, no talking. Return 14-16 VARIED searches, 3-9 words each, every one containing the exact model name (or its model/part number), each from a different angle: camera angles (aerial/drone, low angle, close up, side profile, rear), real use cases and settings for this kind of product, colour/finish variants, model numbers and series names, and dealer/retailer/brand-channel demo footage (e.g. '<brand> dealer <model> walkaround b-roll'). Mix strict B-roll terms, e.g. '<model> cinematic shots', '<model> close up b-roll', '<model> in action no talking', '<model> <typical action for this kind of product> cinematic', '<model> unboxing b-roll'. Never use 'best', 'top', 'vs', 'comparison', 'review'. Also return forbidden_keywords: extra single title words for this product that signal unwanted videos (talking/podcasts/repairs/comparisons/other models), in addition to Top, Best, Vs, Comparison, Compilation, Podcast, Fix, Repair, Maintenance, Review.",
       messages: [{ role: "user", content: JSON.stringify({ product: name, category }) }],
     });
-    const q = (res.parsed_output?.queries ?? []).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 4 && !/\b(best|top|vs|comparison|review)\b/i.test(x)).slice(0, 5);
+    const q = (res.parsed_output?.queries ?? []).map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 4 && !/\b(best|top|vs|comparison|review)\b/i.test(x)).slice(0, 16);
     const nameWords = new Set(name.toLowerCase().split(/\s+/));
     const fb = (res.parsed_output?.forbidden_keywords ?? []).map((x) => x.trim()).filter((x) => x && x.length < 25 && !nameWords.has(x.toLowerCase())).slice(0, 12);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -95,6 +97,8 @@ export interface PoolShot {
   qaLabel?: string;
   /** Claude confirmed this shot shows the exact product (model). Only verified shots count as product footage. */
   verified?: boolean;
+  /** Vault shot cut around a spoken spec ("blades"): pacing prefers it on lines about that spec. */
+  keyword?: string;
 }
 
 /** Per-product pool result (<project>/product_pool_status.json), read by the timeline, review page and QA. */
@@ -110,7 +114,7 @@ export interface PoolStatus {
 /** Strict exact-model prompt for Claude (any product niche). */
 export function exactModelPrompt(name: string, category: string): string {
   const c = category || "product";
-  return `Footage that clearly shows the exact ${name} ${c} itself (in use, being handled, or a close-up of it). fits=true ONLY if you are confident this is the ${name} specifically: matching brand/model badge, logo, shape, colour and design. A different brand or model, a generic ${c} you cannot identify as the ${name}, a person talking to camera, a presenter looking at the camera, a messy mechanic garage/workshop or repair scene, packaging only, or no ${c} visible = fits false. Approve only clear pure product shots or cinematic action shots of this specific model. When unsure = fits false.`;
+  return `Footage that clearly shows the exact ${name} ${c} itself. fits=true ONLY if you are confident this is the ${name} specifically: matching brand/model badge, logo, shape, colour and design. fits=false for: a different brand or model; a generic ${c} you cannot identify as the ${name}; the underside, disassembled parts, exposed internals or blades of the ${c}; a garage, workshop, cluttered tools or any mechanic/repair setting; any person pointing, gesturing or explaining next to it (even not looking at camera), a talking head or presenter; maintenance (pouring oil, opening the engine/case, cleaning, repairing); packaging only; or no ${c} visible. Accept ONLY clean cinematic in-use action, clean outdoor/lifestyle shots, or professional studio b-roll of this specific model. When unsure = fits false.`;
 }
 
 /** Search rounds: the niche queries first, then expanded (brand+model, model only, category words, official/retailer). */
@@ -177,7 +181,7 @@ export function poolConfig(niche: Niche): PoolConfig {
   const p = ((niche as unknown as { productPool?: Partial<PoolConfig> }).productPool ?? {}) as Partial<PoolConfig>;
   return {
     enabled: env("PRODUCT_POOL", p.enabled === false ? "off" : p.enabled ? "on" : "off").toLowerCase() !== "off",
-    target: Number(env("PRODUCT_POOL_TARGET", String(p.target ?? 24))),
+    target: Number(env("PRODUCT_POOL_TARGET", String(Math.max(40, p.target ?? 40)))),
     maxPerUploader: Number(env("PRODUCT_POOL_PER_UPLOADER", String(p.maxPerUploader ?? 6))),
     maxShotSec: p.maxShotSec ?? 3,
     queries: p.queries ?? ["{name} review", "{name} range test", "{name} official"],
@@ -278,8 +282,9 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
     const tried = new Set<string>();
     // Sources in order: official/retailer (direct video links + product images), Haiku B-roll
     // searches, then the niche searches and expanded rounds.
-    const official = officialVideoLinks(channel, name);
-    await fetchRetailImages(channel, name, cfg.category, 6, log).catch((err) => log(`[retail] ${name}: skipped (${String(err).slice(0, 100)})`));
+    const browser = await browserProduct(channel, dir, name, cfg.category, log, body.map((s) => s.text).join(" ")).catch((err) => (log(`[browser] ${name}: skipped (${String(err).slice(0, 100)})`), { videos: [] as string[], summary: "" }));
+    const official = [...new Set([...officialVideoLinks(channel, name), ...browser.videos.slice(0, 10)])];
+    await fetchRetailImages(channel, name, cfg.category, Number(env("RETAIL_IMAGES_WANT", "16")), log).catch((err) => log(`[retail] ${name}: skipped (${String(err).slice(0, 100)})`));
     const plan = await llmBrollPlan(name, cfg.category, cfg.forbidden, log);
     const base = queryRounds(name, cfg);
     // Strict rounds (forbidden title words incl. "Review"), then a safeguard pass that allows
@@ -298,10 +303,32 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
         if (tried.has(q.toLowerCase())) continue;
         tried.add(q.toLowerCase());
         try {
-          for (const c of await searchWebCrawl(q, { pool: true, previews: round ? 4 : undefined, product: name, forbidden: round >= relaxedFrom ? plan.forbidden.filter((w) => w.toLowerCase() !== "review") : plan.forbidden })) if (!cands.has(c.id)) cands.set(c.id, c);
+          for (const c of await searchWebCrawl(q, { pool: true, previews: round ? Number(env("POOL_ROUND_PREVIEWS", "6")) : undefined, product: name, forbidden: round >= relaxedFrom ? plan.forbidden.filter((w) => w.toLowerCase() !== "review") : plan.forbidden })) if (!cands.has(c.id)) cands.set(c.id, c);
         } catch (err) {
           log(`[pool] ${name}: search "${q}" failed: ${String(err).slice(0, 120)}`);
         }
+      }
+      // Videos beyond YouTube search: Amazon product videos and Google/Bing video results for the exact
+      // model (python/product_web.py). Previewed like any web-crawl hit; the exact-model + strict vision
+      // check below decides. URLs are logged to <project>/web_video_sources.json.
+      if (round === 0 && env("PRODUCT_WEB_VIDEOS", "on").toLowerCase() !== "off") {
+        const vids = await productWebVideos(`${name} ${cfg.category}`.trim(), log);
+        const logF = path.join(dir, "web_video_sources.json");
+        const vlog: Record<string, unknown[]> = fs.existsSync(logF) ? JSON.parse(fs.readFileSync(logF, "utf8")) : {};
+        vlog[name] = [];
+        let added = 0;
+        for (const v of vids.slice(0, Number(env("PRODUCT_WEB_VIDEOS_MAX", "14")))) {
+          let ok = 0;
+          try {
+            for (const c of await searchWebCrawl(v.url, { pool: true, product: name })) if (!cands.has(c.id)) (cands.set(c.id, c), ok++);
+          } catch (err) {
+            log(`[pool] ${name}: web video ${v.url.slice(0, 80)} failed: ${String(err).slice(0, 100)}`);
+          }
+          added += ok;
+          vlog[name].push({ ...v, previewed: ok > 0, at: new Date().toISOString() });
+        }
+        fs.writeFileSync(logF, JSON.stringify(vlog, null, 1));
+        log(`[pool] ${name}: ${vids.length} Amazon/Google/Bing video result(s) -> ${added} previewed candidate(s) (${[...new Set(vids.map((v) => v.provider))].join(", ") || "none"})`);
       }
       if (round && cands.size === before) {
         log(`[pool] ${name}: round ${round + 1} found no new videos`);
@@ -313,8 +340,21 @@ export async function buildProductPools(scenes: Scene[], dir: string, channel: s
         if (!(c.frames ?? []).some((f) => fs.existsSync(f))) continue;
         const len = (c as Candidate & { shotLen?: number }).shotLen ?? c.duration ?? cfg.maxShotSec;
         if (len < 1.5) continue;
-        shots.push(Object.assign({ ...c }, { shotLen: Math.min(len, 6) }));
-        if (len >= 7) shots.push(Object.assign({ ...c, id: `${c.id}_b`, shotStart: (c.shotStart ?? 0) + len / 2, frames: (c.frames ?? []).slice(-2) }, { shotLen: len / 2 - 0.3 }));
+        // Long PySceneDetect shots are split into distinct sub-segments (~2.4 s each, max 8) so the
+        // timeline gets different moments of the same take instead of reusing one window.
+        const parts = len >= 3.6 ? Math.min(12, Math.floor(len / 1.8)) : 1;
+        if (parts === 1) {
+          shots.push(Object.assign({ ...c }, { shotLen: Math.min(len, 6) }));
+          continue;
+        }
+        const seg = len / parts;
+        const fr = c.frames ?? [];
+        for (let k = 0; k < parts; k++) {
+          const f0 = Math.floor((fr.length * k) / parts);
+          const f1 = Math.max(f0 + 1, Math.floor((fr.length * (k + 1)) / parts));
+          const frames = fr.length ? fr.slice(f0, f1) : fr;
+          shots.push(Object.assign({ ...c, id: k ? `${c.id}_${String.fromCharCode(97 + k)}` : c.id, shotStart: (c.shotStart ?? 0) + seg * k, frames: frames.length ? frames : fr }, { shotLen: Math.max(1.5, seg - 0.3) }));
+        }
       }
       log(`[pool] ${name}: ${shots.length} shots from ${new Set(shots.map((c) => c.pageUrl)).size} videos, ${refs.length} reference photo(s)`);
       if (!shots.length) continue;

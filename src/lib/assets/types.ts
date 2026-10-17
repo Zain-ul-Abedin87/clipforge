@@ -1,5 +1,5 @@
 /** Where a clip or photo came from (tier order is decided by the niche rule set). */
-export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive" | "youtube_cc" | "web_cc" | "storyblocks" | "web_crawl";
+export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive" | "youtube_cc" | "web_cc" | "storyblocks" | "web_crawl" | "youtube_exact_model";
 
 /** assets.json contract: {scene_id: {path,source,license,url}} plus what the renderer needs. */
 export interface Asset {
@@ -21,6 +21,8 @@ export interface Asset {
   note?: string;
   /** CLIP similarity between the scene and the chosen clip's thumbnail (higher = better match). */
   match?: number;
+  /** Exact-model check of the source title against the scene's product (src/lib/productResearch.ts). */
+  modelCheck?: "match" | "conflict" | "needs_review" | "unverified";
 }
 
 export type Assets = Record<string, Asset>;
@@ -48,4 +50,6 @@ export interface Candidate {
   frames?: string[];
   /** Seconds into the remote source where this shot starts (web_crawl: only this part is fetched in HD). */
   shotStart?: number;
+  /** Licence class from the ledger rules (set by searchProvider), shown next to swap options. */
+  licenseClass?: string;
 }

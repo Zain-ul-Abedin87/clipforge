@@ -15,6 +15,9 @@ import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
 import { exactModelPrompt, productRegions, readPoolStatus, readProductPool } from "../lib/assets/productPool.js";
 import { verifyCandidates, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
 import { loadProjectNiche } from "../lib/niche.js";
+import { microPlanFile, readMicroPlan } from "../lib/planner/activeSubject.js";
+import { fromLegacyTimeline, LegacyTimeline } from "../domain/timeline.types.js";
+import { V3_FILE, writeTimelineV3 } from "../lib/compiler/timelineCompiler.js";
 import { env } from "../lib/env.js";
 import { applyRemotionCards } from "../lib/render/remotionCards.js";
 import { filterPoolByShotQa } from "../lib/assets/shotQa.js";
@@ -23,6 +26,7 @@ import { extractFacts, readFacts, type Facts } from "../lib/facts.js";
 import { buildChapters, writeChapters } from "../lib/chapters.js";
 import { cardPreset, pacingTarget, themeOf } from "../lib/stylePreset.js";
 import { placeChapterGraphics } from "../lib/render/productGraphics.js";
+import { parallaxStills, prepareSpecVisuals } from "../lib/render/specVisuals.js";
 import { reapplySwaps } from "../lib/sceneReview.js";
 
 export const FPS = 30;
@@ -89,12 +93,13 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     scenes: fingerprint(files[0]),
     assets: fingerprint(files[1]),
     style: fingerprint(path.join(chDir, "style.json")),
-    music: musicFiles(chDir, style).join("|"),
+    music: musicEnabled(style, loadProjectNiche(project, style)) ? musicFiles(chDir, style).join("|") : "off",
     sections: fingerprint(path.join(dir, "sections.json")),
     graphicsVersion: "mg-5-chapters",
     cardsPreset: JSON.stringify(style.cards ?? null) + JSON.stringify(style.pacing ?? null),
     facts: fingerprint(path.join(dir, "facts.json")),
     swaps: fingerprint(path.join(dir, "review_swaps.json")),
+    micro: fingerprint(microPlanFile(dir)),
     shotQa: env("SHOT_QA", "on") + "shotqa-1" + env("CARDS", "on"),
     // Spec chips come from web research saved in the press kit.
     specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
@@ -103,7 +108,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     pool: fingerprint(path.join(dir, "product_pool.json")) + fingerprint(path.join(dir, "product_pool_status.json")),
     aligned: fingerprint(path.join(dir, "aligned.json")),
   };
-  if (!opts.force && isCached(dir, "timeline", inputs, ["timeline.json"])) {
+  if (!opts.force && isCached(dir, "timeline", inputs, ["timeline.json", V3_FILE])) {
     log(`[timeline] cached -> ${path.join(dir, "timeline.json")} (use --force to redo)`);
     return 0;
   }
@@ -163,6 +168,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       photosOf: (p) => productPhotos(channel, p),
       mix: nicheCfg.productPool?.mix,
       maxStockShare: Number(env("MAX_STOCK_SHARE", "0.2")),
+      micro: readMicroPlan(dir)?.scenes.map((m) => ({ sceneId: m.sceneId, startFrame: m.startFrame, endFrame: m.endFrame, spec: m.subject.spec?.spec })),
     });
     const status = readPoolStatus(dir);
     const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
@@ -172,7 +178,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   }
   if (motionCfg.graphics && preset.set.size) {
     const blank = path.join(dir, "graphics", "blank.png");
-    placeChapterGraphics(tl, scenes, chapters, facts, preset, blank, log);
+    const visuals = await prepareSpecVisuals(dir, facts, (p) => productPhotos(channel, p), log).catch((e) => (log(`[spec-visuals] failed: ${String(e).slice(0, 140)}`), undefined));
+    placeChapterGraphics(tl, scenes, chapters, facts, preset, blank, log, visuals);
     // Card set from the channel preset; the theme (colours, font) goes to every card.
     for (const t of tl) for (const l of t.overlays ?? []) {
       if (!l.card) continue;
@@ -180,6 +187,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       else if (preset.custom) l.card.props = { ...l.card.props, theme: themeOf(preset) };
     }
   }
+  // Verified product stills -> 2.5D parallax + light sweep clips (Remotion), before the cards render.
+  await parallaxStills(tl, log).catch((e) => log(`[parallax] failed: ${String(e).slice(0, 140)}`));
   // Animated Remotion cards (cards/) replace the drawtext PNGs; any card that fails keeps its PNG.
   if (motionCfg.graphics) await applyRemotionCards(tl, log);
   // New product graphics have no drawtext version: drop them when Remotion did not render them.
@@ -193,7 +202,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     height: res.height ?? 1080,
     duration: scenes[scenes.length - 1].end,
     voice: project.audio,
-    music: { files: musicFiles(chDir, style), volumeDb: music.volumeDb ?? -18, duckDb: music.duckDb ?? -10 },
+    music: { files: musicEnabled(style, loadProjectNiche(project, style)) ? musicFiles(chDir, style) : [], volumeDb: music.volumeDb ?? -18, duckDb: music.duckDb ?? -10 },
     motion: motionCfg,
     logo: logoOf(style),
     captions: {
@@ -208,16 +217,31 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     scenes: tl,
   };
   writeJson(path.join(dir, "timeline.json"), out);
+  // Multi-track v3 timeline (rational time) for the renderer and the editor: same cut, plus each
+  // scene's narration and the subject the micro-scene plan locked for it.
+  const micro = readMicroPlan(dir);
+  const subjectOf = (id: number) => {
+    const pieces = micro?.scenes.filter((m) => m.sceneId === id) ?? [];
+    return (pieces.find((m) => m.subject.productKey) ?? pieces[0])?.subject;
+  };
+  const v3 = fromLegacyTimeline(out as unknown as LegacyTimeline, Object.fromEntries(scenes.map((s) => [s.id, s.text])));
+  for (const sb of v3.scenes) sb.subject = subjectOf(sb.id) ?? sb.subject;
+  writeTimelineV3(dir, v3);
   markDone(dir, "timeline", inputs);
   const moves = tl.reduce<Record<string, number>>((m, s) => ((m[s.motion] = (m[s.motion] ?? 0) + 1), m), {});
   log(`[timeline] ${tl.length} scenes, ${(out.duration / 60).toFixed(1)} min, motions ${JSON.stringify(moves)}`);
-  log(`[timeline] music: ${out.music.files.length ? out.music.files.map((f) => path.basename(f)).join(", ") : "none (add files to channels/" + channel + "/music)"}`);
+  log(`[timeline] music: ${out.music.files.length ? out.music.files.map((f) => path.basename(f)).join(", ") : musicEnabled(style, loadProjectNiche(project, style)) ? "none (add files to channels/" + channel + "/music)" : "off (style.json music.enabled is not true)"}`);
   log(`[timeline] captions: ${out.captions.enabled ? "on" : "off"}`);
   const ov = tl.reduce((n, s) => n + (s.overlays?.length ?? 0), 0);
   const fx = tl.reduce((n, s) => n + (s.sfx?.length ?? 0), 0);
   log(`[timeline] motion graphics: ${motionCfg.graphics ? `${ov} animated layers, ${fx} sound effects` : "off"}`);
   log(`[timeline] wrote ${path.join(dir, "timeline.json")}`);
   return 0;
+}
+
+/** Background music is opt-in: style.json music.enabled must be true and the niche must not switch it off. */
+export function musicEnabled(style: Record<string, unknown>, niche?: { music?: { enabled?: boolean } } | null): boolean {
+  return (style.music as { enabled?: unknown } | undefined)?.enabled === true && niche?.music?.enabled !== false;
 }
 
 function musicFiles(chDir: string, style: Record<string, unknown>): string[] {

@@ -16,3 +16,6 @@ fastembed>=0.4
 # Shot splitting for web_crawl candidates (python/split_shots.py).
 scenedetect>=0.6.4
 opencv-python-headless>=4.8
+
+# Fallback technical diagrams (src/lib/agents/generative/manimAgent.ts)
+manim==0.19.0

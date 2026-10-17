@@ -6,6 +6,7 @@ import { env, hasKey } from "../lib/env.js";
 import { netFetch } from "../lib/net.js";
 import { paths } from "../lib/paths.js";
 import { agentModel } from "../lib/agent/footage.js";
+import { llm, llmAvailable } from "../lib/agents/llm/llm.js";
 
 /**
  * Stock B-roll helpers from the repo study:
@@ -158,11 +159,11 @@ export async function searchTermsForLines(subject: string, lines: { id: number; 
     for (const l of lines) out.set(l.id, [subject]);
     return out;
   };
-  if (!hasKey("ANTHROPIC_API_KEY")) return fallback();
+  if (!llmAvailable()) return fallback();
   const model = agentModel();
   try {
     const res = await cached(`terms-v1:${model}:${subject}:${JSON.stringify(lines)}`, 30 * 86400_000, async () => {
-      const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+      const client = llm();
       const msg = await client.messages.create({
         model,
         max_tokens: 4000,

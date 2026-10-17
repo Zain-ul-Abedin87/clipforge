@@ -1,0 +1,60 @@
+/* Block-based multi-track editor (web/editor.html). Uses the tokens from style.css. */
+body.ed { display: grid; grid-template-rows: auto minmax(220px, 1fr) auto; height: 100vh; overflow: hidden; }
+.ed-top { display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ed-back { color: var(--muted); text-decoration: none; }
+.ed-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; }
+.ed-main { display: grid; grid-template-columns: 1fr minmax(280px, 360px); min-height: 0; }
+.ed-preview { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; min-height: 0; }
+.ed-stage { position: relative; width: min(100%, 640px); aspect-ratio: 16 / 9; background: #000; border-radius: 8px; display: grid; place-items: center; overflow: hidden; }
+.ed-stage > * { grid-area: 1 / 1; }
+.ed-stage video, .ed-stage img { width: 100%; height: 100%; object-fit: cover; }
+.ed-stage video[hidden], .ed-stage img[hidden] { display: none; }
+.ed-card { align-self: end; justify-self: start; margin: 0 0 12px 12px; padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; }
+.ed-stage.fade video, .ed-stage.fade img { animation: ed-fade .5s ease-out; }
+.ed-stage.flash::after { content: ""; position: absolute; inset: 0; background: #fff; animation: ed-flash .3s ease-out forwards; }
+@keyframes ed-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ed-flash { from { opacity: .9; } to { opacity: 0; } }
+.ed-sep { width: 1px; height: 20px; background: var(--line); }
+.ed-range { position: absolute; top: 0; bottom: 0; background: rgba(229, 83, 83, .18); border-left: 2px solid #e55353; border-right: 2px solid #e55353; pointer-events: none; z-index: 2; }
+.ed-range.open { border-right: none; }
+.ed-trans { display: flex; gap: 4px; }
+.ed-trans .btn.on { outline: 2px solid var(--accent); }
+.ed-scene .tr { color: var(--accent); margin-right: 3px; }
+.ed-scene-text { max-width: 640px; text-align: center; }
+.ed-inspector { border-left: 1px solid var(--line); background: var(--panel); padding: 12px; overflow-y: auto; }
+.ed-inspector h3 { margin: 0 0 6px; font-size: 15px; }
+.ed-inspector .row { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.ed-inspector dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin: 6px 0; }
+.ed-inspector dt { color: var(--muted); }
+.ed-inspector input[type=text] { width: 100%; box-sizing: border-box; }
+.ed-cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; margin-top: 6px; }
+.ed-cand { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px; cursor: pointer; font-size: 10px; color: var(--muted); text-align: left; }
+.ed-cand:hover { border-color: var(--accent); }
+.ed-cand img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; display: block; background: #000; }
+.ed-cand.used { opacity: .5; }
+.ed-job { font-size: 11px; white-space: pre-wrap; max-height: 140px; overflow: auto; background: var(--bg); border-radius: 6px; padding: 6px; }
+
+.ed-timeline-wrap { display: grid; grid-template-columns: 96px 1fr; border-top: 1px solid var(--line); background: var(--panel); height: 300px; }
+.ed-labels { padding-top: 46px; }
+.ed-labels div { height: 44px; display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.ed-scroll { overflow-x: auto; overflow-y: hidden; position: relative; }
+.ed-canvas { position: relative; height: 100%; }
+.ed-ruler { position: relative; height: 22px; border-bottom: 1px solid var(--line); cursor: ew-resize; }
+.ed-ruler span { position: absolute; top: 3px; font-size: 10px; color: var(--muted); padding-left: 3px; border-left: 1px solid var(--line); }
+.ed-scenes { position: relative; height: 24px; border-bottom: 1px solid var(--line); }
+.ed-scene { position: absolute; top: 2px; height: 20px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); font-size: 10px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 2px 4px; box-sizing: border-box; }
+.ed-scene.dirty { border-color: var(--accent); color: var(--accent); }
+.ed-track { position: relative; height: 44px; border-bottom: 1px solid var(--line); }
+.ed-block { position: absolute; top: 4px; height: 36px; border-radius: 5px; box-sizing: border-box; overflow: hidden; cursor: pointer; font-size: 10px; color: #fff; display: flex; align-items: center; gap: 4px; user-select: none; border: 1px solid rgba(255,255,255,.12); }
+.ed-block img { height: 100%; aspect-ratio: 16 / 9; object-fit: cover; flex: none; pointer-events: none; }
+.ed-block span { padding: 0 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
+.ed-block.video { background: var(--stock); }
+.ed-block.video.verified { background: #2f6f53; }
+.ed-block.overlay { background: var(--graphic); }
+.ed-block.sfx { background: #a2593a; }
+.ed-block.audio { background: #3b4552; }
+.ed-block.selected { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 2; }
+.ed-block.locked::after { content: "🔒"; position: absolute; right: 2px; top: 1px; font-size: 9px; }
+.ed-handle { position: absolute; right: 0; top: 0; width: 7px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,.18); }
+.ed-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; z-index: 3; }

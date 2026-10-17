@@ -5,6 +5,7 @@ import { env, hasKey } from "../env.js";
 import { GRAPHIC_KINDS, Graphic, Scene, SCENE_TYPES, Section, SceneType } from "../scenes.js";
 import type { Span } from "./structure.js";
 import { Niche, nicheHints } from "../niche.js";
+import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
 
 const STOP = new Set(
   "the a an and or but if then this that these those it its is are was were be been being of to in on for with as at by from up out over into about than very really just also can will would could should has have had do does did not no so too our your their they them we you he she his her my me i one some any all more most such only own same other which who whom what when where why how there here".split(" "),
@@ -176,16 +177,17 @@ export async function llmLabels(
   log: (msg: string) => void,
   niche: Niche,
 ): Promise<{ scenes: Scene[]; inputTokens: number; outputTokens: number } | null> {
-  if (!hasKey("ANTHROPIC_API_KEY")) return null;
-  const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+  if (!llmAvailable()) return null;
+  const client = llm();
   const model = env("LLM_MODEL", "claude-opus-5-5");
 
-  // Batch whole sections together, ~60 scenes per request.
+  // Batch whole sections together, ~60 scenes per request (fewer for a local model).
+  const size = batchSize(60);
   const batches: number[][] = [];
   let cur: number[] = [];
   for (let i = 0; i < spans.length; i++) {
     const newSection = i > 0 && spans[i].section !== spans[i - 1].section;
-    if (cur.length >= 60 || (newSection && cur.length >= 40)) {
+    if (cur.length >= size || (newSection && cur.length >= Math.round(size * 0.67))) {
       batches.push(cur);
       cur = [];
     }

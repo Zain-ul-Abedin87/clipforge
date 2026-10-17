@@ -1,3 +1,4 @@
+import { env } from "./env.js";
 import type { Scene } from "./scenes.js";
 import type { Niche } from "./niche.js";
 import { movingShare } from "./assets/shotQa.js";
@@ -32,6 +33,8 @@ export interface SubShot {
   reused?: boolean;
   /** Exact-model verified product footage (pool shot or checked product photo). */
   verified?: boolean;
+  /** Visual variation applied by the renderer when a verified moment is reused. */
+  variant?: "mirror" | "punch" | "mirror_punch";
 }
 
 /** On-screen share per product chapter (seconds), written to <project>/footage_share.json by the timeline. */
@@ -143,11 +146,21 @@ export function sourceKey(path: string, url?: string): string {
 export class ShotLedger {
   used: { key: string; a: number; b: number; scene: number }[] = [];
   forced: string[] = [];
+  /** Timeline second (end) of the last on-screen use of each source key. */
+  lastAt = new Map<string, number>();
+  times = new Map<string, number[]>();
+  /** Timeline clock set by applyPacing before every pick. */
+  now = 0;
+  gapOk(key: string, gap: number): boolean {
+    return (this.times.get(key) ?? []).every((t) => Math.abs(this.now - t) >= gap);
+  }
   free(key: string, a: number, b: number): boolean {
     return !this.used.some((u) => u.key === key && a < u.b - 0.05 && b > u.a + 0.05);
   }
   take(key: string, a: number, b: number, scene: number): void {
     this.used.push({ key, a, b, scene });
+    this.lastAt.set(key, this.now);
+    this.times.set(key, [...(this.times.get(key) ?? []), this.now]);
   }
   /** First free window of length `need` in [0, dur) (step 0.25 s), or undefined. */
   window(key: string, dur: number, need: number, prefer = 0): number | undefined {
@@ -167,11 +180,19 @@ export function applyPacing(
   pool: PoolShot[],
   cfg: PacingConfig,
   log: (m: string) => void,
-  opts: { photosOf?: (product: string) => string[]; mix?: Record<string, number>; maxStockShare?: number } = {},
+  opts: {
+    photosOf?: (product: string) => string[];
+    mix?: Record<string, number>;
+    maxStockShare?: number;
+    /** micro_scenes.json: frame-exact 2.5-4 s cut points + the spec each piece talks about. */
+    micro?: { sceneId: number; startFrame: number; endFrame: number; spec?: string }[];
+  } = {},
 ): ChapterShare[] {
   // Only exact-model verified pool shots count as (and may be used as) product footage.
   pool = pool.filter(isVerifiedShot);
   const maxStock = opts.maxStockShare ?? 0.2;
+  /** Spec the current micro-scene names; pool shots cut around the same spoken spec win. */
+  let curSpec: string | undefined;
   const FPS = 30;
   const regions = productRegions(scenes);
   const productOf = new Map<number, string>();
@@ -187,6 +208,7 @@ export function applyPacing(
     return undefined;
   };
   const ledger = new ShotLedger();
+  let prevKeyNow: string | undefined;
   const lastUp: (string | undefined)[] = [];
   const typeUse = new Map<string, Map<string, number>>();
   const mixSum = Object.values(opts.mix ?? {}).reduce((a, b) => a + b, 0);
@@ -217,24 +239,57 @@ export function applyPacing(
     if (pr && !t.backdrop && t.asset.source !== "graphic" && scenes[i].type !== "graphic") chapterFrames.set(pr, (chapterFrames.get(pr) ?? 0) + (t.endFrame - t.startFrame));
   });
   /** Verified product shot reused at a different moment when every free window is taken (never stock). */
-  const reusePick = (product: string, need: number, scId: number): SubShot | undefined => {
+  const REUSE_GAP = Number(process.env.REUSE_GAP_SEC ?? 30);
+  let reusedCount = 0;
+  let reusedSec = 0;
+  /**
+   * Verified product shot reused when every free window is taken (never stock). Rules: a source
+   * is not reused within REUSE_GAP s of its last use (relaxed only if nothing else is left), never
+   * the same source back-to-back, the in-point is as far as possible from used moments, and every
+   * reuse gets a visual variation (mirror / punch-in crop).
+   */
+  const reusePick = (product: string, need: number, scId: number, prevKey: string | undefined, strictGap: boolean): SubShot | undefined => {
     const shots = pool.filter((p) => p.product === product && p.duration >= Math.min(need, 1.2));
     if (!shots.length) return undefined;
-    const usedOf = (p: PoolShot) => ledger.used.filter((u) => u.key === (p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url))).length;
-    const p = [...shots].sort((x, y) => usedOf(x) - usedOf(y) || (x.author === lastUp[lastUp.length - 1] ? 1 : 0) - (y.author === lastUp[lastUp.length - 1] ? 1 : 0))[0];
+    const keyOf = (p: PoolShot) => (p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url));
+    const usedOf = (p: PoolShot) => ledger.used.filter((u) => u.key === keyOf(p));
+    const ok = shots.filter((p) => keyOf(p) !== prevKey && (!strictGap || ledger.gapOk(keyOf(p), REUSE_GAP)));
+    if (!ok.length) return undefined;
+    const sinceLast = (p: PoolShot) => ledger.now - (ledger.lastAt.get(keyOf(p)) ?? -1e6);
+    const p = [...ok].sort((x, y) => usedOf(x).length - usedOf(y).length || sinceLast(y) - sinceLast(x) || (x.author === lastUp[lastUp.length - 1] ? 1 : 0) - (y.author === lastUp[lastUp.length - 1] ? 1 : 0))[0];
     const len = Math.min(need, p.duration);
-    const local = p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url);
-    const at = Math.max(0, Math.min(p.duration - len, ((usedOf(p) * 0.9) % Math.max(0.01, p.duration - len + 0.01))));
-    ledger.take(local, (p.srcStart ?? 0) + at, (p.srcStart ?? 0) + at + len, scId);
+    const local = keyOf(p);
+    const base = p.srcStart ?? 0;
+    // In-point farthest from the starts already shown of this source.
+    const starts = usedOf(p).map((u) => u.a - base);
+    let at = 0;
+    let bestD = -1;
+    for (let t = 0; t + len <= p.duration + 0.01; t += 0.25) {
+      const d = starts.length ? Math.min(...starts.map((x) => Math.abs(x - t))) : 99;
+      if (d > bestD) { bestD = d; at = t; }
+    }
+    const n = usedOf(p).length;
+    const variant = (["mirror", "punch", "mirror_punch"] as const)[(n - 1 + 3) % 3];
+    ledger.take(local, base + at, base + at + len, scId);
     lastUp.push(p.author);
-    return { path: p.path, kind: "video", in: Math.round(at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + at, shotType: p.shotType, verified: true, reused: true };
+    reusedCount++;
+    reusedSec += len;
+    return { path: p.path, kind: "video", in: Math.round(at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: base + at, shotType: p.shotType, verified: true, reused: true, variant };
   };
-  const poolPick = (product: string, need: number, scId: number): SubShot | undefined => {
+  /** A verified product photo shown again (Ken Burns), only after REUSE_GAP s and not back-to-back. */
+  const photoReuse = (product: string, scId: number, prevKey: string | undefined): SubShot | undefined => {
+    const list = opts.photosOf?.(product) ?? [];
+    const ph = list.filter((f) => sourceKey(f) !== prevKey && ledger.gapOk(sourceKey(f), REUSE_GAP)).sort((x, y) => (ledger.lastAt.get(sourceKey(x)) ?? -1e6) - (ledger.lastAt.get(sourceKey(y)) ?? -1e6))[0];
+    if (!ph) return undefined;
+    ledger.take(sourceKey(ph), 0, STILL, scId);
+    return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true, reused: true };
+  };
+  const poolPick = (product: string, need: number, scId: number, avoid?: string): SubShot | undefined => {
     const shots = pool.filter((p) => p.product === product); // never another product's shots
     const tu = typeUse.get(product) ?? new Map<string, number>();
     const tot = [...tu.values()].reduce((a, b) => a + b, 0) + 1;
     const want = (p: PoolShot) => (mixSum > 0 ? ((opts.mix![p.shotType ?? ""] ?? 0) / mixSum) * tot - (tu.get(p.shotType ?? "") ?? 0) : 0);
-    const fit = (p: PoolShot) => 2 * p.imgSim + (p.sceneSim[String(scId)] ?? p.textSim);
+    const fit = (p: PoolShot) => 2 * p.imgSim + (p.sceneSim[String(scId)] ?? p.textSim) + (curSpec && p.keyword === curSpec ? 1.5 : 0);
     const opts2: { p: PoolShot; at: number; score: number }[] = [];
     for (const p of shots) {
       if (p.duration < need - 0.05) continue; // shorter shots would loop (a visible repeat)
@@ -242,6 +297,7 @@ export function applyPacing(
       const key = sourceKey(p.path, p.url);
       const base = p.srcStart ?? 0;
       const local = p.srcStart === undefined ? sourceKey(p.path) : key;
+      if (avoid && local === avoid) continue; // never the same source back-to-back
       // Free window inside this HD file, measured in source-video time.
       // Prefer a free window that moves (auto-editor motion score, python/motion_score.py); a
       // static window is only used when nothing else is free (-0.4).
@@ -271,7 +327,7 @@ export function applyPacing(
   };
   const photoPick = (product: string, scId: number, prefer?: string): SubShot | undefined => {
     const list = [...(prefer ? [prefer] : []), ...(opts.photosOf?.(product) ?? [])];
-    const ph = list.find((f) => ledger.free(sourceKey(f), 0, STILL));
+    const ph = list.find((f) => ledger.free(sourceKey(f), 0, STILL) && sourceKey(f) !== prevKeyNow);
     if (!ph) return undefined;
     ledger.take(sourceKey(ph), 0, STILL, scId);
     return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true };
@@ -283,9 +339,9 @@ export function applyPacing(
     ledger.take(key, at, at + need, scId);
     return { path, kind: "video", in: at, frames: 0, source, key, srcIn: at };
   };
-  const genericPick = (need: number, scId: number): SubShot | undefined => {
-    // The generic clip with the most unused time left.
-    const ranked = [...generic.values()].sort((x, y) => {
+  const genericPick = (need: number, scId: number, avoid?: string): SubShot | undefined => {
+    // The generic clip with the most unused time left (never the source shown right before).
+    const ranked = [...generic.values()].filter((g) => sourceKey(g.path) !== avoid).sort((x, y) => {
       const left = (g: { path: string; duration: number }) => g.duration - ledger.used.filter((u) => u.key === sourceKey(g.path)).reduce((s, u) => s + (u.b - u.a), 0);
       return left(y) - left(x);
     });
@@ -299,6 +355,8 @@ export function applyPacing(
   let totalShots = 0;
   let poolShots = 0;
   const carry = { v: 0 };
+  let lastKey: string | undefined;
+  let genericProductShots = 0;
   const order = [...tl.keys()].sort((x, y) => Number(!!tl[x].backdrop) - Number(!!tl[y].backdrop)); // cards over footage last
   for (const i of order) {
     const t = tl[i];
@@ -318,16 +376,22 @@ export function applyPacing(
     const mentioned = product ? undefined : names.find((n) => lower.includes(n.toLowerCase()) || (n.split(/\s+/).length > 1 && lower.includes(n.split(/\s+/).slice(1).join(" ").toLowerCase())));
     const st = productOf.has(sc.id) && !t.backdrop ? sentenceType(sc.text, firstSceneOf.has(sc.id)) : "other";
     if (productOf.has(sc.id) && !t.backdrop) sentenceStats[st] = (sentenceStats[st] ?? 0) + 1;
-    const cuts = cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
+    // Micro-scene plan (fast niches): its frame-exact boundaries are the cuts; else word-snapped pacing.
+    const micro = opts.micro?.filter((m) => m.sceneId === sc.id);
+    const cuts = micro?.length ? micro.slice(1).map((m) => m.startFrame / FPS).filter((c) => c > start && c < end) : cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
     const bounds = [start, ...cuts, end];
     const frames = bounds.slice(1).map((b, k) => Math.round(b * FPS) - Math.round(bounds[k] * FPS));
     const subs: SubShot[] = [];
     frames.forEach((f, k) => {
       const need = f / FPS;
+      ledger.now = bounds[k];
+      curSpec = micro?.find((m) => Math.abs(m.startFrame / FPS - bounds[k]) < 0.02)?.spec;
+      const prevKey = subs.length ? subs[subs.length - 1].key : lastKey;
+      prevKeyNow = prevKey;
       let s: SubShot | undefined;
       // Price / product-intro lines open on an unused product photo.
       if (!s && k === 0 && product && (st === "price" || st === "product_intro")) s = photoPick(product, sc.id, undefined);
-      if (!s && product) s = poolPick(product, need, sc.id);
+      if (!s && product) s = poolPick(product, need, sc.id, prevKey);
       if (!s && product) s = photoPick(product, sc.id, undefined);
       // Product chapter, pool used up: stock only within the chapter's stock budget, else reuse
       // another moment of a verified source video. Never fill a product chapter with stock silently.
@@ -337,16 +401,31 @@ export function applyPacing(
           s = genericPick(need, sc.id);
           if (s) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
         }
-        if (!s) s = reusePick(product, need, sc.id);
+        // Reuse order: another verified moment after the gap, a verified photo (Ken Burns), then
+        // any non-adjacent verified moment.
+        if (!s) s = reusePick(product, need, sc.id, prevKey, true);
+        if (!s) s = photoReuse(product, sc.id, prevKey);
+        if (!s) s = reusePick(product, need, sc.id, prevKey, false);
       }
-      if (!s && product && t.backdrop) s = reusePick(product, need, sc.id);
-      if (!s && mentioned && !t.backdrop) s = poolPick(mentioned, need, sc.id);
-      if (!s && !product && a.kind === "video" && !t.backdrop) s = clipPick(a.path, a.duration ?? need, a.source, need, (a.in ?? 0) + k * (need + 0.8), sc.id);
-      if (!s && !product && a.kind === "image" && !t.backdrop && ledger.free(sourceKey(a.path), 0, STILL)) {
-        ledger.take(sourceKey(a.path), 0, STILL, sc.id);
-        s = { path: a.path, kind: "image", in: 0, frames: 0, source: a.source, key: sourceKey(a.path), srcIn: 0 };
+      if (!s && product && t.backdrop) s = reusePick(product, need, sc.id, prevKey, true) ?? photoReuse(product, sc.id, prevKey) ?? reusePick(product, need, sc.id, prevKey, false);
+      if (!s && mentioned && !t.backdrop) s = poolPick(mentioned, need, sc.id, prevKey);
+      // Generic (non-product) scene: never the same source back-to-back. Own clip -> own still ->
+      // other generic clips -> unused verified b-roll of ANY product -> spaced verified reuse.
+      const ownKey = sourceKey(a.path);
+      if (!s && !product && a.kind === "video" && !t.backdrop && ownKey !== prevKey) s = clipPick(a.path, a.duration ?? need, a.source, need, (a.in ?? 0) + k * (need + 0.8), sc.id);
+      if (!s && !product && a.kind === "image" && !t.backdrop && ownKey !== prevKey && ledger.free(ownKey, 0, STILL)) {
+        ledger.take(ownKey, 0, STILL, sc.id);
+        s = { path: a.path, kind: "image", in: 0, frames: 0, source: a.source, key: ownKey, srcIn: 0 };
       }
-      if (!s && !product) s = genericPick(need, sc.id);
+      if (!s && !product) s = genericPick(need, sc.id, prevKey);
+      if (!s && !product && env("GENERIC_PRODUCT_BROLL", "on") !== "off") {
+        const order = [...names].sort((x, y) => pool.filter((p) => p.product === y).length - pool.filter((p) => p.product === x).length);
+        for (const n of order) if (!s) { s = poolPick(n, need, sc.id, prevKey); }
+        for (const n of order) if (!s) s = reusePick(n, need, sc.id, prevKey, true);
+        for (const n of order) if (!s) s = photoReuse(n, sc.id, prevKey);
+        for (const n of order) if (!s) s = reusePick(n, need, sc.id, prevKey, false);
+        if (s) genericProductShots++;
+      }
       if (!s && product && !t.backdrop && (stockFrames.get(product) ?? 0) + f <= (chapterFrames.get(product) ?? 0) * maxStock) {
         s = genericPick(need, sc.id);
         if (s) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
@@ -363,6 +442,7 @@ export function applyPacing(
       subs.push(s);
     });
     a.shots = subs;
+    if (subs.length) lastKey = subs[subs.length - 1].key;
     (t as TlScene & { sentence?: string }).sentence = st;
     totalShots += subs.length;
   }
@@ -414,6 +494,8 @@ export function applyPacing(
     if (tu) log(`[pacing] ${n}: pool shot types used ${JSON.stringify(Object.fromEntries(tu))}`);
   }
   log(`[pacing] sentence types (product scenes): ${JSON.stringify(sentenceStats)}`);
+  log(`[pacing] generic scenes: ${genericProductShots} shot(s) filled with verified product b-roll instead of a repeat`);
+  log(`[pacing] reuse: ${reusedCount} reused verified moment(s), ${reusedSec.toFixed(1)} s (gap >= ${REUSE_GAP} s preferred, mirror/punch-in variants)`);
   log(`[pacing] footage ledger: ${ledger.used.length} segments, ${ledger.forced.length} forced reuse(s)${ledger.forced.length ? ": " + ledger.forced.join("; ") : ""}`);
   log(`[pacing] ${totalShots} shots (${poolShots} from product pools), avg ${(dur / totalShots).toFixed(2)} s, ${((totalShots - 1) / (dur / 60)).toFixed(1)} cuts/min, ${flashes} product-boundary flash(es)`);
   return shares;

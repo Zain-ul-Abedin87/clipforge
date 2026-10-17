@@ -7,7 +7,7 @@ import { indexFolder, LocalItem, matchLocal, tokens } from "../lib/assets/local.
 import { searchTermsForLines, titleTheme } from "../footage/stock.js";
 import { downloadStock, downloadThumb, RateLimited, searchPexels, searchPixabay } from "../lib/assets/stock.js";
 import { downloadWikimedia, searchWikimedia } from "../lib/assets/wikimedia.js";
-import { downloadCandidate, nicheProviders, RateLimited as ProviderRateLimited, searchProvider, StockProvider } from "../lib/assets/sources.js";
+import { downloadCandidate, genericStockAllowed, nicheProviders, RateLimited as ProviderRateLimited, searchProvider, StockProvider } from "../lib/assets/sources.js";
 import { applyOverrides, CandidateFile, makeThumb, saveCandidates, writeLicenseLog } from "../lib/assets/review.js";
 import type { Asset, Assets, Candidate } from "../lib/assets/types.js";
 import { paths } from "../lib/paths.js";
@@ -27,6 +27,12 @@ import { loadStyle } from "../lib/style.js";
 import { FOOTAGE_MODE_LABELS, footageMode, isBlocked, loadProjectNiche, nicheFingerprintPath, nicheHints } from "../lib/niche.js";
 import { ffmpegPath, venvPythonPath } from "../lib/tools.js";
 import { buildProductPools, exactModelPrompt, poolConfig, productRegions } from "../lib/assets/productPool.js";
+import { readLedger, reusePenalty, writeLedger } from "../lib/assets/licenseLedger.js";
+import { ensureProductRecords, verifyModelMatch } from "../lib/productResearch.js";
+import { findVaultFor, listVaults, VaultItem, vaultCandidate, vaultPoolShots } from "../lib/agents/youtube/ytExtractor.js";
+import { autoFetchEnabled, diagramPoolShots, ensureFootage, readDiagrams } from "../lib/agents/autoFetch.js";
+import { readMicroPlan } from "../lib/planner/activeSubject.js";
+import type { SpecVisualTag } from "../domain/product.types.js";
 
 export interface AssetsOpts {
   project: string;
@@ -99,10 +105,18 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     vision: visionVerifyEnabled() ? `vision-v1:${agentModel()}` : "off",
     clipModel: env("CLIP_MODEL", "default"),
     library: libraryEnabled() ? `lib-v1:${librarySize()}` : "off",
+    // Exact-model policy: a new harvest (more vault clips) must re-run this step.
+    exactModel: genericStockAllowed() ? "off" : `exact-v2:${listVaults().map((v) => `${v.name}=${v.manifest.items.length}`).join(",")}`,
+    micro: fingerprint(path.join(dir, "micro_scenes.json")),
     // Title theme for generic B-roll searches (only present when the project has a title).
     ...(titleTheme(project.title ?? project.brief) ? { theme: `terms-v1:${titleTheme(project.title ?? project.brief)}` } : {}),
   };
   if (!opts.force && isCached(dir, "assets", inputs, ["assets.json", "license_log.csv"])) {
+    // Projects from before the licence ledger: build licenses.json from the cached assets.
+    if (!readLedger(dir)) {
+      const l = writeLedger(dir, readJson<Scene[]>(scenesFile), readJson<Assets>(path.join(dir, "assets.json")));
+      log(`[licenses] wrote licenses.json from the cached assets (${l.records.length} record(s))`);
+    }
     log(`[assets] cached -> ${path.join(dir, "assets.json")} (use --force to redo)`);
     return 0;
   }
@@ -123,12 +137,12 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const local = await indexFolder(path.join(chDir, "footage"), "local");
   const presskit = await indexFolder(path.join(chDir, "presskit"), "presskit");
   log(`[assets] video type: ${niche.label}`);
-  log(`[assets] footage sources: ${FOOTAGE_MODE_LABELS[footageMode(project)]}`);
+  if (genericStockAllowed()) log(`[assets] footage sources: ${FOOTAGE_MODE_LABELS[footageMode(project)]}`);
   log(`[assets] local footage: ${local.length} files, press kit: ${presskit.length} files`);
   const providers = nicheProviders(niche);
   setStoryblocksIds(channel, opts.project);
   const keyFor: Partial<Record<StockProvider, string>> = { storyblocks: "STORYBLOCKS_PUBLIC_KEY", pixabay: "PIXABAY_API_KEY", pexels: "PEXELS_API_KEY", unsplash: "UNSPLASH_ACCESS_KEY" };
-  log(`[assets] stock order: ${providers.map((p) => (keyFor[p] && !hasKey(keyFor[p]!) ? `${p} (no key)` : p)).join(" -> ")}`);
+  if (providers.length) log(`[assets] stock order: ${providers.map((p) => (keyFor[p] && !hasKey(keyFor[p]!) ? `${p} (no key)` : p)).join(" -> ")}`);
 
   // Generic B-roll lines search with the title's theme ("truck glovebox pistol"), MPT-style terms.
   const theme = titleTheme(project.title ?? project.brief);
@@ -195,6 +209,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
    */
   const webDir = path.join(dir, "web");
   const tryWeb = async (scene: Scene, why: string): Promise<Asset | null> => {
+    if (noWebIds.has(scene.id) || exactOnly) return null; // generic_hook: stock only; exact-model policy: never
     if (!webCrawlerReady() || !webCrawlsLeft()) return null;
     const q = webFallbackKeyword(scene.queries, agentPlan?.get(scene.id));
     if (!q || isBlocked(niche, q)) return null;
@@ -227,6 +242,74 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const categoryHints = nicheHints(niche, productNamesAll).slice(0, niche.stock.sectionHintCount ?? 0);
   const productOfScene = new Map<number, string>();
   for (const [n, list] of productRegions(scenes)) for (const s of list) productOfScene.set(s.id, n);
+  // Product research records (identity + Amazon/spec links) for every product the video names.
+  const research = ensureProductRecords(dir, [...new Set(scenes.map((s) => s.product_name ?? productOfScene.get(s.id)).filter((x): x is string => !!x))]);
+  const brands = [...new Set(research.map((r) => r.manufacturer).filter(Boolean))];
+
+  // Exact-model policy (default): only own uploads, press kit / official media and verified clips of
+  // the exact model from the model vault (workspace/models/<brand>_<model>/). Products without a
+  // vault, or spec the narration names without a clip, is fetched first (agents/autoFetch.ts;
+  // AUTO_FETCH=off to skip, or run `harvest-model` by hand).
+  const exactOnly = !genericStockAllowed();
+  const harvestCategory = env("HARVEST_CATEGORY", "") || poolConfig(niche).category || "lawn mower";
+  if (exactOnly && autoFetchEnabled()) {
+    const micro = readMicroPlan(dir);
+    const specsByProduct: Record<string, SpecVisualTag[]> = {};
+    for (const m of micro?.scenes ?? []) {
+      if (!m.productName || !m.subject.spec) continue;
+      const list = (specsByProduct[m.productName] ??= []);
+      if (!list.some((x) => x.spec === m.subject.spec!.spec)) list.push(m.subject.spec);
+    }
+    const narrationFor = (product: string, spec: string) =>
+      (micro?.scenes ?? []).filter((m) => m.productName === product && m.subject.spec?.spec === spec).map((m) => m.text).join(" ");
+    await ensureFootage(dir, { products: research, specsByProduct, narrationFor, category: harvestCategory, log });
+  }
+  if (exactOnly) log(`[assets] exact-model footage only (own uploads, press kit, model vault); generic stock is off (GENERIC_STOCK=on to allow it)`);
+  const vaultCache = new Map<string, ReturnType<typeof findVaultFor>>();
+  const vaultFor = (name: string | undefined) => {
+    if (!name) return null;
+    if (!vaultCache.has(name)) vaultCache.set(name, findVaultFor(name));
+    return vaultCache.get(name)!;
+  };
+  /** The product whose vault serves a scene: its own product; in exact-only mode B-roll borrows the nearest product's. */
+  const vaultProductOf = (scene: Scene): string | null => {
+    const own = scene.product_name ?? productOfScene.get(scene.id);
+    if (own && vaultFor(own)) return own;
+    if (!exactOnly) return null;
+    const near = scenes
+      .map((x) => ({ x, name: x.product_name ?? productOfScene.get(x.id) }))
+      .filter((o) => o.name && vaultFor(o.name))
+      .sort((a, b) => Math.abs(a.x.id - scene.id) - Math.abs(b.x.id - scene.id))[0];
+    return near?.name ?? null;
+  };
+  /** Least-used vault item for a scene: features the narration mentions first, then the CLIP score. */
+  const vaultAsset = (scene: Scene, mustMove: boolean): Asset | null => {
+    const name = vaultProductOf(scene);
+    const v = vaultFor(name ?? undefined);
+    if (!name || !v) return null;
+    const text = scene.text.toLowerCase();
+    const items = v.manifest.items.filter((i) => (!mustMove || i.kind === "video") && fs.existsSync(path.join(v.dir, i.file)));
+    const rank = (i: VaultItem) => (useCount.get(`vault_${i.id}`) ?? 0) * 10 - (i.feature && text.includes(i.feature) ? 5 : 0) - (i.kind === "video" ? 1 : 0) - i.clipPositive;
+    const sorted = [...items].sort((a, b) => rank(a) - rank(b));
+    const it = sorted[0];
+    if (!it) return null;
+    // Every vault item of this model is a swap option in the review page.
+    candidateFile[String(scene.id)] = sorted.slice(0, 40).map((i) => ({ ...vaultCandidate(v.dir, v.manifest, i), match: i.clipPositive, query: `${v.manifest.brand} ${v.manifest.model}` }));
+    const c = vaultCandidate(v.dir, v.manifest, it);
+    const own = scene.product_name ?? productOfScene.get(scene.id);
+    const asset = fromCandidate(scene, c, `${v.manifest.brand} ${v.manifest.model}`, own === name ? undefined : `Exact-model clip of ${name} (nearest product - this scene names none)`);
+    asset.match = it.clipPositive;
+    asset.modelCheck = "match";
+    return asset;
+  };
+  /** Exact manufacturer / model / variant check of a candidate's title against the scene's product. */
+  const modelCheckOf = (scene: Scene, c: Candidate) => {
+    const prod = scene.product_name ?? productOfScene.get(scene.id);
+    if (!prod || !c.tags) return null;
+    const rec = research.find((r) => r.name.toLowerCase() === prod.toLowerCase());
+    const pm = niche.productMatch ?? {};
+    return verifyModelMatch(rec ?? prod, c.tags, { variantWords: pm.variantWords, requireManufacturer: pm.requireManufacturer, knownManufacturers: brands });
+  };
 
   // AI Footage Agent: Claude writes the searches (exact -> broad) and the ideal-shot sentence.
   const sectionsFile = path.join(dir, "sections.json");
@@ -236,13 +319,14 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (!sec) return "body";
     return sec.kind === "item" ? `product review: ${sec.product_name ?? "item"}` : sec.kind;
   };
-  const agentPlan: Map<number, ScenePlan> | null = await planFootage(scenes, sectionLabel, niche, path.join(dir, "agent_footage.json"), log, project.brief).catch((err) => {
+  const agentPlan: Map<number, ScenePlan> | null = exactOnly ? null : await planFootage(scenes, sectionLabel, niche, path.join(dir, "agent_footage.json"), log, project.brief).catch((err) => {
     log(`[agent] failed, using rule-based searches: ${String(err)}`);
     return null;
   });
 
   // Footage library first: clips used in earlier videos that already match a scene well.
-  const libMatches = await matchLibrary(scenes.filter((s) => s.type !== "graphic"), (s) => clipText(s, agentPlan?.get(s.id)?.queries ?? s.queries, agentPlan?.get(s.id)?.visual), log);
+  // (The library holds stock picks from older videos: not used under the exact-model policy.)
+  const libMatches = exactOnly ? new Map<number, { shot: LibraryShot; sim: number }>() : await matchLibrary(scenes.filter((s) => s.type !== "graphic"), (s) => clipText(s, agentPlan?.get(s.id)?.queries ?? s.queries, agentPlan?.get(s.id)?.visual), log);
   // Editor: which product each scene is about (also when the sentence does not name it) and what
   // kind of shot it needs. Product/detail/comparison shots of a product with own media use only
   // that media; generic shots keep stock (checked by Claude below).
@@ -260,6 +344,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   let locked = 0;
 
   const breakerIds = new Set<number>();
+  const noWebIds = new Set<number>();
   for (const sceneOrig of scenes) {
     let scene = sceneOrig;
     const id = String(scene.id);
@@ -271,6 +356,18 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     } else if (subj?.subject && scene.type === "stock" && !scene.product_name) scene = { ...scene, product_name: subj.subject };
     // Searches the user typed in the plan review win over the agent's.
     if (plan && !scene.edited && scene.type !== "graphic" && scene.type !== "product") scene = { ...scene, queries: plan.queries };
+    // Media routing: generic_hook scenes never go to yt-dlp / web crawl; broad cinematic stock only.
+    const stockOnly = scene.segment === "generic_hook" && scene.type !== "product" && scene.type !== "graphic";
+    if (stockOnly) {
+      if (!scene.edited && scene.cinematicQueries?.length) {
+        // Rotate the shared cinematic list per scene and keep the scene's own (brand-free) searches,
+        // so every generic scene searches different terms and gets different stock (no repeats).
+        const c = scene.cinematicQueries, r = (noWebIds.size * 2) % c.length;
+        const own = scene.queries.filter((q) => !/\d{3,}/.test(q));
+        scene = { ...scene, queries: [...new Set([...c.slice(r), ...c.slice(0, r), ...own].filter(Boolean))] };
+      }
+      noWebIds.add(scene.id);
+    }
     const productTokens = scene.product_name ? tokens(scene.product_name) : [];
     // Previous scene a still (photo or card)? Then this scene must move: two stills in a row read as
     // a slideshow. Scenes waiting for a stock pick have no result yet and will be video.
@@ -290,10 +387,21 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       continue;
     }
 
+    // Own uploads of the product win; then verified exact-model clips from the model vault.
+    if (vaultProductOf(scene)) {
+      const ownTokens = tokens(scene.product_name ?? productOfScene.get(scene.id) ?? "");
+      const own = ownTokens.length ? pick((mustMove ? (l: Candidate[]) => l.filter((x) => x.kind === "video") : (l: Candidate[]) => l)(matchLocal(local, "local", [], ownTokens))) : null;
+      const fromVault = own ? null : vaultAsset(scene, mustMove);
+      if (own || fromVault) {
+        result[id] = own ? fromCandidate(scene, own, scene.product_name ?? ownTokens.join(" ")) : fromVault!;
+        continue;
+      }
+    }
+
     if (scene.type === "product" && !niche.product.allowStock) {
       if (scene.product_name) {
         const name = scene.product_name;
-        if (niche.product.sources.includes("wikimedia") && !wikiCache.has(name)) {
+        if (genericStockAllowed() && niche.product.sources.includes("wikimedia") && !wikiCache.has(name)) {
           wikiCache.set(name, await searchWikimedia(name, niche.stock.blockedTerms).catch((err) => (log(`[assets] Wikimedia "${name}" failed: ${String(err)}`), [])));
         }
         candidateFile[id] = [
@@ -322,7 +430,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     }
     if (scene.type === "product" && !niche.product.allowStock && !breakerIds.has(scene.id)) {
       // Unsplash photos whose description names the exact model, as another product option.
-      if (niche.product.sources.includes("unsplash") && scene.product_name && hasKey("UNSPLASH_ACCESS_KEY")) {
+      if (genericStockAllowed() && niche.product.sources.includes("unsplash") && scene.product_name && hasKey("UNSPLASH_ACCESS_KEY")) {
         const name = scene.product_name;
         if (!unsplashCache.has(name)) {
           const found = await searchProvider("unsplash", name, niche).catch(() => []);
@@ -331,7 +439,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
         candidateFile[id] = [...(candidateFile[id] ?? []), ...unsplashCache.get(name)!.map((c) => ({ ...c, query: name }))];
       }
       // Tier 3 for products: free-licensed photos of the exact model on Wikimedia Commons.
-      if (niche.product.sources.includes("wikimedia") && scene.product_name) {
+      if (genericStockAllowed() && niche.product.sources.includes("wikimedia") && scene.product_name) {
         const name = scene.product_name;
         if (!wikiCache.has(name)) {
           wikiCache.set(name, await searchWikimedia(name, niche.stock.blockedTerms).catch((err) => (log(`[assets] Wikimedia "${name}" failed: ${String(err)}`), [])));
@@ -390,12 +498,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     }
     const cands: Candidate[] = [];
     const queryOf = new Map<string, string>();
-    const themed = !scene.product_name && !scene.edited ? themeTerms.get(scene.id) : undefined;
+    const themed = !scene.product_name && !scene.edited && !noWebIds.has(scene.id) ? themeTerms.get(scene.id) : undefined;
     const queries = themed?.length ? [...new Set([themed[0], scene.queries[0], ...themed.slice(1), ...scene.queries.slice(1)].filter(Boolean))] : scene.queries;
-    for (const q of queries.slice(0, 3)) {
+    for (const q of queries.slice(0, noWebIds.has(scene.id) ? Number(env("GENERIC_STOCK_QUERIES", "6")) : 3)) {
       for (const provider of providers) {
         // General web crawl (licence unknown) only fills gaps unless WEBCRAWL_MODE=always.
         if (provider === "web_crawl" && webCrawlMode() === "fallback" && cands.length >= webCrawlMinCands()) continue;
+        if (noWebIds.has(scene.id) && (provider === "web_crawl" || provider === "youtube_cc")) continue;
         for (const c of (await search(provider, q)).slice(0, 6)) {
           if (queryOf.has(c.id)) continue;
           queryOf.set(c.id, q);
@@ -412,7 +521,10 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const file = await renderTextCard("", scene.queries[0] ?? scene.text.split(/\s+/).slice(0, 6).join(" "), cardStyle, graphicsDir);
       result[id] = {
         path: file, source: "graphic", license: GENERATED, url: "", kind: "image", width: 1920, height: 1080,
-        query: scene.queries[0], note: hasKey("PEXELS_API_KEY") || hasKey("PIXABAY_API_KEY") ? "No stock result" : "No stock key in .env",
+        query: scene.queries[0],
+        note: exactOnly
+          ? `No verified exact-model footage${scene.product_name ? ` of ${scene.product_name}` : ""} - run harvest-model, add press-kit media or upload your own clip`
+          : hasKey("PEXELS_API_KEY") || hasKey("PIXABAY_API_KEY") ? "No stock result" : "No stock key in .env",
       };
       continue;
     }
@@ -445,6 +557,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const fresh: Candidate[] = [];
       for (const q of nq.queries.slice(0, 3)) {
         for (const provider of providers) {
+          if (noWebIds.has(p.scene.id) && (provider === "web_crawl" || provider === "youtube_cc")) continue;
           for (const c of (await search(provider, q)).slice(0, 6)) {
             if (p.queryOf.has(c.id)) continue;
             p.queryOf.set(c.id, q);
@@ -532,12 +645,17 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const stillPenalty = c.kind === "image" ? 0.03 : 0;
       // A candidate Claude rejected only wins when nothing better passed.
       const visionPenalty = verdicts.get(`${p.scene.id}|${c.id}`) === false ? 1 : 0;
-      const s = base - stillPenalty - visionPenalty - 0.03 * (useCount.get(c.id) ?? 0);
+      // Strict exact-model niches: a title naming another generation / variant / model loses.
+      const modelPenalty = modelCheckOf(p.scene, c)?.verdict === "conflict" ? (niche.productMatch?.onConflict === "manual_review" ? 0.3 : 1) : 0;
+      const s = base - stillPenalty - visionPenalty - modelPenalty - reusePenalty(useCount.get(c.id) ?? 0);
       if (s > bestScore) [best, bestScore, bestClip] = [c, s, clip];
     });
     const c = best!;
     const asset = fromCandidate(p.scene, c, p.queryOf.get(c.id) ?? p.scene.queries[0]);
     if (bestClip !== undefined) asset.match = bestClip;
+    const mc = modelCheckOf(p.scene, c);
+    if (mc) asset.modelCheck = mc.verdict === "no_match" ? "unverified" : mc.verdict;
+    if (mc?.verdict === "conflict") asset.note ??= `Model conflict (${mc.reasons.join("; ")}) - needs manual review`;
     if (genericIds.has(p.scene.id)) asset.note = "Generic footage of this type of gun (no media of this exact model yet - add some in My clips / Press kit)";
     if (breakerIds.has(p.scene.id)) asset.note = "Moving footage between product photos (two stills in a row look like a slideshow)";
     if (verdicts.get(`${p.scene.id}|${c.id}`) === false) asset.note ??= "Vision check: none of the top candidates fit the narration - swap it";
@@ -726,12 +844,19 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
 
   stopYoutubeWorker();
   // Product-locked shot pools (product_pool.json) for the timeline's pacing engine.
-  if (poolConfig(niche).enabled) {
+  if (exactOnly) {
+    // Verified vault clips are the product pool: no other web / retail footage enters the video.
+    const shots = [...vaultPoolShots([...new Set(research.map((r) => r.name))]), ...diagramPoolShots(dir)];
+    writeJson(path.join(dir, "product_pool.json"), shots);
+    log(`[pool] ${shots.length} verified exact-model shot(s) in the product pool (${readDiagrams(dir).length} generated diagram(s))`);
+  } else if (poolConfig(niche).enabled) {
     const n = await buildProductPools(scenes, dir, channel, niche, log).catch((err) => (log(`[pool] failed: ${String(err).slice(0, 200)}`), 0));
     log(`[pool] ${n} product shot(s) ready`);
   }
   stopWebCrawlWorker();
   writeLicenseLog(dir, scenes, result);
+  const ledger = writeLedger(dir, scenes, result);
+  log(`[licenses] ${ledger.records.length} record(s) in licenses.json, ${ledger.summary.reused.length} clip(s) shown in more than one scene, ${ledger.summary.unknownLicense.length} unknown licence(s)`);
   saveCandidates(dir, candidateFile);
   writeJson(path.join(dir, "assets.json"), result);
 

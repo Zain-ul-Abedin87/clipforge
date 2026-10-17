@@ -2,12 +2,12 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { hasKey, reloadEnv } from "../lib/env.js";
+import { env, hasKey, reloadEnv } from "../lib/env.js";
 import { paths } from "../lib/paths.js";
 import { listChannels, loadStyle } from "../lib/style.js";
 import { listNiches } from "../lib/niche.js";
 import { addPresskitFile, listPresskit, removePresskitFile } from "../lib/assets/presskit.js";
-import { applyCandidate, loadCandidates, saveCandidates, searchAlternatives } from "../lib/assets/review.js";
+import { applyCandidate, applyManualFile, loadCandidates, saveCandidates, searchAlternatives } from "../lib/assets/review.js";
 import { FOOTAGE_MODE_LABELS, FOOTAGE_MODES, loadNiche, loadProjectNiche } from "../lib/niche.js";
 import { cleanQueries, savePlanEdit } from "../lib/planEdits.js";
 import { youtubeStatus } from "../lib/assets/youtube.js";
@@ -20,8 +20,21 @@ import { importOfficial } from "../lib/assets/official.js";
 import { parseScriptHtml, scriptSections, scriptText } from "../lib/scriptImport.js";
 import { footageSummary, listReview, reviewThumb, swapShot } from "../lib/sceneReview.js";
 import { ALL_CARDS, CARD_FONTS } from "../lib/stylePreset.js";
-import { buildUiNiche, keyStatus, loadAppSettings, runEnv, saveAppSettings, ttsToWav, UiNiche } from "./simpleUi.js";
+import { buildUiNiche, keyStatus, loadAppSettings, runEnv, saveAppSettings, UiNiche } from "./simpleUi.js";
+import { ttsStatus } from "../lib/tts.js";
+import { INPUT_MODE_LABELS, InputMode, modeFromVoiceMode, resolveInputMode } from "../lib/inputMode.js";
+import { loadResolutions, saveResolution } from "../commands/align.js";
+import { RESOLUTIONS, Resolution } from "../lib/align.js";
+import { ensureProductRecords, readResearch, updateProductRecord } from "../lib/productResearch.js";
+import { readVerifications, saveVerification } from "../lib/qaGate.js";
+import { listVaults, vaultName } from "../lib/agents/youtube/ytExtractor.js";
+import { genericStockAllowed } from "../lib/assets/sources.js";
 import { detectAndWriteNiche } from "../lib/nicheDetect.js";
+import { ProjectStore } from "./state/projectStore.js";
+import { createEditorAPI } from "./routes/editorAPI.js";
+import { poolConfig } from "../lib/assets/productPool.js";
+import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
+import { enableProvider, loadLlmSettings, PROVIDERS, providerOrder, providerStatus, ProviderName, qwenKey, QWEN_PRESETS, saveLlmSettings } from "../lib/agents/llm/settings.js";
 
 const WEB_DIR = path.join(paths.root, "web");
 const TSX_CLI = path.join(paths.root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -30,13 +43,18 @@ const CLI = path.join(paths.root, "src", "cli.ts");
 const STEPS = ["transcribe", "align", "plan", "assets", "timeline", "render", "qa"] as const;
 type Step = (typeof STEPS)[number];
 const STEP_OUTPUT: Record<Step, string> = { transcribe: "words.json", align: "aligned.json", plan: "scenes.json", assets: "assets.json", timeline: "timeline.json", render: "render_report.json", qa: "qa_report.json" };
-const READABLE = new Set(["chapters.json", "facts.json", "candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
+const READABLE = new Set(["licenses.json", "discrepancies.json", "product_research.json", "preflight.json", "tts.json", "model_verifications.json", "chapters.json", "facts.json", "candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
 const AUDIO_EXT = new Set([".mp3", ".wav", ".m4a"]);
+const MANUAL_EXT = new Set([".mp4", ".mov", ".m4v", ".webm", ".mkv", ".jpg", ".jpeg", ".png", ".webp"]);
+/** "tts" (Mode B narration) runs before transcribe; it is not one of the 7 stepper steps. */
+type RunStep = Step | "tts";
+/** Extra CLI flags for one run, e.g. render --scene 12. */
+type ExtraArgs = Partial<Record<RunStep, string[]>>;
 
 interface Job {
   running: boolean;
-  step: Step | null;
-  failedStep: Step | null;
+  step: RunStep | null;
+  failedStep: RunStep | null;
   log: string[];
   startedAt: number;
   finishedAt?: number;
@@ -66,7 +84,7 @@ function stepStatus(name: string): Record<Step, "done" | "pending" | "running" |
   const out = {} as Record<Step, "done" | "pending" | "running" | "failed">;
   for (const s of STEPS) {
     if (job?.running && job.step === s) out[s] = "running";
-    else if (!job?.running && job?.failedStep === s) out[s] = "failed";
+    else if (!job?.running && (job?.failedStep === s || (job?.failedStep === "tts" && s === "transcribe"))) out[s] = "failed";
     else out[s] = fs.existsSync(path.join(projDir(name), STEP_OUTPUT[s])) ? "done" : "pending";
   }
   return out;
@@ -85,14 +103,23 @@ function summary(name: string) {
     planGate: gateState(projDir(name), p as ProjectLike),
     createdAt: p.createdAt ?? null,
     voiceMode: p.voiceMode ?? null,
+    inputMode: inputModeOf(name),
     steps: stepStatus(name),
     running: job?.running ?? false,
   };
 }
 
-function cliArgs(name: string, step: Step, force: boolean, useLlm: boolean): string[] {
+/** Mode A / B / C of a project: stored at Go time, else derived from what was uploaded. */
+function inputModeOf(name: string): InputMode | null {
   const p = readProject(name) ?? {};
-  const args = [step, "--project", name];
+  if (p.inputMode === "A" || p.inputMode === "B" || p.inputMode === "C") return p.inputMode;
+  const hasScript = fs.existsSync(path.join(projDir(name), "script.txt"));
+  return modeFromVoiceMode(p.voiceMode) ?? resolveInputMode({ hasUploadedAudio: !!p.audio && p.voiceMode !== "tts", hasScript });
+}
+
+function cliArgs(name: string, step: RunStep, force: boolean, useLlm: boolean, extra: ExtraArgs = {}): string[] {
+  const p = readProject(name) ?? {};
+  const args = [step, "--project", name, ...(extra[step] ?? [])];
   if (step === "transcribe") args.push("--audio", String(p.audio));
   if (step === "align") {
     const script = path.join(projDir(name), "script.txt");
@@ -109,7 +136,7 @@ function cliArgs(name: string, step: Step, force: boolean, useLlm: boolean): str
 }
 
 /** Runs steps as child CLI processes so a crash in one never takes the web server down. */
-async function runJob(name: string, steps: Step[], force: boolean, useLlm: boolean, gate = true): Promise<void> {
+async function runJob(name: string, steps: RunStep[], force: boolean, useLlm: boolean, gate = true, extra: ExtraArgs = {}): Promise<void> {
   reloadEnv();
   const job: Job = { running: true, step: null, failedStep: null, log: [], startedAt: Date.now() };
   jobs.set(name, job);
@@ -129,7 +156,7 @@ async function runJob(name: string, steps: Step[], force: boolean, useLlm: boole
     job.step = step;
     push(`=== ${step} ===`);
     const code = await new Promise<number>((resolve) => {
-      const child = spawn(process.execPath, [TSX_CLI, CLI, ...cliArgs(name, step, force, useLlm)], {
+      const child = spawn(process.execPath, [TSX_CLI, CLI, ...cliArgs(name, step, force, useLlm, extra)], {
         cwd: paths.root,
         windowsHide: true,
         // Simple UI settings (web crawl on/off and mode) reach every step.
@@ -156,12 +183,12 @@ async function runJob(name: string, steps: Step[], force: boolean, useLlm: boole
     });
     if (code !== 0) {
       job.failedStep = step;
-      push(`!!! ${step} failed (exit ${code})`);
+      push(step === "tts" && code === 2 ? "!!! tts: no TTS provider configured - see the message above (set TTS_PROVIDER in .env or upload a voiceover)" : `!!! ${step} failed (exit ${code})`);
       break;
     }
     // Scene review gate: projects created with "review before render" stop after the timeline.
     const pj = readProject(name) ?? {};
-    if (step === "timeline" && steps.includes("render") && pj.review === true && !pj.reviewDone) {
+    if (step === "timeline" && steps.includes("render") && pj.review === true && !pj.reviewDone && !extra.render) {
       job.awaitingReview = true;
       push("=== review ===");
       push("Scenes ready: review / swap clips, then press Render.");
@@ -172,6 +199,44 @@ async function runJob(name: string, steps: Step[], force: boolean, useLlm: boole
   job.step = null;
   job.finishedAt = Date.now();
   if (!job.awaitingApproval && !job.awaitingReview) push(job.failedStep ? "Stopped." : "All steps finished.");
+}
+
+/** Model-vault harvests run as child CLI processes (one per model), independent of projects. */
+const harvestJobs = new Map<string, { running: boolean; failed: boolean; log: string[] }>();
+
+/** Block-based timeline editor: JSON-RPC on POST /api/editor (src/server/routes/editorAPI.ts). */
+const editorApi = createEditorAPI({
+  store: new ProjectStore(projDir),
+  dirOf: projDir,
+  validProject: validName,
+  isBusy: (name) => jobs.get(name)?.running === true,
+  // Incremental: only edited scenes re-render, the rest are stitched from the segment cache.
+  render: (name) => void runJob(name, ["render"], false, false, false),
+  categoryOf: (name) => {
+    const p = (readProject(name) ?? {}) as ProjectLike;
+    return env("HARVEST_CATEGORY", "") || poolConfig(loadProjectNiche(p, loadStyle(String(p.channel ?? "default")))).category || "lawn mower";
+  },
+});
+function runHarvest(name: string, args: string[]): void {
+  reloadEnv();
+  const job = { running: true, failed: false, log: [`=== harvest ${args.slice(1).join(" ")} ===`] };
+  harvestJobs.set(name, job);
+  const child = spawn(process.execPath, [TSX_CLI, CLI, ...args], { cwd: paths.root, windowsHide: true, env: process.env });
+  let buf = "";
+  const onData = (d: Buffer) => {
+    buf += d.toString();
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).replace(/\r$/, "");
+      buf = buf.slice(nl + 1);
+      if (line.trim() && !/UserWarning|warnings\.warn|HF_TOKEN/i.test(line)) job.log.push(line);
+      if (job.log.length > 1000) job.log.splice(0, job.log.length - 1000);
+    }
+  };
+  child.stdout.on("data", onData);
+  child.stderr.on("data", onData);
+  child.on("close", (code) => Object.assign(job, { running: false, failed: code !== 0 }));
+  child.on("error", (e) => (job.log.push(String(e)), Object.assign(job, { running: false, failed: true })));
 }
 
 // Batch queue: one video at a time through every step; waits while any manual run is busy.
@@ -324,6 +389,103 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       removePresskitFile(channel, String(url.searchParams.get("folder")), String(url.searchParams.get("file")));
       return send(res, 200, { ok: true });
     }
+  }
+
+  // ----- exact-model vaults (workspace/models/<brand>_<model>/): list, harvest, thumbnails -----
+  // ----- AI model: Claude / Qwen, backup order, credit budget, auto-disable (Settings page) -----
+  if (parts[1] === "llm") {
+    reloadEnv();
+    const state = () => ({
+      settings: loadLlmSettings(),
+      status: Object.fromEntries(PROVIDERS.map((p) => [p, providerStatus(p)])),
+      order: providerOrder(),
+      active: activeProvider(),
+      presets: QWEN_PRESETS,
+      keys: { claude: hasKey("ANTHROPIC_API_KEY"), qwen: !!qwenKey() },
+    });
+    if (method === "GET" && !parts[2]) return send(res, 200, state());
+    if (method === "PUT" && !parts[2]) {
+      saveLlmSettings(JSON.parse((await readBody(req)) || "{}"));
+      return send(res, 200, state());
+    }
+    const body = method === "POST" ? JSON.parse((await readBody(req)) || "{}") : {};
+    const p = body.provider as ProviderName;
+    if (!(PROVIDERS as readonly string[]).includes(p)) return send(res, 400, { error: "provider must be claude or qwen" });
+    if (method === "POST" && parts[2] === "enable") {
+      enableProvider(p, body.resetSpent === true);
+      return send(res, 200, state());
+    }
+    if (method === "POST" && parts[2] === "test") return send(res, 200, { ...(await testProvider(p)), state: state() });
+    return send(res, 404, { error: "unknown llm route" });
+  }
+
+  if (parts[1] === "editor") {
+    if (method === "POST" && !parts[2]) {
+      const out = await editorApi.handle(await readBody(req, 4 * 1024 * 1024));
+      if (!out) {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      return send(res, 200, out);
+    }
+    if (method === "GET" && parts[2] === "thumb") {
+      const f = await editorApi.thumb(url.searchParams.get("project") ?? "", url.searchParams.get("clip") ?? "").catch(() => null);
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no thumbnail" });
+    }
+    if (method === "GET" && parts[2] === "media") {
+      let f: string | null = null;
+      try {
+        f = editorApi.media(url.searchParams.get("project") ?? "", url.searchParams.get("clip") ?? "");
+      } catch {}
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no media" });
+    }
+    return send(res, 404, { error: "unknown editor route" });
+  }
+
+  if (parts[1] === "vaults") {
+    if (method === "GET" && !parts[2]) {
+      const list = listVaults().map((v) => ({
+        name: v.name,
+        brand: v.manifest.brand,
+        model: v.manifest.model,
+        clips: v.manifest.items.filter((i) => i.kind === "video").length,
+        stills: v.manifest.items.filter((i) => i.kind === "image").length,
+        stats: v.manifest.stats,
+        features: v.manifest.features,
+        updatedAt: v.manifest.updatedAt,
+        sample: v.manifest.items.filter((i) => i.kind === "image").slice(0, 6).map((i) => i.id),
+      }));
+      const running = [...harvestJobs.entries()].map(([name, j]) => ({ name, running: j.running, failed: j.failed, last: j.log[j.log.length - 1] ?? "" }));
+      return send(res, 200, { vaults: list, jobs: running, genericStock: genericStockAllowed() });
+    }
+    if (method === "POST" && parts[2] === "harvest") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const brand = String(body.brand ?? "").trim().slice(0, 60);
+      const model = String(body.model ?? "").trim().slice(0, 80);
+      if (!brand || !model) return send(res, 400, { error: "brand and exact model are required" });
+      const name = vaultName(brand, model);
+      if (harvestJobs.get(name)?.running) return send(res, 409, { error: "already harvesting this model" });
+      const args = ["harvest-model", "--brand", brand, "--model", model];
+      if (String(body.features ?? "").trim()) args.push("--features", String(body.features).slice(0, 300));
+      if (String(body.category ?? "").trim()) args.push("--category", String(body.category).slice(0, 60));
+      if (body.rescore === true) args.push("--rescore");
+      runHarvest(name, args);
+      return send(res, 200, { ok: true, name });
+    }
+    const v = parts[2] ? listVaults().find((x) => x.name === parts[2]) : undefined;
+    if (method === "GET" && parts[3] === "log") {
+      const j = harvestJobs.get(parts[2]);
+      return send(res, 200, { running: j?.running ?? false, failed: j?.failed ?? false, lines: j?.log ?? [] });
+    }
+    if (method === "GET" && parts[3] === "thumb" && v && parts[4]) {
+      // A vault item's still: the image item itself, or the still saved with the clip.
+      const key = parts[4].replace(/_[vi]$/, "");
+      const still = v.manifest.items.find((i) => i.kind === "image" && i.id.replace(/_i$/, "") === key);
+      const f = still ? path.join(v.dir, still.file) : null;
+      return f && fs.existsSync(f) ? streamFile(req, res, f) : send(res, 404, { error: "no still for this clip" });
+    }
+    return send(res, 404, { error: "unknown vault route" });
   }
 
   if (parts[1] === "niches" && method === "GET") {
@@ -528,6 +690,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const p0 = readProject(name);
     const hasAudio = !!p0?.audio && fs.existsSync(String(p0.audio)) && !(p0.voiceMode === "tts" && script);
     if (!hasAudio && !script) return send(res, 400, { error: "Script paste karein ya voiceover upload karein" });
+    // Mode B needs a real TTS provider; never fake the narration.
+    if (!hasAudio) {
+      const t = ttsStatus();
+      if (!t.configured) return send(res, 400, { error: `Mode B (script only) needs TTS: ${t.detail}` });
+    }
     // Auto channel (or niche=auto): detect category/hints/pacing from script and write project niche.json.
     const wantsAuto = channel === "auto" || chNiche === "auto" || body.niche === "auto";
     let nicheName: string;
@@ -558,25 +725,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       planGate: false,
       createdAt: p0?.createdAt ?? new Date().toISOString(),
       voiceMode: hasAudio ? (script ? "both" : "voice") : "tts",
+      inputMode: resolveInputMode({ hasUploadedAudio: hasAudio, hasScript: !!script }),
     });
     if (channel !== "auto") updateStyle(channel, { captions: { enabled: st.captions } });
     else updateStyle(channel, { captions: { enabled: st.captions }, pacing: { targetShotSec: detectMeta.targetShotSec ?? 2.3 } });
-    void (async () => {
-      if (!hasAudio) {
-        const job: Job = { running: true, step: null, failedStep: null, log: ["=== voice ===", "Default test voice (Windows TTS) ..."], startedAt: Date.now() };
-        jobs.set(name, job);
-        const wav = path.join(dir, "voiceover.wav");
-        const r = await ttsToWav(scriptFile, wav);
-        if (!r.ok) {
-          job.log.push(`!!! voice failed: ${r.error}`);
-          Object.assign(job, { running: false, failedStep: "transcribe", finishedAt: Date.now() });
-          return;
-        }
-        for (const f of Object.values(STEP_OUTPUT)) fs.rmSync(path.join(dir, f), { force: true });
-        writeProject(name, { audio: wav, originalFilename: "tts.wav" });
-      }
-      await runJob(name, [...STEPS], !!body.force, true, false);
-    })();
+    if (!hasAudio) for (const f of Object.values(STEP_OUTPUT)) fs.rmSync(path.join(dir, f), { force: true });
+    void runJob(name, hasAudio ? [...STEPS] : ["tts", ...STEPS], !!body.force, true, false);
     return send(res, 200, { ok: true, niche: nicheName, detectedCategory: detectMeta.category ?? null, nicheSource: detectMeta.source ?? null });
   }
 
@@ -732,6 +886,131 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
     fs.writeFileSync(file, JSON.stringify(aligned, null, 1));
     return send(res, 200, { ok: true, word: to });
+  }
+
+  // ----- input modes (A voiceover / B script + TTS / C script + voiceover) -----
+  if (action === "inputs" && method === "GET") {
+    const mode = inputModeOf(name);
+    const p = readProject(name) ?? {};
+    return send(res, 200, {
+      mode,
+      label: mode ? INPUT_MODE_LABELS[mode] : "no voiceover or script yet",
+      hasAudio: !!p.audio && fs.existsSync(String(p.audio)),
+      hasScript: fs.existsSync(path.join(projDir(name), "script.txt")),
+      tts: ttsStatus(),
+    });
+  }
+
+  // Mode B: narrate the saved script with the configured TTS provider, then run the pipeline.
+  if (action === "tts" && method === "POST") {
+    if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+    if (!fs.existsSync(path.join(projDir(name), "script.txt"))) return send(res, 400, { error: "save a script first (Mode B reads the script)" });
+    const t = ttsStatus();
+    if (!t.configured) return send(res, 400, { error: t.detail });
+    writeProject(name, { inputMode: "B", createdAt: readProject(name)?.createdAt ?? new Date().toISOString() });
+    const body = JSON.parse((await readBody(req)) || "{}");
+    void runJob(name, ["tts", ...STEPS], !!body.force, body.useLlm !== false);
+    return send(res, 200, { ok: true, provider: t.provider });
+  }
+
+  // ----- Mode C discrepancies: list, resolve (kept in project.json), apply by re-aligning -----
+  if (action === "discrepancies") {
+    const dir = projDir(name);
+    const file = path.join(dir, "discrepancies.json");
+    if (method === "GET") {
+      const items = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")).items ?? [] : [];
+      const chosen = loadResolutions(dir);
+      return send(res, 200, { resolutions: RESOLUTIONS, items: items.map((d: { id: string }) => ({ ...d, resolution: chosen[d.id] ?? null })) });
+    }
+    if (method === "PUT" && parts[4]) {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "pipeline is running for this project" });
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const r = body.resolution === null ? null : String(body.resolution);
+      if (r !== null && !(RESOLUTIONS as readonly string[]).includes(r)) return send(res, 400, { error: `resolution must be one of ${RESOLUTIONS.join(", ")}` });
+      saveResolution(dir, parts[4], r as Resolution | null);
+      return send(res, 200, { ok: true });
+    }
+    if (method === "POST" && parts[4] === "apply") {
+      if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+      // Re-align with the choices; later steps reuse their caches where nothing changed.
+      void runJob(name, [...STEPS.slice(STEPS.indexOf("align"))], false, true);
+      return send(res, 200, { ok: true });
+    }
+  }
+
+  // ----- product research: identity, Amazon URL / ASIN (affiliate kept apart), spec pages -----
+  if (action === "products") {
+    const dir = projDir(name);
+    if (method === "GET") {
+      const scenesFile = path.join(dir, "scenes.json");
+      const names = fs.existsSync(scenesFile)
+        ? [...new Set((JSON.parse(fs.readFileSync(scenesFile, "utf8")) as { product_name?: string }[]).map((s) => s.product_name).filter((x): x is string => !!x))]
+        : [];
+      return send(res, 200, names.length ? ensureProductRecords(dir, names) : readResearch(dir));
+    }
+    if (method === "PUT") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      if (!String(body.name ?? "").trim()) return send(res, 400, { error: "product name required" });
+      try {
+        return send(res, 200, updateProductRecord(dir, String(body.name), body));
+      } catch (err) {
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
+  }
+
+  // ----- per-scene: single-scene rerender, manual clip replacement, human model verification -----
+  if (action === "scenes" && parts[4] !== undefined && parts[5]) {
+    const dir = projDir(name);
+    const sceneId = Number(parts[4]);
+    if (!Number.isInteger(sceneId) || sceneId < 0) return send(res, 400, { error: "bad scene id" });
+    if (jobs.get(name)?.running) return send(res, 409, { error: "pipeline is running for this project" });
+    const rerender = () => runJob(name, ["timeline", "render"], false, false, false, { render: ["--scene", String(sceneId)] });
+    if (parts[5] === "rerender" && method === "POST") {
+      if (!fs.existsSync(path.join(dir, "timeline.json"))) return send(res, 400, { error: "no timeline yet" });
+      void rerender();
+      return send(res, 200, { ok: true });
+    }
+    if (parts[5] === "replace" && method === "POST") {
+      const fname = path.basename(String(req.headers["x-filename"] ?? ""));
+      const note = decodeURIComponent(String(req.headers["x-source-note"] ?? "")).trim();
+      const ext = path.extname(fname).toLowerCase();
+      if (!MANUAL_EXT.has(ext)) return send(res, 400, { error: "use mp4, mov, m4v, webm, mkv, jpg, png or webp" });
+      if (!note) return send(res, 400, { error: "say where the file comes from (source / licence note)" });
+      const manualDir = path.join(dir, "manual");
+      fs.mkdirSync(manualDir, { recursive: true });
+      const dest = path.join(manualDir, `scene_${sceneId}_${Date.now().toString(36)}${ext}`);
+      await new Promise<void>((resolve, reject) => {
+        const ws = fs.createWriteStream(dest);
+        req.pipe(ws);
+        ws.on("finish", () => resolve());
+        ws.on("error", reject);
+      });
+      try {
+        const asset = await applyManualFile(dir, sceneId, dest, note);
+        void rerender();
+        return send(res, 200, { ok: true, asset });
+      } catch (err) {
+        fs.rmSync(dest, { force: true });
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
+    if (parts[5] === "verify" && method === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const verdict = body.verdict === "match" || body.verdict === "conflict" ? body.verdict : null;
+      const assetsFile = path.join(dir, "assets.json");
+      const a = fs.existsSync(assetsFile) ? JSON.parse(fs.readFileSync(assetsFile, "utf8"))[String(sceneId)] : null;
+      if (!a?.path) return send(res, 404, { error: "scene has no asset yet" });
+      saveVerification(dir, a.path, verdict);
+      return send(res, 200, { ok: true, verifications: readVerifications(dir) });
+    }
+  }
+
+  // Pre-render gate (no video needed): files, reuse, product models, licences, discrepancies.
+  if (action === "preflight" && method === "POST") {
+    if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+    void runJob(name, ["qa"], false, false, false, { qa: ["--preflight"] });
+    return send(res, 200, { ok: true });
   }
 
   // Human review gate: approval is tied to the exact rendered file (its modification time).

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import { paths } from "../paths.js";
 import { slug } from "../assets/presskit.js";
+import { llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * Web research for a product (Claude + the server-side web_search tool): finds the manufacturer's
@@ -90,7 +91,7 @@ Rules:
 - Keep searching short: 1-3 searches are usually enough.
 - Finish by calling report_product_research once. If nothing official exists, report an empty pages list.`;
 
-export const webResearchEnabled = () => hasKey("ANTHROPIC_API_KEY") && env("WEB_RESEARCH", "on").toLowerCase() !== "off";
+export const webResearchEnabled = () => llmAvailable({ tools: true }) && env("WEB_RESEARCH", "on").toLowerCase() !== "off";
 export const webResearchModel = () => env("WEB_RESEARCH_MODEL", "claude-opus-5-5");
 
 const cacheFile = (channel: string, product: string) => path.join(paths.channels, channel, "presskit", slug(product), "research.json");
@@ -147,7 +148,7 @@ export async function researchProduct(
   if (!webResearchEnabled()) return cached;
 
   const model = webResearchModel();
-  const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+  const client = llm();
   const messages: Anthropic.Beta.BetaMessageParam[] = [
     { role: "user", content: `Product: ${product}\nVideo topic: ${context}\nFind the official product page, any official press/media page, and 3-4 spec facts.` },
   ];

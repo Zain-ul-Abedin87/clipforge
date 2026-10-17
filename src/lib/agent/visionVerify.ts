@@ -6,6 +6,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import { agentModel } from "./footage.js";
+import { llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * Vision verify (assets step): for each scene the top CLIP candidates (default 3) are shown to
@@ -15,7 +16,7 @@ import { agentModel } from "./footage.js";
  * VISION_VERIFY=on|off (default: on when ANTHROPIC_API_KEY is set).
  */
 
-export const visionVerifyEnabled = () => hasKey("ANTHROPIC_API_KEY") && env("VISION_VERIFY", "on").toLowerCase() !== "off";
+export const visionVerifyEnabled = () => llmAvailable({ vision: true }) && env("VISION_VERIFY", "on").toLowerCase() !== "off";
 export const visionTopN = () => Math.max(1, Number(env("VISION_VERIFY_TOP", "3")) || 3);
 
 export interface VerifyItem {
@@ -35,7 +36,15 @@ const Schema = z.object({
   ),
 });
 
-const SYSTEM = `You are a strict video editor choosing B-roll for a faceless YouTube video. For each scene you get the narration line (plus the line before it for context) and several candidate clips, each shown as 1-3 frames. For every candidate answer fits=true only if the footage visibly suits what the narration says (a generic shot that suits the sentence is fine). fits=false if it shows a clearly different subject, a wrong meaning of a word, burned-in text/watermarks/logos dominating the frame, a talking head, a presenter or anyone looking at / speaking to the camera, a messy mechanic garage or workshop scene, or anything unrelated. When the item asks for a specific product, approve ONLY clean, clear shots of that exact product itself (pure product shots) or cinematic action shots of that specific model in use; reject everything else. reason: max 12 words. Return every scene id and every candidate key you were given.`;
+const SYSTEM = `You are a strict video editor choosing B-roll for a faceless YouTube video. For each scene you get the narration line (plus the line before it for context) and several candidate clips, each shown as 1-3 frames. For every candidate answer fits=true only if the footage visibly suits what the narration says (a generic shot that suits the sentence is fine) AND passes every rule below.
+REJECT (fits=false) if ANY frame shows:
+- the underside of the product, the product disassembled, opened up, or with exposed internals, blades, wiring, circuit boards or mechanical parts;
+- a garage, workshop, repair bench, cluttered tools, a mechanic or repair setting;
+- any person pointing at, gesturing toward or explaining next to the product, even if they are not looking at the camera; a talking head, presenter or anyone looking at / speaking to the camera;
+- a maintenance action: pouring oil or fluid, opening an engine or case, cleaning, repairing, replacing parts, unboxing mess;
+- burned-in text, subtitles, watermarks or logos dominating the frame; a clearly different subject, a wrong meaning of a word, or anything unrelated.
+ACCEPT ONLY: clean cinematic in-use action, clean outdoor / lifestyle shots, or professional studio / product b-roll.
+When the item asks for a specific product, it must ALSO be that exact product/model (matching brand, model badge, shape, colour and design); a different brand or model or one you cannot identify = fits=false. When unsure = fits=false. reason: max 12 words. Return every scene id and every candidate key you were given.`;
 
 const mime = (f: string) => (/\.png$/i.test(f) ? "image/png" : /\.webp$/i.test(f) ? "image/webp" : "image/jpeg");
 
@@ -45,7 +54,7 @@ export async function verifyCandidates(items: VerifyItem[], topic: string, cache
   if (!visionVerifyEnabled() || !items.length) return out;
   const model = agentModel();
   const cache: Record<string, { fits: boolean; reason: string }> = fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf8")) : {};
-  const keyOf = (it: VerifyItem, cid: string) => crypto.createHash("sha1").update(`${model}|v2|${it.text}|${cid}`).digest("hex").slice(0, 20);
+  const keyOf = (it: VerifyItem, cid: string) => crypto.createHash("sha1").update(`${model}|v3|${it.text}|${cid}`).digest("hex").slice(0, 20);
   const todo: VerifyItem[] = [];
   for (const it of items) {
     const missing = it.cands.filter((c) => !cache[keyOf(it, c.id)] && c.frames.some((f) => fs.existsSync(f)));
@@ -53,7 +62,7 @@ export async function verifyCandidates(items: VerifyItem[], topic: string, cache
     if (missing.length) todo.push({ ...it, cands: missing });
   }
   if (!todo.length) return out;
-  const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+  const client = llm();
   const usage = { in: 0, out: 0 };
   let judged = 0;
   for (let i = 0; i < todo.length; i += 4) {

@@ -66,7 +66,8 @@ def load_glossary(path: str | None) -> list[str]:
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
-            terms.append(line)
+            # "Name = spoken form" lines carry a TTS pronunciation; Whisper only needs the name.
+            terms.append(line.split(" = ", 1)[0].strip())
     return terms
 
 

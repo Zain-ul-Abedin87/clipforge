@@ -28,6 +28,93 @@ Open http://localhost:4173, drop a voiceover, paste the script, pick the video t
 Claude cost so far and an estimated time. Change any scene's searches (✎ Edit searches in the Scenes list), then
 press **Approve plan & make video**. Untick "Show me the plan..." to run all 7 steps without stopping.
 
+## Input modes (A / B / C)
+
+- **Mode A - voiceover only:** Whisper's transcript (with glossary fixes) is the text; the audio is the timing.
+- **Mode B - script only:** `clipforge tts -p <project>` (or "Narrate script & run" in the project view) reads the
+  script with `TTS_PROVIDER` = `elevenlabs` | `openai` | `piper` (keys in `.env`). Without a provider the run stops
+  with a configuration error - narration is never faked. Glossary lines `Name = spoken form` change only the text
+  sent to the engine (`tts_payload.txt`); `script.txt` is never modified.
+- **Mode C - script + voiceover:** the voiceover is the timing truth. Align writes `discrepancies.json`
+  (`omission` / `addition` / `substitution`); differences in numbers, negations or model variants (Gen 3 vs Gen 5,
+  Pro vs Max) are `significant`. Pick `keep_audio`, `correct_transcript` or `modify_script` per item in the project
+  view (stored in `project.json` `discrepancyResolutions`), then "Apply choices & re-align". QA blocks approval while
+  significant ones are unresolved.
+
+## Exact-model footage only (default)
+
+No generic stock: Pexels, Pixabay, Unsplash, Wikimedia, Archive.org, Storyblocks and CC/web crawls are off
+(`GENERIC_STOCK=on` brings them back). Scenes use your own uploads, press-kit / official brand media, and the
+**model vault**:
+
+```
+npx tsx src/cli.ts harvest-model --brand "Scag" --model "Turf Tiger II" --features "deck,engine,zero turn,blades"
+```
+
+1. YouTube search (`"<brand> <model>"` + walkaround / review / demo / official); a video is used only if its title
+   names the exact model (`HRX 217` and trim `HRX217HZA` match `HRX217`; `Z930R`, `Turf Tiger III`, comparison
+   titles like `Z930M vs Z960M` do not) and it is 45 s - 25 min long.
+2. Only windows are downloaded (yt-dlp download sections, video only, up to 1080p), skipping the first 10 s;
+   chapters that name a feature are taken first.
+3. FFmpeg `select='gt(scene,0.3)'` splits each window at camera cuts; long shots become 5 s slices.
+4. CLIP scores each shot's middle frame against `"<brand> <model> <category> machine closeup action outdoors"`
+   and several negatives (talking to camera, presenter in a shop, face close-up, cartoon logo, title card). A shot
+   is kept only if the machine prompt beats the worst negative. Measured on real frames: a dealer talking beside
+   the mower and a channel's logo animation are rejected; walkaround B-roll is kept. CLIP is a heuristic -
+   glance at the vault (Model vault card in the web app) and use `--rescore` after raising `HARVEST_MARGIN`.
+5. Kept shots: `workspace/models/<brand>_<model>/clips/*.mp4` + `frames/*.jpg` (HD sources) and `manifest.json`
+   (video URL with timestamp, channel, CLIP scores, matched feature). Re-runs skip windows already done.
+
+The assets step serves every scene about a model (and, with no stock, nearby B-roll scenes) from its vault -
+own uploads of that product first - and writes the vault clips into `product_pool.json`, so the pacing engine cuts
+2-3 s shots from several real clips. Products without a vault are harvested automatically (`AUTO_HARVEST=off` to
+skip). The review page's search and swap options list vault clips. The web app's **Model vault** card and the
+"Harvest clips" button per product start a harvest.
+
+**Rights:** these are other people's videos (reviews, dealers, brand channels). Each clip is logged in
+`licenses.json` as review / official media with the source URL, and QA warns "Exact-model YouTube clips (rights)".
+Content ID claims are possible; ask the channel or brand for permission, or replace clips you cannot use.
+
+## Exact products, licences, incremental render
+
+- `niches/tech-amazon.json`: strict exact-model rules (`productMatch`), background music off. All channel
+  `style.json` files default `music.enabled` to `false`; set it to `true` to use the channel's music folder.
+- `product_research.json` per project: manufacturer / model / variant / generation, Amazon URL + ASIN, the
+  affiliate link (description only, never a footage search term) and spec pages. Candidates whose titles name
+  another generation / variant / model are rejected (strict niches) or flagged; "✓ Exact model" / "✕ Wrong model"
+  in the Scenes list records a human verdict (`model_verifications.json`).
+- `licenses.json`: one auditable record per scene (category wikimedia / archive / unsplash / stock / official /
+  presskit / review / web / own / generated, licence class, attribution duty, reuse count), written by the assets
+  step and by every swap / manual replacement. Repeated clips get a growing score penalty.
+- Render caches each scene in `cache/segments/` under a SHA-256 of its audio slice, asset files (+ mtime),
+  captions, overlays, transition and motion; only changed scenes re-render, then FFmpeg's concat demuxer stitches.
+  `render --scene 12` (or "⟳ Re-render scene") forces one scene. "⬆ Replace with my file" swaps in your own clip.
+- `qa --preflight` (or "Pre-render check"): missing/corrupt files, clip reuse, unverified product models, missing
+  licence records, unresolved discrepancies - without a rendered video. Full QA runs the same checks plus black
+  frames and silent gaps (5 s+ fails).
+- Tests: `npm test` (`tests/pipeline.test.ts`, includes a small real FFmpeg incremental render).
+
+## Timeline editor (block-based, multi-track)
+
+Project view -> **✂ Open editor** (`web/editor.html?project=<name>`). Tracks: B-roll, overlays, SFX, voice, music;
+blocks are sized by frames (exact rational time, `src/domain/`). Drag the right edge of a picture to move the cut
+between two pictures (the next picture keeps showing the same moment); drag / trim overlays and sound effects;
+**S** splits at the playhead, **Delete** removes (the neighbour takes the time), Ctrl+Z / Ctrl+Y undo / redo.
+Select a picture -> **Show vault clips** (exact-model clips of the scene's product, the spoken spec first) or
+**Fetch new clip** (harvests YouTube for that product + keyword and hot-swaps the best new unused clip).
+**Render changes** re-renders only edited scenes; the rest come from `cache/segments/`.
+
+Backend: JSON-RPC 2.0 on `POST /api/editor` (`src/server/routes/editorAPI.ts`): `editor.open`, `editor.edit`
+(`moveClip`, `trimEnd`, `splitClip`, `deleteClip`, `setLocked`), `editor.undo` / `editor.redo`, `editor.candidates`,
+`editor.replace`, `editor.fetchNewClip` + `editor.job`, `editor.render`. Edits carry `baseRevision` (conflict =
+-32001), are validated as a whole (each scene stays fully covered by pictures, frame-aligned) and saved to
+`timeline.v3.json` (`src/server/state/projectStore.ts`); a rejected edit changes nothing. Media can only change to
+server-listed candidates, never a client-supplied path.
+
+Timeline files: `timeline.v3.json` (multi-track, rational time) is what render uses; the timeline step writes it
+next to `timeline.json` (v2). If `timeline.json` is edited later (simple-UI swaps, hand edits), render rebuilds the
+v3 file from it, keeping scene text and subjects.
+
 ## Plan approval (before any footage is fetched)
 
 - The approval is tied to the exact `scenes.json`: re-planning (e.g. a new video type) asks for approval again.

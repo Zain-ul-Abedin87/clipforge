@@ -40,6 +40,8 @@ export function updateStyle(channel: string, patch: Record<string, unknown>): Re
   set(s.captions, "fontSize", num(p.captions?.fontSize, 30, 90));
   set(s.captions, "maxWordsPerLine", num(p.captions?.maxWordsPerLine, 3, 12));
   s.music ??= {};
+  // Background music is OFF unless a channel turns it on explicitly.
+  if (typeof p.music?.enabled === "boolean") s.music.enabled = p.music.enabled;
   set(s.music, "volumeDb", num(p.music?.volumeDb, -40, -6));
   set(s.music, "duckDb", num(p.music?.duckDb, -30, 0));
   s.motionGraphics ??= {};

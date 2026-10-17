@@ -8,6 +8,7 @@ import { webCrawlerStatus } from "../lib/assets/webCrawler.js";
 import { webCrawlStatus } from "../lib/assets/webCrawl.js";
 import { libraryBackend, librarySize } from "../lib/assets/footageLibrary.js";
 import { basePythonPath, ffmpegPath, ffprobePath, venvPythonPath } from "../lib/tools.js";
+import { llmAvailable } from "../lib/agents/llm/llm.js";
 
 type Status = "ok" | "warn" | "fail";
 interface Check {
@@ -105,7 +106,7 @@ export async function doctor(): Promise<number> {
   const wc = await webCrawlStatus();
   checks.push({ name: "Web crawl (any licence)", status: wc.ok ? "ok" : "warn", detail: wc.ok ? wc.detail : `${wc.detail} - only needed for the web_crawl source` });
   checks.push({ name: "Footage library", status: "ok", detail: `${libraryBackend()} backend, ${librarySize()} clip(s) stored` });
-  checks.push({ name: "Vision verify", status: hasKey("ANTHROPIC_API_KEY") ? "ok" : "warn", detail: hasKey("ANTHROPIC_API_KEY") ? (process.env.VISION_VERIFY?.toLowerCase() === "off" ? "off (VISION_VERIFY=off)" : "on") : "off (needs ANTHROPIC_API_KEY)" });
+  checks.push({ name: "Vision verify", status: llmAvailable({ vision: true }) ? "ok" : "warn", detail: llmAvailable({ vision: true }) ? (process.env.VISION_VERIFY?.toLowerCase() === "off" ? "off (VISION_VERIFY=off)" : "on") : "off (needs ANTHROPIC_API_KEY)" });
   console.log("\nClipForge doctor\n");
   for (const c of checks) console.log(`${icon[c.status]} ${c.name.padEnd(22)} ${c.detail}`);
   const fails = checks.filter((c) => c.status === "fail").length;

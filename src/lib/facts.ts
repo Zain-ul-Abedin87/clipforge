@@ -7,6 +7,7 @@ import { z } from "zod";
 import { env } from "./env.js";
 import { agentEnabled, agentModel } from "./agent/footage.js";
 import type { Scene } from "./scenes.js";
+import { llm } from "./agents/llm/llm.js";
 
 /**
  * Script fact sheet (any product niche: tech, kitchen, tools, outdoor, ...). The LLM reads the
@@ -92,7 +93,7 @@ export async function extractFacts(dir: string, scenes: Scene[], log: (m: string
   else if (env("FACTS", "on").toLowerCase() === "off") error = "FACTS=off";
   if (agentEnabled() && env("FACTS", "on").toLowerCase() !== "off") {
     for (let attempt = 1; attempt <= 2 && !facts; attempt++) try {
-      const client = new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") });
+      const client = llm();
       const res = await client.messages.parse({
         model: agentModel(),
         max_tokens: 8000,

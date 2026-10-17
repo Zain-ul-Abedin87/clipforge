@@ -37,6 +37,50 @@ try:
     from yt_dlp.utils import DownloadError, download_range_func
 except ImportError:
     yt_dlp = None
+
+# --- yt-dlp anti-bot setup (every YoutubeDL in this module):
+#  * PO tokens via bgutil-ytdlp-pot-provider: HTTP server on 127.0.0.1:4416 (tools/bgutil/server,
+#    started by the CLI) with script mode (node tools/bgutil/server/build/generate_once.js) as fallback.
+#  * Node as the JS runtime for YouTube signature solving.
+#  * Polite pacing: sleep between requests/downloads, retries with exponential backoff.
+#  * Optional cookies: YTDLP_COOKIES_FILE=path\\to\\cookies.txt or YTDLP_COOKIES_FROM_BROWSER=firefox[:profile].
+def _ytdlp_cookie_opts():
+    import os as _os
+    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    home = _os.environ.get("BGUTIL_SERVER_HOME", _os.path.join(root, "tools", "bgutil", "server"))
+    backoff = lambda n: min(30.0, 2.0 ** n)
+    o = {
+        "js_runtimes": {"node": {}},
+        "extractor_args": {
+            "youtubepot-bgutilhttp": {"base_url": [_os.environ.get("BGUTIL_POT_URL", "http://127.0.0.1:4416")]},
+            "youtubepot-bgutilscript": {"server_home": [home]},
+        },
+        "sleep_interval_requests": float(_os.environ.get("YTDLP_SLEEP_REQUESTS", "0.8")),
+        "sleep_interval": float(_os.environ.get("YTDLP_SLEEP_INTERVAL", "1")),
+        "max_sleep_interval": float(_os.environ.get("YTDLP_MAX_SLEEP_INTERVAL", "3")),
+        "retries": 5,
+        "extractor_retries": 3,
+        "fragment_retries": 5,
+        "retry_sleep_functions": {"http": backoff, "fragment": backoff, "extractor": backoff},
+    }
+    f = _os.environ.get("YTDLP_COOKIES_FILE", "").strip().strip('"')
+    if f and _os.path.exists(f):
+        o["cookiefile"] = f
+    else:
+        b = _os.environ.get("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+        if b:
+            name, _, prof = b.partition(":")
+            o["cookiesfrombrowser"] = (name, prof or None, None, None)
+    return o
+
+if yt_dlp is not None and not getattr(yt_dlp.YoutubeDL, "_cf_cookies", False):
+    class _CookieYDL(yt_dlp.YoutubeDL):
+        _cf_cookies = True
+        def __init__(self, params=None, *a, **k):
+            p = params or {}; d = _ytdlp_cookie_opts(); ea = {**d.pop('extractor_args'), **(p.get('extractor_args') or {})}
+            super().__init__({**d, **p, 'extractor_args': ea}, *a, **k)
+    yt_dlp.YoutubeDL = _CookieYDL
+# --- end cookies
     DownloadError = Exception  # type: ignore
 
 DEFAULT_SITES = "youtube.com,youtu.be,vimeo.com,dailymotion.com,archive.org"
@@ -270,7 +314,7 @@ def fetch(req: dict) -> dict:
             part.unlink(missing_ok=True)
             return {"ok": False, "error": f"re-encode failed: {r.stderr[-200:]}"}
         w, hh = probe_size(ffmpeg, str(part))
-        if w and hh and w < hh:
+        if w and hh and w < hh and not req.get("allow_vertical"):
             part.unlink(missing_ok=True)
             return {"ok": False, "error": "vertical video"}
         part.replace(out)

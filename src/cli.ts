@@ -3,7 +3,7 @@ import { align } from "./commands/align.js";
 import { assets } from "./commands/assets.js";
 import { render } from "./commands/render.js";
 import { timeline } from "./commands/timeline.js";
-import { qa } from "./commands/qa.js";
+import { qa, qaPreflight } from "./commands/qa.js";
 import { evalDrift, makeTestAudio } from "./commands/devTools.js";
 import { doctor } from "./commands/doctor.js";
 import { fetchModel } from "./commands/fetchModel.js";
@@ -11,6 +11,8 @@ import { plan } from "./commands/plan.js";
 import { serve } from "./server/server.js";
 import { testNvenc } from "./commands/testNvenc.js";
 import { transcribe } from "./commands/transcribe.js";
+import { tts } from "./commands/tts.js";
+import { harvestKeyword, harvestModel, rescoreVault } from "./lib/agents/youtube/ytExtractor.js";
 
 // Per-project run log: every step run with -p/--project appends its console output (with time and
 // step name) to workspace/<project>/run.log, so a video's whole history is in one file.
@@ -59,6 +61,17 @@ program
   .description("Render a 5-second 1080p NVENC test clip to output/")
   .action(async () => {
     process.exitCode = await testNvenc();
+  });
+
+program
+  .command("tts")
+  .description("[0] Mode B (script only): narrate the script with TTS_PROVIDER (elevenlabs | openai | piper)")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("-s, --script <file>", "script text (default workspace/<project>/script.txt)")
+  .option("-g, --glossary <file>", "glossary with 'Name = spoken form' pronunciations (default inputs/glossary.txt)")
+  .option("-f, --force", "ignore cache and redo")
+  .action(async (o) => {
+    process.exitCode = await tts(o);
   });
 
 program
@@ -120,16 +133,61 @@ program
   .requiredOption("-p, --project <name>", "project name")
   .option("--limit <seconds>", "render only the first N seconds (quick preview)")
   .option("-f, --force", "re-render every segment")
+  .option("--scene <ids>", "re-render only these scene ids (comma separated), reuse every other cached segment")
   .action(async (o) => {
-    process.exitCode = await render({ project: o.project, force: o.force, limitSeconds: o.limit ? Number(o.limit) : undefined });
+    const scenes = o.scene ? String(o.scene).split(",").map((x: string) => Number(x.trim())).filter((x: number) => Number.isInteger(x) && x >= 0) : undefined;
+    process.exitCode = await render({ project: o.project, force: o.force, limitSeconds: o.limit ? Number(o.limit) : undefined, scenes });
   });
 
 program
   .command("qa")
   .description("[7] Automatic checks on output/<project>.mp4 + description / pinned comment -> report.md")
   .requiredOption("-p, --project <name>", "project name")
+  .option("--preflight", "only the pre-render gate (assets, licences, product matches, discrepancies) -> preflight.json")
   .action(async (o) => {
-    process.exitCode = await qa(o);
+    process.exitCode = o.preflight ? await qaPreflight(o) : await qa(o);
+  });
+
+program
+  .command("harvest-model")
+  .description("Exact-model vault: real B-roll clips + stills of one model from YouTube (talking heads removed) -> workspace/models/<brand>_<model>/")
+  .requiredOption("--brand <name>", "manufacturer, e.g. \"Scag\"")
+  .requiredOption("--model <name>", "exact model, e.g. \"Turf Tiger II\" (video titles must contain it)")
+  .option("--features <list>", "comma-separated features to look for, e.g. \"deck,engine,zero turn,blades\"")
+  .option("--category <words>", "kind of machine for the CLIP prompt", "lawn mower")
+  .option("--exclude <list>", "other models to keep out (comparison videos), comma-separated")
+  .option("--max-videos <n>", "videos to cut from (default HARVEST_MAX_VIDEOS or 6)")
+  .option("--windows <n>", "windows downloaded per video (default 4)")
+  .option("-f, --force", "re-process videos that were already harvested")
+  .option("--rescore", "only re-check the clips already in the vault with the current filter (no downloads)")
+  .option("--keyword <spec>", "caption mode: only 3-5 s clips around where this spec is spoken, e.g. \"brushless motor\"")
+  .option("--aliases <list>", "other ways the keyword is said (caption mode), comma-separated")
+  .action(async (o) => {
+    const list = (v?: string) => (v ? String(v).split(",").map((x) => x.trim()).filter(Boolean) : undefined);
+    try {
+      if (o.rescore) {
+        await rescoreVault(o.brand, o.model, console.log);
+        return;
+      }
+      if (o.keyword) {
+        const r = await harvestKeyword({
+          brand: o.brand, model: o.model, keyword: o.keyword, aliases: list(o.aliases), category: o.category, otherModels: list(o.exclude),
+          maxVideos: o.maxVideos ? Number(o.maxVideos) : undefined, force: o.force, log: console.log,
+        });
+        process.exitCode = r.added ? 0 : 1;
+        return;
+      }
+      const r = await harvestModel({
+        brand: o.brand, model: o.model, features: list(o.features), category: o.category, otherModels: list(o.exclude),
+        maxVideos: o.maxVideos ? Number(o.maxVideos) : undefined, windowsPerVideo: o.windows ? Number(o.windows) : undefined, force: o.force, log: console.log,
+      });
+      const clips = r.manifest.items.filter((i) => i.kind === "video").length;
+      console.log(`[harvest] vault: ${clips} clip(s), ${r.manifest.items.length - clips} still(s) -> ${r.dir}`);
+      process.exitCode = clips ? 0 : 1;
+    } catch (err) {
+      console.error(`[harvest] FAILED: ${String((err as Error).message ?? err)}`);
+      process.exitCode = 1;
+    }
   });
 
 program

@@ -47,7 +47,7 @@ export async function routeSegments(scenes: Scene[], niche: Niche, topic: string
         for (const s of out.scenes) cls.set(s.id, { segment: s.segment, reason: s.reason });
         const c = out.cinematic.map((q) => q.trim()).filter(Boolean);
         if (c.length) cinematic = c.slice(0, 10);
-        log(`[plan] segment routing by ${model} (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
+        log(`[plan] segment routing by ${(res as { model?: string }).model ?? model} (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
       }
     } catch (err) {
       log(`[plan] segment routing LLM failed (${String((err as Error).message ?? err).slice(0, 120)}); heuristic used`);

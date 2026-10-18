@@ -6,7 +6,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import { agentModel } from "./footage.js";
-import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * Vision verify (assets step): for each scene the top CLIP candidates (default 3) are shown to
@@ -65,8 +65,10 @@ export async function verifyCandidates(items: VerifyItem[], topic: string, cache
   const client = llm();
   const usage = { in: 0, out: 0 };
   let judged = 0;
-  for (let i = 0; i < todo.length; i += 4) {
-    const batch = todo.slice(i, i + 4);
+  // Up to 4 scenes (each with up to 3 candidates x 3 frames) per request; one scene for a local model, whose context is 8K.
+  const perRequest = batchSize(4, 1);
+  for (let i = 0; i < todo.length; i += perRequest) {
+    const batch = todo.slice(i, i + perRequest);
     const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
     const keyMap = new Map<string, { it: VerifyItem; cid: string }>();
     for (const it of batch) {

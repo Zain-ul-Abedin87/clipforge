@@ -5,7 +5,7 @@ import { env, hasKey } from "../env.js";
 import { GRAPHIC_KINDS, Graphic, Scene, SCENE_TYPES, Section, SceneType } from "../scenes.js";
 import type { Span } from "./structure.js";
 import { Niche, nicheHints } from "../niche.js";
-import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
+import { activeProvider, batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
 
 const STOP = new Set(
   "the a an and or but if then this that these those it its is are was were be been being of to in on for with as at by from up out over into about than very really just also can will would could should has have had do does did not no so too our your their they them we you he she his her my me i one some any all more most such only own same other which who whom what when where why how there here".split(" "),
@@ -135,6 +135,49 @@ const LabelSchema = z.object({
   ),
 });
 type Labels = z.infer<typeof LabelSchema>;
+type Label = Labels["scenes"][number];
+
+/**
+ * What a small local model is held to: right shape, any strings. Its answers are then normalized
+ * (unknown type / graphic kind -> closest valid one) and merged by id, so one bad scene no longer
+ * throws away the whole batch.
+ */
+const LooseLabelSchema = z.object({
+  scenes: z.array(
+    z.object({
+      id: z.coerce.number().int(),
+      type: z.string().nullish(),
+      product_name: z.string().nullish(),
+      queries: z.array(z.string()).nullish(),
+      graphic_kind: z.string().nullish(),
+      graphic_title: z.string().nullish(),
+      graphic_lines: z.array(z.string()).nullish(),
+      price: z.union([z.string(), z.number()]).nullish(),
+    }),
+  ),
+});
+type LooseLabel = z.infer<typeof LooseLabelSchema>["scenes"][number];
+
+export function normalizeLabel(l: LooseLabel): Label {
+  const kinds = [...GRAPHIC_KINDS, "none"] as readonly string[];
+  let graphic_kind = (kinds.includes(String(l.graphic_kind)) ? l.graphic_kind : "none") as Label["graphic_kind"];
+  let type = (SCENE_TYPES as readonly string[]).includes(String(l.type)) ? (l.type as SceneType) : null;
+  // "intro_card" written as the type, etc.
+  if (!type && kinds.includes(String(l.type)) && l.type !== "none") (type = "graphic"), (graphic_kind = l.type as Label["graphic_kind"]);
+  if (!type) type = graphic_kind !== "none" ? "graphic" : l.product_name ? "product" : "stock";
+  if (type !== "graphic") graphic_kind = "none";
+  if (type === "graphic" && graphic_kind === "none") type = l.product_name ? "product" : "stock";
+  return {
+    id: l.id,
+    type,
+    product_name: l.product_name?.trim() || null,
+    queries: (l.queries ?? []).filter((q) => typeof q === "string" && q.trim()).slice(0, 3),
+    graphic_kind,
+    graphic_title: type === "graphic" ? (l.graphic_title ?? "") : "",
+    graphic_lines: type === "graphic" ? (l.graphic_lines ?? []) : [],
+    price: l.price === null || l.price === undefined || l.price === "" ? null : String(l.price),
+  };
+}
 
 const SYSTEM = `You label scenes for a faceless YouTube video (often "Top 5 / Top 10" listicles). The scene boundaries are fixed; you only choose how each scene is visualized. The channel's niche rules follow at the end.
 
@@ -183,6 +226,7 @@ export async function llmLabels(
 
   // Batch whole sections together, ~60 scenes per request (fewer for a local model).
   const size = batchSize(60);
+  const local = activeProvider() === "qwen";
   const batches: number[][] = [];
   let cur: number[] = [];
   for (let i = 0; i < spans.length; i++) {
@@ -209,7 +253,7 @@ export async function llmLabels(
       };
     });
 
-    let labels: Labels | null = null;
+    let labels: Map<number, Label> | null = null;
     for (let attempt = 1; attempt <= 2 && !labels; attempt++) {
       log(`[plan] LLM batch ${b + 1}/${batches.length} (${ids.length} scenes), attempt ${attempt}`);
       try {
@@ -217,9 +261,11 @@ export async function llmLabels(
           model,
           max_tokens: 16000,
           // Haiku 4.5 rejects the effort setting; newer models use it to keep thinking (and cost) low.
-          output_config: model.startsWith("claude-haiku")
-            ? { format: zodOutputFormat(LabelSchema) }
-            : { effort: "low", format: zodOutputFormat(LabelSchema) },
+          output_config: local
+            ? { format: zodOutputFormat(LooseLabelSchema) }
+            : model.startsWith("claude-haiku")
+              ? { format: zodOutputFormat(LabelSchema) }
+              : { effort: "low", format: zodOutputFormat(LabelSchema) },
           system: `${SYSTEM}
 
 Niche rules (${niche.label}): ${niche.llmGuidance}`,
@@ -231,10 +277,17 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`,
           log(`[plan] LLM declined this batch; using heuristic labels for it`);
           break;
         }
-        const parsed = res.parsed_output;
+        const parsed = res.parsed_output as { scenes: LooseLabel[] } | null;
         const got = parsed?.scenes.map((s) => s.id).join(",");
-        if (parsed && got === ids.join(",")) labels = parsed;
-        else log(`[plan] LLM returned wrong scene ids; retrying`);
+        if (parsed && got === ids.join(",")) labels = new Map(parsed.scenes.map((l) => [l.id, local ? normalizeLabel(l) : (l as Label)]));
+        else if (parsed && local) {
+          // A local model skips or repeats scenes: keep the ones it got right, rules fill the rest.
+          const byId = new Map(parsed.scenes.filter((l) => ids.includes(l.id)).map((l) => [l.id, normalizeLabel(l)]));
+          if (byId.size >= Math.ceil(ids.length / 2)) {
+            labels = byId;
+            if (byId.size < ids.length) log(`[plan] LLM labelled ${byId.size}/${ids.length} scenes; rules fill the other ${ids.length - byId.size}`);
+          } else log(`[plan] LLM returned wrong scene ids; retrying`);
+        } else log(`[plan] LLM returned wrong scene ids; retrying`);
       } catch (err) {
         if (err instanceof Anthropic.AuthenticationError) {
           log(`[plan] ANTHROPIC_API_KEY rejected; falling back to heuristic labels`);
@@ -245,8 +298,13 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`,
       }
     }
 
-    if (labels) ids.forEach((i, k) => out.push(toScene(spans[i], i, labels!.scenes[k])));
-    else out.push(...heuristicLabels(spans, sections, niche).filter((s) => ids.includes(s.id)));
+    if (labels) {
+      const fill = labels.size < ids.length ? heuristicLabels(spans, sections, niche) : [];
+      for (const i of ids) {
+        const l = labels.get(i);
+        out.push(l ? toScene(spans[i], i, l) : fill.find((s) => s.id === i)!);
+      }
+    } else out.push(...heuristicLabels(spans, sections, niche).filter((s) => ids.includes(s.id)));
   }
   return { scenes: out, inputTokens, outputTokens };
 }

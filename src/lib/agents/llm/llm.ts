@@ -55,12 +55,13 @@ export const activeProvider = (): ProviderName | null => providerOrder()[0] ?? n
 
 /**
  * How many items one request should carry. A local 7B model has an 8K context and writes
- * ~60 tokens/s, so big batches overflow or time out: they get a quarter of the Claude size.
+ * ~60 tokens/s, so big batches overflow or time out. `localSize` is what fits a local model
+ * (default: a third of the Claude size, at least 8; image requests pass 1).
  */
-export function batchSize(claudeSize: number): number {
+export function batchSize(claudeSize: number, localSize = Math.max(8, Math.round(claudeSize / 3))): number {
   const override = Number(env("LLM_BATCH_SCENES", "0"));
   if (override > 0) return override;
-  return activeProvider() === "qwen" && loadLlmSettings().qwen.mode === "local" ? Math.max(8, Math.round(claudeSize / 3)) : claudeSize;
+  return activeProvider() === "qwen" && loadLlmSettings().qwen.mode === "local" ? localSize : claudeSize;
 }
 
 const apiError = (status: number, message: string) => new Anthropic.APIError(status, { type: "error", error: { type: "api_error", message } }, message, undefined);
@@ -127,8 +128,105 @@ export const setQwenFetch = (f: typeof fetch) => (qwenFetch = f);
  * gets it as a grammar (json_schema response format), so it can only write a valid object: small
  * models otherwise drift, loop ("token repeat limit") or stop mid-object.
  */
-async function qwenChat(messages: ChatMessage[], model: string, maxTokens: number, schema: unknown): Promise<{ text: string; inTok: number; outTok: number; finish: string }> {
+type ChatResult = { text: string; inTok: number; outTok: number; finish: string };
+
+/** Ollama native message: plain text + base64 images (URL images are downloaded). */
+async function toOllamaMessages(messages: ChatMessage[]): Promise<{ role: string; content: string; images?: string[] }[]> {
+  const out: { role: string; content: string; images?: string[] }[] = [];
+  for (const m of messages) {
+    if (typeof m.content === "string") {
+      out.push({ role: m.role, content: m.content });
+      continue;
+    }
+    const text: string[] = [];
+    const images: string[] = [];
+    for (const p of m.content) {
+      if (p.type === "text") text.push(p.text);
+      else {
+        const url = p.image_url.url;
+        if (url.startsWith("data:")) images.push(url.slice(url.indexOf(",") + 1));
+        else {
+          const r = await fetch(url, { signal: AbortSignal.timeout(30_000) }).catch(() => null);
+          if (r?.ok) images.push(Buffer.from(await r.arrayBuffer()).toString("base64"));
+        }
+      }
+    }
+    out.push({ role: m.role, content: text.join("\n\n"), ...(images.length ? { images } : {}) });
+  }
+  return out;
+}
+
+/**
+ * A GPU that faults (NVIDIA Xid 13 "Graphics Exception") makes llama.cpp produce garbage: "@@@@",
+ * "token repeat limit", "empty grammar stack ... @", CUDA errors. The same request on the CPU is fine.
+ */
+export const looksLikeGpuFault = (textOrError: string) => /@{6,}|repeat limit|grammar stack|CUDA|illegal memory|llama-server process has terminated|unspecified launch failure/i.test(textOrError);
+
+/**
+ * GPU faults in this process (auto mode). A faulting GPU often recovers for a while once Ollama
+ * restarts its runner, and it is ~5x faster than the CPU, so it is tried again until it has faulted
+ * QWEN_GPU_MAX_FAULTS times (default 2); after that every call goes straight to the CPU.
+ */
+let gpuFaults = 0;
+const gpuGivenUp = () => gpuFaults >= Math.max(1, Number(env("QWEN_GPU_MAX_FAULTS", "2")) || 2);
+
+async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean, cpu: boolean): Promise<ChatResult> {
   const s = loadLlmSettings();
+  const base = s.qwen.baseUrl.replace(/\/v1\/?$/, "");
+  const res = await qwenFetch(`${base}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: await toOllamaMessages(messages),
+      stream: false,
+      ...(json ? { format: "json" } : {}),
+      options: { temperature: 0.2, num_predict: Math.min(maxTokens || 4096, 8192), ...(cpu ? { num_gpu: 0 } : {}) },
+    }),
+    signal: AbortSignal.timeout(Number(env("QWEN_TIMEOUT_MS", "240000")) * (cpu ? 3 : 1)),
+  }).catch((err: Error) => {
+    throw apiError(503, `Qwen not reachable at ${base}: ${err.message} (is Ollama running? Start "Ollama" from the Start menu, and \`ollama pull ${model}\`)`);
+  });
+  const body = (await res.json().catch(() => ({}))) as Params;
+  debugDump(model + (cpu ? "_cpu" : ""), messages, body);
+  if (!res.ok || body.error) {
+    const msg = String(body?.error?.message ?? body?.error ?? res.statusText);
+    throw apiError(res.ok ? 500 : res.status, `Qwen ${res.ok ? 500 : res.status}: ${msg}`);
+  }
+  return { text: String(body.message?.content ?? ""), inTok: body.prompt_eval_count ?? 0, outTok: body.eval_count ?? 0, finish: body.done_reason === "length" ? "length" : body.done ? "stop" : "aborted" };
+}
+
+/** Local model: GPU first, and the same request on the CPU when the GPU returns garbage (device "auto"). */
+async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean): Promise<ChatResult> {
+  const device = loadLlmSettings().qwen.device;
+  if (device === "cpu" || (device === "auto" && gpuGivenUp())) return ollamaChat(messages, model, maxTokens, json, true);
+  let problem = "";
+  try {
+    const r = await ollamaChat(messages, model, maxTokens, json, false);
+    if (!looksLikeGpuFault(r.text) && r.finish !== "aborted") return r;
+    problem = r.text.slice(0, 80) || "empty answer";
+  } catch (err) {
+    if (!(err instanceof Anthropic.APIError) || err.status === 503 || !looksLikeGpuFault(err.message)) throw err;
+    problem = err.message.slice(0, 120);
+  }
+  if (device === "gpu") throw apiError(500, `Qwen on the GPU returned garbage (${problem}) - the GPU is faulting; set Qwen device to Auto or CPU`);
+  gpuFaults++;
+  process.stderr.write(`[llm] GPU returned garbage (${problem}); this request runs on the CPU${gpuGivenUp() ? ", and so does the rest of this step (slower)" : ", the next one tries the GPU again"}\n`);
+  return ollamaChat(messages, model, maxTokens, json, true);
+}
+
+function debugDump(model: string, messages: ChatMessage[], body: unknown): void {
+  // QWEN_DEBUG_DIR=<folder>: keep every request / answer (troubleshooting a local model).
+  const dbg = env("QWEN_DEBUG_DIR", "");
+  if (!dbg) return;
+  fs.mkdirSync(dbg, { recursive: true });
+  fs.writeFileSync(path.join(dbg, `${Date.now()}_${model.replace(/[^\w.-]/g, "_")}.json`), JSON.stringify({ model, messages, response: body }, null, 1));
+}
+
+async function qwenChat(messages: ChatMessage[], model: string, maxTokens: number, schema: unknown): Promise<ChatResult> {
+  const s = loadLlmSettings();
+  // Local (Ollama): native API, so each request can pick GPU or CPU. The schema is in the prompt.
+  if (s.qwen.mode === "local") return localChat(messages, model, maxTokens, !!schema);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (s.qwen.mode === "cloud") headers.Authorization = `Bearer ${qwenKey()}`;
   const res = await qwenFetch(`${s.qwen.baseUrl}/chat/completions`, {
@@ -145,12 +243,7 @@ async function qwenChat(messages: ChatMessage[], model: string, maxTokens: numbe
     throw apiError(res.status, `Qwen ${res.status}: ${msg}`);
   }
   const choice = body.choices?.[0] ?? {};
-  // QWEN_DEBUG_DIR=<folder>: keep every request / answer (troubleshooting a local model).
-  const dbg = env("QWEN_DEBUG_DIR", "");
-  if (dbg) {
-    fs.mkdirSync(dbg, { recursive: true });
-    fs.writeFileSync(path.join(dbg, `${Date.now()}_${model.replace(/[^\w.-]/g, "_")}.json`), JSON.stringify({ model, messages, response: body }, null, 1));
-  }
+  debugDump(model, messages, body);
   return { text: String(choice.message?.content ?? ""), inTok: body.usage?.prompt_tokens ?? 0, outTok: body.usage?.completion_tokens ?? 0, finish: String(choice.finish_reason ?? "stop") };
 }
 
@@ -181,8 +274,7 @@ export function restoreConstraints(node: unknown): unknown {
   return out;
 }
 
-const responseFormat = (schema: unknown, mode: "cloud" | "local") =>
-  mode === "local" && schema && typeof schema === "object" ? { type: "json_schema", json_schema: { name: "answer", strict: true, schema } } : { type: "json_object" };
+const responseFormat = (_schema: unknown, _mode: "cloud" | "local") => ({ type: "json_object" });
 
 async function callQwen(kind: Kind, params: Params): Promise<unknown> {
   const s = loadLlmSettings();

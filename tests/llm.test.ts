@@ -210,6 +210,33 @@ describe("local Qwen (Ollama native API) on a faulting GPU", () => {
     assert.deepEqual(later.map((r) => r.body.options.num_gpu), [0], "no GPU attempt after two faults");
   });
 
+  test("Ollama down for a moment (restarting after a GPU fault): wait for it, then retry the request", async () => {
+    process.env.QWEN_RESTART_POLL_MS = "5";
+    process.env.QWEN_RESTART_WAIT_MS = "2000";
+    try {
+      S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "gpu" } });
+      let chats = 0;
+      let versionCalls = 0;
+      setQwenFetch((async (url: string) => {
+        if (String(url).endsWith("/api/version")) return ++versionCalls < 3 ? Promise.reject(new TypeError("fetch failed")) : new Response("{}", { status: 200 });
+        if (++chats === 1) throw new TypeError("fetch failed");
+        return new Response(JSON.stringify({ message: { role: "assistant", content: '{"scenes":[{"id":0,"type":"stock"}]}' }, done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 5 }), { status: 200 });
+      }) as unknown as typeof fetch);
+      const res = await llm().messages.parse(req());
+      assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "stock" }] });
+      assert.deepEqual([chats, versionCalls], [2, 3], "one failed request, three polls, one retry");
+      // Still down after the wait: the error reaches the caller (the agent falls back to its rules).
+      process.env.QWEN_RESTART_WAIT_MS = "30";
+      setQwenFetch((async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch);
+      await assert.rejects(llm().messages.parse(req()), (e) => e instanceof Anthropic.APIError && e.status === 503);
+    } finally {
+      delete process.env.QWEN_RESTART_POLL_MS;
+      delete process.env.QWEN_RESTART_WAIT_MS;
+    }
+  });
+
   test("images go to Ollama as base64; device cpu is honoured", async () => {
     S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "cpu" } });
     const seen = fakeOllama({ text: "unused" });

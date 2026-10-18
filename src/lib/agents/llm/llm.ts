@@ -196,13 +196,46 @@ async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: num
   return { text: String(body.message?.content ?? ""), inTok: body.prompt_eval_count ?? 0, outTok: body.eval_count ?? 0, finish: body.done_reason === "length" ? "length" : body.done ? "stop" : "aborted" };
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * After a GPU fault Ollama restarts its runner, sometimes the whole app, and for a few seconds
+ * every request fails with "not reachable". Waits (QWEN_RESTART_WAIT_MS, default 60 s) until it
+ * answers again.
+ */
+async function waitForOllama(): Promise<boolean> {
+  const base = loadLlmSettings().qwen.baseUrl.replace(/\/v1\/?$/, "");
+  const until = Date.now() + Number(env("QWEN_RESTART_WAIT_MS", "60000"));
+  const poll = Number(env("QWEN_RESTART_POLL_MS", "2000"));
+  while (Date.now() < until) {
+    await sleep(poll);
+    try {
+      if ((await qwenFetch(`${base}/api/version`, { signal: AbortSignal.timeout(3000) })).ok) return true;
+    } catch {
+      /* still down */
+    }
+  }
+  return false;
+}
+
+/** One request, retried once when Ollama was down and came back. */
+async function whenOllamaUp<T>(request: () => Promise<T>): Promise<T> {
+  try {
+    return await request();
+  } catch (err) {
+    if (!(err instanceof Anthropic.APIError) || err.status !== 503 || !(await waitForOllama())) throw err;
+    return request();
+  }
+}
+
 /** Local model: GPU first, and the same request on the CPU when the GPU returns garbage (device "auto"). */
 async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean): Promise<ChatResult> {
   const device = loadLlmSettings().qwen.device;
-  if (device === "cpu" || (device === "auto" && gpuGivenUp())) return ollamaChat(messages, model, maxTokens, json, true);
+  const chat = (cpu: boolean) => whenOllamaUp(() => ollamaChat(messages, model, maxTokens, json, cpu));
+  if (device === "cpu" || (device === "auto" && gpuGivenUp())) return chat(true);
   let problem = "";
   try {
-    const r = await ollamaChat(messages, model, maxTokens, json, false);
+    const r = await chat(false);
     if (!looksLikeGpuFault(r.text) && r.finish !== "aborted") return r;
     problem = r.text.slice(0, 80) || "empty answer";
   } catch (err) {
@@ -212,7 +245,7 @@ async function localChat(messages: ChatMessage[], model: string, maxTokens: numb
   if (device === "gpu") throw apiError(500, `Qwen on the GPU returned garbage (${problem}) - the GPU is faulting; set Qwen device to Auto or CPU`);
   gpuFaults++;
   process.stderr.write(`[llm] GPU returned garbage (${problem}); this request runs on the CPU${gpuGivenUp() ? ", and so does the rest of this step (slower)" : ", the next one tries the GPU again"}\n`);
-  return ollamaChat(messages, model, maxTokens, json, true);
+  return chat(true);
 }
 
 function debugDump(model: string, messages: ChatMessage[], body: unknown): void {

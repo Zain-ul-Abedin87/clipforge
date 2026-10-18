@@ -162,12 +162,15 @@ export class ShotLedger {
     this.lastAt.set(key, this.now);
     this.times.set(key, [...(this.times.get(key) ?? []), this.now]);
   }
-  /** First free window of length `need` in [0, dur) (step 0.25 s), or undefined. */
-  window(key: string, dur: number, need: number, prefer = 0): number | undefined {
+  /**
+   * First free window of length `need` in [0, dur) (step 0.25 s), or undefined. `offset`: where the
+   * file starts inside the source the key names (a vault clip cut from a YouTube video).
+   */
+  window(key: string, dur: number, need: number, prefer = 0, offset = 0): number | undefined {
     const starts: number[] = [];
     for (let t = 0; t + need <= dur + 0.01; t += 0.25) starts.push(Math.round(t * 100) / 100);
     starts.sort((x, y) => Math.abs(x - prefer) - Math.abs(y - prefer));
-    return starts.find((t) => this.free(key, t, t + need));
+    return starts.find((t) => this.free(key, offset + t, offset + t + need));
   }
 }
 
@@ -190,6 +193,11 @@ export function applyPacing(
 ): ChapterShare[] {
   // Only exact-model verified pool shots count as (and may be used as) product footage.
   pool = pool.filter(isVerifiedShot);
+  // A scene's own asset is often a vault clip that is also in the pool: book it under the same
+  // source identity (YouTube video + time), or the pool would show the same moment again.
+  const fileId = (f: string) => f.replace(/\\/g, "/").toLowerCase();
+  const poolIdent = new Map(pool.map((p) => [fileId(p.path), p.srcStart === undefined ? { key: sourceKey(p.path), base: 0 } : { key: sourceKey(p.path, p.url), base: p.srcStart }]));
+  const ident = (f: string) => poolIdent.get(fileId(f)) ?? { key: sourceKey(f), base: 0 };
   const maxStock = opts.maxStockShare ?? 0.2;
   /** Spec the current micro-scene names; pool shots cut around the same spoken spec win. */
   let curSpec: string | undefined;
@@ -333,11 +341,11 @@ export function applyPacing(
     return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true };
   };
   const clipPick = (path: string, dur: number, source: string, need: number, prefer: number, scId: number): SubShot | undefined => {
-    const key = sourceKey(path);
-    const at = ledger.window(key, dur, need, prefer);
+    const { key, base } = ident(path);
+    const at = ledger.window(key, dur, need, prefer, base);
     if (at === undefined) return undefined;
-    ledger.take(key, at, at + need, scId);
-    return { path, kind: "video", in: at, frames: 0, source, key, srcIn: at };
+    ledger.take(key, base + at, base + at + need, scId);
+    return { path, kind: "video", in: at, frames: 0, source, key, srcIn: base + at };
   };
   const genericPick = (need: number, scId: number, avoid?: string): SubShot | undefined => {
     // The generic clip with the most unused time left (never the source shown right before).
@@ -411,7 +419,7 @@ export function applyPacing(
       if (!s && mentioned && !t.backdrop) s = poolPick(mentioned, need, sc.id, prevKey);
       // Generic (non-product) scene: never the same source back-to-back. Own clip -> own still ->
       // other generic clips -> unused verified b-roll of ANY product -> spaced verified reuse.
-      const ownKey = sourceKey(a.path);
+      const ownKey = a.kind === "video" ? ident(a.path).key : sourceKey(a.path);
       if (!s && !product && a.kind === "video" && !t.backdrop && ownKey !== prevKey) s = clipPick(a.path, a.duration ?? need, a.source, need, (a.in ?? 0) + k * (need + 0.8), sc.id);
       if (!s && !product && a.kind === "image" && !t.backdrop && ownKey !== prevKey && ledger.free(ownKey, 0, STILL)) {
         ledger.take(ownKey, 0, STILL, sc.id);
@@ -432,10 +440,10 @@ export function applyPacing(
       }
       if (!s) {
         // Nothing unused left: reuse (logged, QA reports it).
-        const key = sourceKey(a.path);
+        const { key, base } = a.kind === "image" ? { key: sourceKey(a.path), base: 0 } : ident(a.path);
         ledger.forced.push(`scene ${sc.id} sub-shot ${k + 1}: ${a.path.split(/[\\/]/).pop()}`);
-        s = { path: a.path, kind: a.kind, in: a.in ?? 0, frames: 0, source: a.source, key, srcIn: a.in ?? 0, reused: true };
-        ledger.take(key, a.in ?? 0, a.kind === "image" ? STILL : (a.in ?? 0) + need, sc.id);
+        s = { path: a.path, kind: a.kind, in: a.in ?? 0, frames: 0, source: a.source, key, srcIn: base + (a.in ?? 0), reused: true };
+        ledger.take(key, base + (a.in ?? 0), a.kind === "image" ? STILL : base + (a.in ?? 0) + need, sc.id);
       }
       s.frames = f;
       if (s.source === "web_crawl" && s.product) poolShots++;

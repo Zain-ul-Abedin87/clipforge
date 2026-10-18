@@ -144,8 +144,27 @@ const hasDigit = (t: string) => /\d/.test(t);
 const isModelCode = (t: string) => /[a-z]/.test(t) && /\d/.test(t); // p365, g3c, s24, rtx4090
 const bag = (xs: string[]) => xs.slice().sort().join(" ");
 
+/**
+ * One string for a run of words, independent of how the transcriber split it: hyphens and spaces
+ * gone, number words as digits, "3 hundreds" as "300s". "six-shot" = "six shot", "$289.99" =
+ * "$289 .99", "two-inch" = "2 -inch".
+ */
+export function compactSpoken(words: string[]): string {
+  return words
+    .join(" ")
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .map((w) => norm(w))
+    .join(" ")
+    .replace(/(\d+) ?hundred(s?)/g, (_m, n: string, pl: string) => `${n}00${pl}`)
+    .replace(/(\d+) ?thousand(s?)/g, (_m, n: string, pl: string) => `${n}000${pl}`)
+    .replace(/[^a-z0-9]/g, "");
+}
+
 /** Why a difference matters. Empty = minor (filler, spelling). */
 export function classifyDifference(scriptWords: string[], heardWords: string[], context: string[] = []): DiscrepancyReason[] {
+  // Same words, split differently by the transcriber: not a difference at all.
+  if (compactSpoken(scriptWords) === compactSpoken(heardWords)) return [];
   const a = scriptWords.map(norm).filter(Boolean);
   const b = heardWords.map(norm).filter(Boolean);
   const reasons: DiscrepancyReason[] = [];

@@ -231,7 +231,15 @@ async function whenOllamaUp<T>(request: () => Promise<T>): Promise<T> {
 /** Local model: GPU first, and the same request on the CPU when the GPU returns garbage (device "auto"). */
 async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean): Promise<ChatResult> {
   const device = loadLlmSettings().qwen.device;
-  const chat = (cpu: boolean) => whenOllamaUp(() => ollamaChat(messages, model, maxTokens, json, cpu));
+  const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
+  const chat = (cpu: boolean) => {
+    // The vision model on the CPU needs 30+ minutes per request: a step that checks pictures would
+    // stall for hours. It stops instead, and the agent falls back to its rules (VISION_CPU=on allows it).
+    if (cpu && hasImages && env("VISION_CPU", "off").toLowerCase() !== "on") {
+      return Promise.reject(apiError(500, "the vision model is too slow on the CPU (the GPU is not usable): skipping the picture check (VISION_CPU=on allows it)"));
+    }
+    return whenOllamaUp(() => ollamaChat(messages, model, maxTokens, json, cpu));
+  };
   if (device === "cpu" || (device === "auto" && gpuGivenUp())) return chat(true);
   let problem = "";
   try {

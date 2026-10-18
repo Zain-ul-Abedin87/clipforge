@@ -237,7 +237,16 @@ describe("local Qwen (Ollama native API) on a faulting GPU", () => {
     }
   });
 
+  test("pictures never fall back to the CPU (30+ minutes per request): the request fails fast", async () => {
+    S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "auto" } });
+    const seen = fakeOllama({ error: "prediction aborted, token repeat limit reached" });
+    const withImage = req({ messages: [{ role: "user", content: [{ type: "text", text: "?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } }] }] });
+    await assert.rejects(llm().messages.parse(withImage), /too slow on the CPU/);
+    assert.ok(seen.every((r) => r.body.options.num_gpu !== 0), "no request ran on the CPU");
+  });
+
   test("images go to Ollama as base64; device cpu is honoured", async () => {
+    process.env.VISION_CPU = "on"; // the CPU path is only taken when allowed
     S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "cpu" } });
     const seen = fakeOllama({ text: "unused" });
     await llm().messages.parse(req({ messages: [{ role: "user", content: [{ type: "text", text: "which?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } }] }] }));
@@ -246,6 +255,7 @@ describe("local Qwen (Ollama native API) on a faulting GPU", () => {
     assert.equal(seen[0].body.options.num_gpu, 0);
     assert.equal(looksLikeGpuFault("got exception: Unexpected empty grammar stack after accepting piece: @ (31)"), true);
     assert.equal(looksLikeGpuFault('{"scenes":[]}'), false);
+    delete process.env.VISION_CPU;
   });
 });
 

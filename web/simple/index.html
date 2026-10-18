@@ -16,7 +16,7 @@
       <a href="#/create" data-nav="create">Create</a>
       <a href="#/videos" data-nav="videos">My videos</a>
       <a href="#/settings" data-nav="settings">Settings</a>
-      <a href="/index.html" class="muted" title="Purana full editor">Classic editor</a>
+      <a href="#/library" data-nav="library">Library</a>
     </nav>
   </div>
 </header>
@@ -24,7 +24,7 @@
 <main>
   <!-- CREATE -->
   <section id="page-create" class="page">
-    <div class="head"><h1>Create a video</h1><p class="sub">Voiceover aur script daalein, channel chunein, Go dabayein.</p></div>
+    <div class="head"><h1>Create a video</h1><p class="sub">Add a voiceover and/or script, choose a channel, and press Go.</p></div>
     <div class="grid2">
       <div class="card">
         <label class="lbl"><span class="num">1</span>Voiceover <span class="hint">MP3 / WAV</span></label>
@@ -53,8 +53,21 @@
           <select id="channel"></select>
         </div>
       </div>
+      <div class="music-pick">
+        <label class="lbl" for="music">Background music <span class="hint">optional</span></label>
+        <div class="row" style="margin-top:0">
+          <select id="music" style="max-width:320px"><option value="default">Channel default</option><option value="off">No music</option></select>
+          <button class="btn ghost small" id="music-add" type="button">Upload a track</button>
+        </div>
+        <div id="music-upload" class="music-upload" hidden>
+          <input type="file" id="music-file" accept=".mp3,.wav,.m4a,.ogg,.flac,audio/*">
+          <input id="music-note" type="text" placeholder="Source or licence, e.g. CC0 from freemusicarchive.org" autocomplete="off">
+          <button class="btn small primary" id="music-send" type="button">Upload and use</button>
+        </div>
+        <p class="help" id="music-msg"></p>
+      </div>
       <div class="row-between" style="margin-top:16px">
-        <label class="switch"><input type="checkbox" id="review" checked><span>Review scenes before render</span><span class="hint">off = fully automatic</span></label>
+        <label class="switch"><input type="checkbox" id="review" checked><span>Stop in the studio before rendering</span><span class="hint">off = render automatically</span></label>
         <div class="go-wrap">
           <button class="btn primary big" id="go">Go</button>
           <p class="error" id="create-error"></p>
@@ -63,58 +76,214 @@
     </div>
   </section>
 
-  <!-- PROGRESS / RESULT -->
-  <section id="page-project" class="page" hidden>
-    <div class="head"><h1 id="p-title">Video</h1><p class="sub" id="p-status"></p></div>
-    <div class="card">
+  <!-- STUDIO: cooking preview -> edit -> render -> final video, all on one page -->
+  <section id="page-project" class="page studio" hidden>
+    <div class="st-top">
+      <div class="st-title">
+        <h1 id="p-title">Video</h1>
+        <p class="sub" id="p-status"></p>
+      </div>
+      <div class="st-actions">
+        <span id="edRev" class="st-rev"></span>
+        <a class="btn ghost" id="download" hidden>Download MP4</a>
+        <button class="btn primary" id="edRender" disabled>Render video</button>
+      </div>
+    </div>
+
+    <div class="st-progress" id="st-progress">
+      <ol class="st-steps" id="steps"></ol>
       <div class="bar-row"><div class="bar"><div class="fill" id="p-fill"></div></div><span class="pct" id="p-pct">0%</span></div>
       <p class="help" id="p-eta"></p>
-      <ol class="steps" id="steps"></ol>
-      <details><summary>Show log</summary><pre id="log"></pre></details>
     </div>
-    <div id="review-box" class="card" hidden>
-      <div class="row-between"><div><h2>Review scenes</h2><p class="help">Har scene ke clips dekhein. Kisi shot par click karein, phir neeche alternative chunein. Theek ho to Render dabayein.</p></div>
-        <button class="btn primary big" id="render-btn">Render video</button></div>
-      <div class="rv" id="rv"></div>
+
+    <div class="st-main">
+      <div class="st-left">
+        <div class="st-viewtabs" id="st-viewtabs" hidden>
+          <button data-v="edit" class="on">Edit preview</button>
+          <button data-v="final">Final video</button>
+        </div>
+        <div id="edStage" class="ed-stage">
+          <div id="edPlayer" class="ed-player"></div>
+          <div id="st-cook" class="st-cook"><div class="st-cook-in"><div class="spinner"></div><b id="st-cook-title">Starting...</b><span id="st-cook-sub" class="help"></span></div></div>
+          <div id="edEmpty" class="muted" hidden></div>
+        </div>
+        <video id="player" class="st-final" controls preload="metadata" hidden></video>
+        <div class="st-transport" id="st-transport" hidden>
+          <button id="edPlay" class="ibtn" title="Play / pause (Space)">&#9654;</button>
+          <span id="edTime" class="mono">0:00.00</span>
+          <span class="sep"></span>
+          <button id="edSplit" class="ibtn" title="Split the clip under the playhead (S)">&#9986; Split</button>
+          <button id="edDelete" class="ibtn" title="Delete the selected clip (Delete)">&#128465; Delete</button>
+          <span class="sep"></span>
+          <button id="edIn" class="ibtn" title="Mark the start of a part to cut out (I)">[ In</button>
+          <button id="edOut" class="ibtn" title="Mark the end (O)">Out ]</button>
+          <button id="edCut" class="ibtn warn" title="Cut the marked part out of the video, voice included (X)" disabled>Cut out</button>
+          <button id="edClear" class="ibtn" title="Clear In / Out (Esc)" hidden>&#10005;</button>
+          <span class="sep"></span>
+          <button id="edMusic" class="ibtn" title="Background music: track, level, ducking and fades">&#9835; Music</button>
+          <button id="edCaptions" class="ibtn" title="Caption style and size">CC Captions</button>
+          <button id="edVoice" class="ibtn" title="Voice cleanup: noise, rumble, level, loudness">&#127897; Voice</button>
+          <span class="sep"></span>
+          <button id="edUndo" class="ibtn" title="Undo (Ctrl+Z)">&#8630;</button>
+          <button id="edRedo" class="ibtn" title="Redo (Ctrl+Y)">&#8631;</button>
+          <label class="zoom" title="Timeline zoom">&#128269; <input id="edZoom" type="range" min="1" max="24" value="6"></label>
+        </div>
+        <div id="edSceneText" class="ed-scene-text"></div>
+      </div>
+      <aside class="st-side">
+        <div id="st-feed" class="st-feed">
+          <h3>Live footage</h3>
+          <p class="help" id="st-feed-note">Footage appears here as soon as it is found.</p>
+          <div class="st-feed-grid" id="st-feed-grid"></div>
+        </div>
+        <div id="st-editside" hidden>
+        <div class="st-sidetabs" id="st-sidetabs"><button data-v="edit" class="on">Edit</button><button data-v="transcript">Transcript</button></div>
+        <div id="edInspector" class="ed-inspector">
+          <h3>Editing</h3>
+          <p class="help"><b>Space</b> play / pause &middot; click or drag on the timeline to move the playhead.<br>
+          <b>S</b> split the clip under the playhead &middot; <b>Delete</b> remove the selected clip.<br>
+          <b>I</b> / <b>O</b> mark a section, <b>X</b> cut it out of the whole video (voiceover included).<br>
+          Select a picture to change its transition (Cut / Fade / Flash) or replace the clip.<br>
+          <b>&#9835; Music</b> chooses the background track, its level, ducking under the voice and fades.<br>
+          <b>CC Captions</b> picks the caption style; <b>Voice</b> cleans up noise and evens out the voiceover.<br>
+          <b>Transcript</b> tab: delete words or sentences and tighten pauses.</p>
+        </div>
+        <div id="edTranscript" class="tr-panel" hidden>
+          <p class="help">Click a word to jump to it; drag (or Shift+click) to select. <b>Delete</b> removes the selection from the voice and the pictures.</p>
+          <div class="row tr-actions"><button class="btn small primary" id="trDelete" disabled>Delete selection</button><span class="help" id="trSel"></span></div>
+          <div class="tr-tools">
+            <span>Pauses over</span><input id="trMin" type="number" min="0.1" max="10" step="0.1" value="0.5"><span>s: keep</span><input id="trKeep" type="number" min="0" max="5" step="0.1" value="0.2"><span>s</span>
+            <button class="btn small" id="trTighten" disabled>Tighten pauses</button>
+          </div>
+          <p class="help" id="trPauses"></p>
+          <div id="trWords" class="tr-words"></div>
+        </div>
+        </div>
+      </aside>
     </div>
-    <div id="result" hidden>
-      <div class="card">
-        <h2>Your video</h2>
-        <video id="player" controls preload="metadata"></video>
-        <div class="row">
-          <a class="btn primary" id="download">Download MP4</a>
-          <a class="btn ghost" id="license">License log (CSV)</a>
+
+    <div class="st-timeline" id="st-editor" hidden>
+      <div class="ed-labels" id="edLabels"></div>
+      <div class="ed-scroll" id="edScroll">
+        <div class="ed-canvas" id="edCanvas">
+          <div class="ed-ruler" id="edRuler"></div>
+          <div class="ed-scenes" id="edScenes"></div>
+          <div id="edTracks"></div>
+          <div class="ed-range" id="edRange" hidden></div>
+          <div class="ed-playhead" id="edPlayhead"></div>
         </div>
       </div>
-      <div class="card" id="publish-card" hidden>
-        <h2>Publish pack</h2>
-        <label class="lbl">Title</label><input id="pub-title" readonly>
-        <label class="lbl">Thumbnails</label><div class="thumbs" id="pub-thumbs"></div>
-        <label class="lbl">Description</label><textarea id="pub-desc" rows="10" readonly></textarea>
-        <label class="lbl">Chapters</label><pre class="chap" id="pub-chap"></pre>
-      </div>
-      <div class="card">
-        <h2>Quality check</h2>
-        <div class="qa-sum" id="qa-sum"></div>
-        <ul class="qa" id="qa-list"></ul>
-      </div>
-      <div class="card">
-        <h2>Scenes</h2>
-        <p class="help" id="scene-note"></p>
-        <div class="scenes" id="scenes"></div>
+    </div>
+
+    <div class="st-story" id="st-story">
+      <div class="row-between"><h3>Scenes</h3><span class="help" id="st-story-note">Scenes appear here once the plan is ready.</span></div>
+      <div class="st-strip" id="st-strip"></div>
+    </div>
+
+    <div id="result" hidden>
+      <div class="grid2">
+        <div class="card">
+          <h2>Quality check</h2>
+          <div class="qa-sum" id="qa-sum"></div>
+          <ul class="qa" id="qa-list"></ul>
+          <a class="btn ghost small" id="license">License log (CSV)</a>
+        </div>
+        <div class="card" id="publish-card" hidden>
+          <h2>Publish pack</h2>
+          <label class="lbl">Title</label><input id="pub-title" readonly>
+          <label class="lbl">Thumbnails</label><div class="thumbs" id="pub-thumbs"></div>
+          <label class="lbl">Description</label><textarea id="pub-desc" rows="8" readonly></textarea>
+          <label class="lbl">Chapters</label><pre class="chap" id="pub-chap"></pre>
+        </div>
       </div>
     </div>
+
+    <details class="card st-log"><summary>Technical log</summary><pre id="log"></pre></details>
   </section>
 
   <!-- VIDEOS -->
   <section id="page-videos" class="page" hidden>
-    <div class="head"><h1>My videos</h1><p class="sub">Saari projects yahan hain.</p></div>
+    <div class="head"><h1>My videos</h1><p class="sub">All your projects.</p></div>
     <div class="card flush"><ul class="vlist" id="vlist"></ul></div>
+  </section>
+
+  <!-- LIBRARY: footage sources + batch + glossary (moved from the old classic UI) -->
+  <section id="page-library" class="page" hidden>
+    <div class="head"><h1>Library</h1><p class="sub">Footage sources, batch production and product names. Every video draws its footage from here.</p></div>
+    <div class="lib-tabs toggle" id="lib-tabs">
+      <button data-v="vault" class="on">Model vault</button><button data-v="presskit">Press kit</button><button data-v="music">Music</button><button data-v="clips">My clips</button><button data-v="batch">Batch</button><button data-v="glossary">Glossary</button>
+    </div>
+    <div class="row" style="margin-top:0"><label class="lbl" for="lib-channel" style="margin:0">Channel</label><select id="lib-channel" style="max-width:220px"></select><span class="help" style="margin:0">Press kit, My clips and Batch apply to this channel.</span></div>
+
+    <div class="card lib-pane" data-pane="vault">
+      <h2>Model vault</h2>
+      <p class="help">Exact-model YouTube footage for each product, with talking heads and other models filtered out. The vault fills automatically while a video is made; you can also fill it in advance here.</p>
+      <div class="grid2 tight" style="margin-top:12px">
+        <div><span class="help">Brand</span><input id="v-brand" placeholder="e.g. Ruger"></div>
+        <div><span class="help">Exact model</span><input id="v-model" placeholder="e.g. Security-9"></div>
+        <div><span class="help">Features (optional, comma separated)</span><input id="v-features" placeholder="trigger, slide, magazine"></div>
+        <div><span class="help">Category (optional)</span><input id="v-category" placeholder="pistol"></div>
+      </div>
+      <div class="row"><button class="btn primary" id="v-harvest">Harvest footage</button><span class="help" id="v-policy" style="margin:0"></span></div>
+      <pre class="lib-log" id="v-log" hidden></pre>
+      <div class="vault-list" id="v-list"></div>
+    </div>
+
+    <div class="card lib-pane" data-pane="presskit" hidden>
+      <h2>Press kit / official photos</h2>
+      <p class="help">Official brand photos and videos. Add a file by URL, or use "Find official photos" to search the brand's website automatically.</p>
+      <div class="grid2 tight" style="margin-top:12px">
+        <div><span class="help">Product (exact name)</span><input id="pk-product" list="pk-products" placeholder="Ruger Security-9"><datalist id="pk-products"></datalist></div>
+        <div><span class="help">File URL (image / video)</span><input id="pk-url" placeholder="https://..."></div>
+      </div>
+      <div><span class="help">License</span><input id="pk-license" value="Manufacturer press kit (editorial/review use)"></div>
+      <div class="row"><button class="btn primary" id="pk-add">Add to press kit</button><button class="btn ghost" id="pk-official">Find official photos</button></div>
+      <pre class="lib-log" id="pk-log" hidden></pre>
+      <ul class="lib-list" id="pk-list"></ul>
+    </div>
+
+    <div class="card lib-pane" data-pane="music" hidden>
+      <h2>Music</h2>
+      <p class="help">Background tracks for this channel. Pick one when you create a video, or change it later in the Studio. Every track needs its source or licence.</p>
+      <label class="drop" id="mu-drop"><input type="file" id="mu-files" accept=".mp3,.wav,.m4a,.ogg,.flac,audio/*" multiple hidden><span class="drop-icon">&#8679;</span><span id="mu-drop-text">Drop music files here</span></label>
+      <div><span class="help">Source or licence (required)</span><input id="mu-note" type="text" placeholder="e.g. CC0 from freemusicarchive.org, or purchased from Epidemic Sound"></div>
+      <div class="row"><button class="btn primary" id="mu-upload">Upload</button><div class="bar" id="mu-progress" hidden><div class="fill"></div></div></div>
+      <ul class="lib-list" id="mu-list"></ul>
+    </div>
+
+    <div class="card lib-pane" data-pane="clips" hidden>
+      <h2>My clips</h2>
+      <p class="help">Your own or licensed clips and photos. Product clips are used first in that product's scenes.</p>
+      <label class="drop" id="lib-drop"><input type="file" id="lib-files" multiple accept="video/*,image/*" hidden><span class="drop-icon">&#8679;</span><span id="lib-drop-text">Drop clips or photos here</span></label>
+      <div class="grid2 tight" style="margin-top:12px">
+        <div><span class="help">Content type</span><div class="toggle" id="lib-kind"><button data-v="product" class="on">Product</button><button data-v="broll">B-roll (keywords)</button></div></div>
+        <div><span class="help" id="lib-label-title">Product (exact name)</span><input id="lib-label"></div>
+      </div>
+      <div><span class="help">Source / permission</span><input id="lib-note" placeholder="e.g. my own footage / permission from the channel"></div>
+      <div class="row"><button class="btn primary" id="lib-upload">Upload</button><div class="bar" id="lib-progress" hidden><div class="fill"></div></div></div>
+      <ul class="lib-list" id="lib-list"></ul>
+    </div>
+
+    <div class="card lib-pane" data-pane="batch" hidden>
+      <h2>Batch production</h2>
+      <p class="help">Drop several voiceovers, ideally each with a .txt script of the same name. Videos are produced one after another.</p>
+      <label class="drop" id="b-drop"><input type="file" id="b-files" multiple accept=".mp3,.wav,.m4a,.txt" hidden><span class="drop-icon">&#8679;</span><span id="b-drop-text">Drop voiceovers (and scripts) here</span></label>
+      <div class="row"><button class="btn primary" id="b-add">Queue videos</button><div class="bar" id="b-progress" hidden><div class="fill"></div></div></div>
+      <div class="row-between" style="margin-top:16px"><b>Queue <span class="help" id="q-state"></span></b><span><button class="btn small ghost" id="q-pause">Pause</button> <button class="btn small ghost" id="q-clear">Clear finished</button></span></div>
+      <ul class="lib-list" id="q-list"></ul>
+    </div>
+
+    <div class="card lib-pane" data-pane="glossary" hidden>
+      <h2>Glossary</h2>
+      <p class="help">Product names and difficult terms, one per line. Transcription uses them for correct spelling, and the press kit search uses these names.</p>
+      <textarea id="glossary" rows="14" style="margin-top:12px"></textarea>
+      <div class="row"><button class="btn primary" id="g-save">Save glossary</button><span class="ok" id="g-msg"></span></div>
+    </div>
   </section>
 
   <!-- SETTINGS -->
   <section id="page-settings" class="page" hidden>
-    <div class="head"><h1>Settings</h1><p class="sub">Ek dafa set karein, har video par lagengi.</p></div>
+    <div class="head"><h1>Settings</h1><p class="sub">Set once; applied to every video.</p></div>
     <div class="card">
       <h2>Defaults</h2>
       <label class="lbl">Default niche</label>
@@ -136,11 +305,12 @@
     </div>
     <div class="card">
       <h2>Channel style preset</h2>
-      <p class="help">Har channel ka apna look: cards ka font, rang, kaun se graphics, shot length.</p>
+      <p class="help">Each channel's look: card font, colours, graphics and shot length.</p>
       <label class="lbl">Channel</label><select id="cs-channel"></select>
       <div class="grid2 tight">
         <div><label class="lbl">Card font</label><select id="cs-font"></select></div>
         <div><label class="lbl">Shot length (s)</label><input type="number" step="0.1" min="1" max="8" id="cs-pace" placeholder="niche default"></div>
+        <div><label class="lbl">Caption style</label><select id="cs-capstyle"></select></div>
         <div><label class="lbl">Accent colour</label><input type="color" id="cs-primary"></div>
         <div><label class="lbl">Text colour</label><input type="color" id="cs-text"></div>
         <div><label class="lbl">Graphic every (s)</label><input type="number" step="1" min="8" max="120" id="cs-every"></div>
@@ -151,15 +321,19 @@
     </div>
     <div class="card" id="ai-card">
       <h2>AI model</h2>
-      <p class="help">Scene labels, footage searches, product checks aur diagrams isi model se bante hain. "Off" par sab free rules se chalta hai.</p>
+      <p class="help">This model writes scene labels, footage searches, product checks and diagrams. With "Off", everything runs on free built-in rules.</p>
       <label class="lbl">Active model</label>
       <div class="toggle" id="ai-primary"><button data-v="claude">Claude</button><button data-v="qwen">Qwen</button><button data-v="off">Off (free rules)</button></div>
-      <label class="lbl">Backup (jab active ruk jaye)</label>
+      <label class="lbl">Backup (used when the active model is unavailable)</label>
       <div class="toggle" id="ai-fallback"><button data-v="qwen">Qwen</button><button data-v="claude">Claude</button><button data-v="none">None</button></div>
       <ul class="keys ai-status" id="ai-status"></ul>
 
-      <label class="lbl">Qwen kahan chale</label>
+      <label class="lbl">Where Qwen runs</label>
       <div class="toggle" id="ai-qmode"><button data-v="cloud">Cloud (Alibaba, QWEN_API_KEY)</button><button data-v="local">Local (Ollama, free)</button></div>
+      <div id="ai-qdevice-wrap">
+        <label class="lbl">Local model device</label>
+        <div class="toggle" id="ai-qdevice"><button data-v="auto">Auto (GPU, CPU if the GPU fails)</button><button data-v="gpu">GPU only</button><button data-v="cpu">CPU only (slower, most stable)</button></div>
+      </div>
       <div class="grid2 tight">
         <div><span class="help">Endpoint</span><input id="ai-qurl" type="text"></div>
         <div><span class="help">Text model</span><input id="ai-qmodel" type="text"></div>
@@ -168,7 +342,7 @@
       </div>
 
       <label class="lbl">Credit budget (auto-disable)</label>
-      <p class="help">Jitna credit bacha hai likh dein. Har call ka kharcha tokens se gina jata hai; jab bachat "stop below" se kam ho, woh model khud band ho jata hai aur backup chal parta hai. "Credit balance too low" error par bhi foran band hota hai. Khaali = koi limit nahi.</p>
+      <p class="help">Enter your remaining credit. Each call's cost is counted from its tokens; when the remainder falls below "stop below", the model is switched off automatically and the backup takes over. A "credit balance too low" error also switches it off immediately. Leave empty for no limit.</p>
       <div class="grid2 tight">
         <div><span class="help">Claude credit left ($)</span><input id="ai-ccredit" type="number" step="0.01" min="0" placeholder="no limit"></div>
         <div><span class="help">Claude stop below ($)</span><input id="ai-cstop" type="number" step="0.01" min="0"></div>
@@ -185,6 +359,10 @@
     <div class="row"><button class="btn primary big" id="s-save">Save settings</button><span class="ok" id="s-msg"></span></div>
   </section>
 </main>
+<div id="toast" class="toast hidden"></div>
+<script src="/simple/preview.bundle.js"></script>
+<script src="/simple/studio.js"></script>
 <script src="/simple/simple.js"></script>
+<script src="/simple/library.js"></script>
 </body>
 </html>

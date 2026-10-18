@@ -46,3 +46,10 @@ tools/
 
 # AI model settings / spend (Settings page)
 llm_settings.json
+
+# built by npm run build:preview
+web/simple/preview.bundle.js
+
+# press / retailer photos used by callout cards stay local (copyright); only the sample is tracked
+cards/public/callout/*
+!cards/public/callout/sample.jpg

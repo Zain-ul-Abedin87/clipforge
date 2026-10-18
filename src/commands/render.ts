@@ -7,7 +7,8 @@ import { run } from "../lib/exec.js";
 import { paths } from "../lib/paths.js";
 import { projectDir, readJson, writeJson } from "../lib/project.js";
 import { AlignedWord } from "./align.js";
-import { buildAss, captionLines, CaptionLine, CaptionStyle } from "../lib/render/captions.js";
+import { buildAss, captionLines, CaptionLine, CaptionStyle, remapWords } from "../lib/render/captions.js";
+import { captionMaxWords, captionPreset } from "../lib/render/captionPresets.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
 import { duckGraph } from "../audio/duck.js";
@@ -308,7 +309,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   const capStyle = tl.captions as unknown as CaptionStyle;
   if (capStyle.enabled && fs.existsSync(path.join(dir, "aligned.json"))) {
     const words = readJson<{ words: AlignedWord[] }>(path.join(dir, "aligned.json")).words;
-    lines = captionLines(remapWords(words, tl.audio.voiceParts), capStyle.maxWordsPerLine);
+    lines = captionLines(remapWords(words, tl.audio.voiceParts), captionMaxWords(capStyle), { withWords: captionPreset(capStyle.preset).mode !== "line" });
     assFile = path.join(segDir, "captions.ass");
     fs.writeFileSync(assFile, buildAss(lines, capStyle), "utf8");
   }
@@ -455,13 +456,15 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   if (sfxLabels.length) sfxGraph.push(`${sfxLabels.join("")}amix=inputs=${sfxLabels.length}:duration=longest:normalize=0,atrim=0:${D}[sfx]`);
   // Parts cut out in the editor: play only the kept pieces of the voice file, back to back.
   const vp = tl.audio.voiceParts;
+  // Voice cleanup (denoise, rumble, level, loudness) runs on the whole voice, after the pieces are joined.
+  const cleanup = tl.audio.voiceFilter ? `,${tl.audio.voiceFilter}` : "";
   const voiceChain = vp?.length
     ? `[1:a]asplit=${vp.length}${vp.map((_, i) => `[vp${i}]`).join("")};` +
       vp.map((p, i) => `[vp${i}]atrim=start=${p.in.toFixed(6)}:duration=${p.dur.toFixed(6)},asetpts=PTS-STARTPTS[vq${i}]`).join(";") +
-      `;${vp.map((_, i) => `[vq${i}]`).join("")}concat=n=${vp.length}:v=0:a=1,aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`
-    : `[1:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${D},asetpts=PTS-STARTPTS`;
+      `;${vp.map((_, i) => `[vq${i}]`).join("")}concat=n=${vp.length}:v=0:a=1,aresample=48000,aformat=channel_layouts=stereo${cleanup},atrim=0:${D},asetpts=PTS-STARTPTS`
+    : `[1:a]aresample=48000,aformat=channel_layouts=stereo${cleanup},atrim=0:${D},asetpts=PTS-STARTPTS`;
   const filter = bed
-    ? duckGraph({ voiceChain, musicIn: "[2:a]", duration, volumeDb: tl.audio.music.volumeDb, out: "pre" })
+    ? duckGraph({ voiceChain, musicIn: "[2:a]", duration, volumeDb: tl.audio.music.volumeDb, duck: tl.audio.music.duck, fadeInSec: tl.audio.music.fadeInSec, fadeOutSec: tl.audio.music.fadeOutSec, out: "pre" })
     : `${voiceChain}[pre]`;
   const finalAudio = sfxLabels.length
     ? `${sfxGraph.join(";")};[pre][sfx]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[aout]`
@@ -470,7 +473,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   fs.mkdirSync(paths.output, { recursive: true });
   const outFile = path.join(paths.output, `${opts.project}${opts.limitSeconds ? `_first${opts.limitSeconds}s` : ""}.mp4`);
   const { input: concatIn, videoCodec } = concatInput(list, mixed);
-  log(`[render] muxing${bed ? " voice + ducked music" : " voice"}${mixed ? " (re-encoding mixed segments)" : ""} ...`);
+  log(`[render] muxing${bed ? (tl.audio.music.duck ? " voice + ducked music" : " voice + music") : " voice"}${mixed ? " (re-encoding mixed segments)" : ""} ...`);
   const mux = await run(ff, [
     "-hide_banner", "-loglevel", "error", "-y",
     ...concatIn,
@@ -528,22 +531,4 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   log(`[render] RAM: ${report.ramFreeAtStartGB} GB free at start, lowest ${report.ramLowestFreeGB} GB -> render used ~${report.ramPeakUsedByRenderGB} GB`);
   log(`[render] ${report.sync ? "A/V in sync" : "A/V MISMATCH"} -> ${outFile}`);
   return report.sync ? 0 : 1;
-}
-
-/** Aligned words (voice-file time) -> timeline time after editor cuts; words in a cut part are dropped. */
-export function remapWords<W extends { start: number; end: number }>(words: W[], parts?: { in: number; dur: number }[]): W[] {
-  if (!parts?.length) return words;
-  const out: W[] = [];
-  for (const w of words) {
-    let at = 0;
-    for (const p of parts) {
-      if (w.start >= p.in - 1e-6 && w.start < p.in + p.dur) {
-        const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
-        out.push({ ...w, start: r6(at + (w.start - p.in)), end: r6(at + Math.min(w.end, p.in + p.dur) - p.in) });
-        break;
-      }
-      at += p.dur;
-    }
-  }
-  return out;
 }

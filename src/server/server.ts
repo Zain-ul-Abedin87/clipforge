@@ -14,7 +14,9 @@ import { youtubeStatus } from "../lib/assets/youtube.js";
 import { approval, gateState, planEstimate, ProjectLike } from "./planGate.js";
 import { saveWordEdit } from "../lib/wordEdits.js";
 import { importFile, listLibrary, removeLibraryFile } from "../lib/assets/library.js";
-import { createChannel, listMusic, removeLogo, removeMusic, saveLogo, saveMusic, updateStyle } from "../lib/channels.js";
+import { parseMusicChoice, trackPath } from "../lib/music.js";
+import { CAPTION_PRESETS } from "../lib/render/captionPresets.js";
+import { createChannel, listMusic, musicDir, removeLogo, removeMusic, saveLogo, saveMusic, updateStyle } from "../lib/channels.js";
 import { BatchQueue } from "./queue.js";
 import { importOfficial } from "../lib/assets/official.js";
 import { parseScriptHtml, scriptSections, scriptText } from "../lib/scriptImport.js";
@@ -32,11 +34,13 @@ import { genericStockAllowed } from "../lib/assets/sources.js";
 import { detectAndWriteNiche } from "../lib/nicheDetect.js";
 import { ProjectStore } from "./state/projectStore.js";
 import { createEditorAPI } from "./routes/editorAPI.js";
+import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
 import { enableProvider, loadLlmSettings, PROVIDERS, providerOrder, providerStatus, ProviderName, qwenKey, QWEN_PRESETS, saveLlmSettings } from "../lib/agents/llm/settings.js";
 
 const WEB_DIR = path.join(paths.root, "web");
+const CARDS_PUBLIC = path.join(paths.root, "cards", "public");
 const TSX_CLI = path.join(paths.root, "node_modules", "tsx", "dist", "cli.mjs");
 const CLI = path.join(paths.root, "src", "cli.ts");
 
@@ -209,9 +213,16 @@ const editorApi = createEditorAPI({
   store: new ProjectStore(projDir),
   dirOf: projDir,
   validProject: validName,
+  musicLibrary: (name) => {
+    const channel = String(readProject(name)?.channel ?? "default");
+    return listMusic(channel).map((t) => ({ ...t, path: path.join(musicDir(channel), t.name) }));
+  },
   isBusy: (name) => jobs.get(name)?.running === true,
   // Incremental: only edited scenes re-render, the rest are stitched from the segment cache.
-  render: (name) => void runJob(name, ["render"], false, false, false),
+  render: (name) => {
+    writeProject(name, { reviewDone: true });
+    void runJob(name, ["render", "qa"], false, true, false);
+  },
   categoryOf: (name) => {
     const p = (readProject(name) ?? {}) as ProjectLike;
     return env("HARVEST_CATEGORY", "") || poolConfig(loadProjectNiche(p, loadStyle(String(p.channel ?? "default")))).category || "lawn mower";
@@ -312,10 +323,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const method = req.method ?? "GET";
 
   if (parts[0] !== "api") {
-    // "/" is the simple Create UI (web/simple); the full classic UI stays at /index.html.
-    const rel = url.pathname === "/" ? "simple/index.html" : url.pathname.slice(1);
-    const file = path.resolve(WEB_DIR, rel);
-    if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, "not found", "text/plain");
+    // One UI (web/simple). Old classic / editor links land on it (the studio has the editor).
+    if (url.pathname === "/index.html" || url.pathname === "/editor.html") {
+      const p = url.searchParams.get("project");
+      res.writeHead(302, { Location: p && validName(p) ? `/#/project/${encodeURIComponent(p)}` : "/" });
+      return void res.end();
+    }
+    // The Remotion cards' fonts and photos (cards/public), for the studio's live preview.
+    const inCards = url.pathname.startsWith("/cards-static/");
+    const root = inCards ? CARDS_PUBLIC : WEB_DIR;
+    const rel = url.pathname === "/" ? "simple/index.html" : inCards ? url.pathname.slice("/cards-static/".length) : url.pathname.slice(1);
+    const file = path.resolve(root, rel);
+    if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, "not found", "text/plain");
     return send(res, 200, fs.readFileSync(file), MIME[path.extname(file)] ?? "application/octet-stream");
   }
 
@@ -331,7 +350,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (method === "GET") return send(res, 200, { settings: loadAppSettings(), keys: keyStatus() });
   }
 
-  if (parts[1] === "style-meta" && method === "GET") return send(res, 200, { cards: ALL_CARDS, fonts: CARD_FONTS });
+  if (parts[1] === "style-meta" && method === "GET") return send(res, 200, { cards: ALL_CARDS, fonts: CARD_FONTS, captionStyles: CAPTION_PRESETS.map(({ id, label, description }) => ({ id, label, description })) });
 
   if (parts[1] === "footage-modes" && method === "GET") {
     return send(res, 200, FOOTAGE_MODES.map((m) => ({ name: m, label: FOOTAGE_MODE_LABELS[m] })));
@@ -433,6 +452,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const f = await editorApi.thumb(url.searchParams.get("project") ?? "", url.searchParams.get("clip") ?? "").catch(() => null);
       return f ? streamFile(req, res, f) : send(res, 404, { error: "no thumbnail" });
     }
+    if (method === "GET" && parts[2] === "voice-sample") {
+      const f = editorApi.voiceSampleFile(url.searchParams.get("project") ?? "", url.searchParams.get("name") ?? "");
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no such sample" });
+    }
+    if (method === "GET" && parts[2] === "flow-file") {
+      const f = editorApi.flowAsset(url.searchParams.get("project") ?? "", url.searchParams.get("name") ?? "");
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no such file" });
+    }
+    if (method === "POST" && parts[2] === "flow-upload") {
+      try {
+        const name = await editorApi.flowUpload(url.searchParams.get("project") ?? "", req, decodeURIComponent(String(req.headers["x-filename"] ?? "")));
+        return send(res, 200, { name });
+      } catch (err) {
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
     if (method === "GET" && parts[2] === "media") {
       let f: string | null = null;
       try {
@@ -526,7 +561,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const p = (loadStyle(ch).logo as { path?: string } | undefined)?.path;
       return p && fs.existsSync(p) ? streamFile(req, res, p) : send(res, 404, { error: "no logo" });
     }
-    if (what === "music" && method === "GET") return send(res, 200, listMusic(ch));
+    if (what === "music" && method === "GET") {
+      const file = url.searchParams.get("file");
+      if (!file) return send(res, 200, listMusic(ch));
+      const f = trackPath(musicDir(ch), file);
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no such track" });
+    }
     if (what === "music" && method === "POST") {
       try {
         const name = await saveMusic(req, ch, decodeURIComponent(String(req.headers["x-filename"] ?? "")), decodeURIComponent(String(req.headers["x-note"] ?? "")));
@@ -643,6 +683,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body.niche && listNiches().some((n) => n.name === body.niche)) writeProject(name, { niche: body.niche });
     if ((FOOTAGE_MODES as readonly string[]).includes(body.footage)) writeProject(name, { footage: body.footage });
     if (typeof body.planGate === "boolean") writeProject(name, { planGate: body.planGate });
+    if (body.music !== undefined) writeProject(name, { music: parseMusicChoice(body.music) });
     // Creative brief from the home prompt ("dark atmosphere, archival footage..."): steers the footage agent.
     if (typeof body.brief === "string") writeProject(name, { brief: body.brief.trim().slice(0, 2000) });
     return send(res, 200, { ok: true });
@@ -689,7 +730,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const title = typeof body.title === "string" ? body.title.trim().slice(0, 100) : String(p00?.title ?? "");
     const p0 = readProject(name);
     const hasAudio = !!p0?.audio && fs.existsSync(String(p0.audio)) && !(p0.voiceMode === "tts" && script);
-    if (!hasAudio && !script) return send(res, 400, { error: "Script paste karein ya voiceover upload karein" });
+    if (!hasAudio && !script) return send(res, 400, { error: "Paste a script or upload a voiceover" });
     // Mode B needs a real TTS provider; never fake the narration.
     if (!hasAudio) {
       const t = ttsStatus();
@@ -726,6 +767,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       createdAt: p0?.createdAt ?? new Date().toISOString(),
       voiceMode: hasAudio ? (script ? "both" : "voice") : "tts",
       inputMode: resolveInputMode({ hasUploadedAudio: hasAudio, hasScript: !!script }),
+      ...(body.music !== undefined ? { music: parseMusicChoice(body.music) } : {}),
     });
     if (channel !== "auto") updateStyle(channel, { captions: { enabled: st.captions } });
     else updateStyle(channel, { captions: { enabled: st.captions }, pacing: { targetShotSec: detectMeta.targetShotSec ?? 2.3 } });
@@ -791,6 +833,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   // ----- scene review before render (simple UI) -----
+  // ----- studio: live storyboard while the video cooks -----
+  if (action === "storyboard" && method === "GET") {
+    const dir = projDir(name);
+    if (parts[4] === "thumb") {
+      const f = await storyThumb(dir, Number(url.searchParams.get("scene")));
+      return f ? streamFile(req, res, f) : send(res, 404, { error: "no thumbnail yet" });
+    }
+    const job = jobs.get(name);
+    return send(res, 200, storyboard(name, dir, job?.startedAt ?? Date.now() - 6 * 3600_000));
+  }
+
   if (action === "review") {
     const dir = projDir(name);
     if (!fs.existsSync(path.join(dir, "timeline.json"))) return send(res, 404, { error: "no timeline yet" });

@@ -12,6 +12,9 @@ import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
 import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
+import { blackSpans, hitsBlack } from "../lib/blackFrames.js";
+import { ffmpegPath, ffprobePath } from "../lib/tools.js";
+import { run } from "../lib/exec.js";
 import { exactModelPrompt, productRegions, readPoolStatus, readProductPool } from "../lib/assets/productPool.js";
 import { verifyCandidates, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
 import { loadProjectNiche } from "../lib/niche.js";
@@ -19,6 +22,8 @@ import { microPlanFile, readMicroPlan } from "../lib/planner/activeSubject.js";
 import { fromLegacyTimeline, LegacyTimeline } from "../domain/timeline.types.js";
 import { V3_FILE, writeTimelineV3 } from "../lib/compiler/timelineCompiler.js";
 import { env } from "../lib/env.js";
+import { parseMusicChoice, resolveMusic } from "../lib/music.js";
+import { isCaptionPreset } from "../lib/render/captionPresets.js";
 import { applyRemotionCards } from "../lib/render/remotionCards.js";
 import { filterPoolByShotQa } from "../lib/assets/shotQa.js";
 import { poolConfig } from "../lib/assets/productPool.js";
@@ -59,7 +64,7 @@ export interface Timeline {
   height: number;
   duration: number;
   voice: string;
-  music: { files: string[]; volumeDb: number; duckDb: number };
+  music: { files: string[]; volumeDb: number; duckDb: number; duck?: boolean };
   /** Channel logo in a corner of every scene (null when the channel has none). */
   logo?: { path: string; position: string; opacity: number } | null;
   /** Motion graphics on/off and sound-effect level. */
@@ -68,7 +73,6 @@ export interface Timeline {
   scenes: TimelineScene[];
 }
 
-const AUDIO_EXT = new Set([".mp3", ".wav", ".m4a", ".ogg", ".flac"]);
 
 /**
  * Step 5: scenes + assets + style -> timeline.json. The file is meant to be hand-editable: change a
@@ -83,17 +87,18 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       return 1;
     }
   }
-  const project = readJson<{ name?: string; audio: string; channel?: string; niche?: string; footage?: string }>(path.join(dir, "project.json"));
+  const project = readJson<{ name?: string; audio: string; channel?: string; niche?: string; footage?: string; music?: unknown }>(path.join(dir, "project.json"));
   if (!project.name) project.name = opts.project;
   const channel = project.channel ?? "default";
   const chDir = path.join(paths.channels, channel);
   const style = loadStyle(channel);
 
+  const resolvedMusic = resolveMusic({ style, defaultEnabled: musicEnabled(style, loadProjectNiche(project, style)), choice: parseMusicChoice(project.music), channelDir: chDir });
   const inputs = {
     scenes: fingerprint(files[0]),
     assets: fingerprint(files[1]),
     style: fingerprint(path.join(chDir, "style.json")),
-    music: musicEnabled(style, loadProjectNiche(project, style)) ? musicFiles(chDir, style).join("|") : "off",
+    music: resolvedMusic.files.length ? `${resolvedMusic.files.map((f) => `${path.basename(f)}:${fingerprint(f)}`).join("|")}@${resolvedMusic.volumeDb}${resolvedMusic.duck ? "d" : ""}` : "off",
     sections: fingerprint(path.join(dir, "sections.json")),
     graphicsVersion: "mg-5-chapters",
     cardsPreset: JSON.stringify(style.cards ?? null) + JSON.stringify(style.pacing ?? null),
@@ -124,7 +129,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   const preset = cardPreset(style);
   const cap = (style.captions ?? {}) as Record<string, unknown>;
   const colors = (style.colors ?? {}) as Record<string, string>;
-  const music = (style.music ?? {}) as Record<string, number>;
+  const duckDb = Number(((style.music ?? {}) as Record<string, unknown>).duckDb ?? -10);
   const res = (style.resolution ?? {}) as Record<string, number>;
 
   // Stills alternate gentle moves so a run of images does not feel static; cards only breathe.
@@ -170,6 +175,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       maxStockShare: Number(env("MAX_STOCK_SHARE", "0.2")),
       micro: readMicroPlan(dir)?.scenes.map((m) => ({ sceneId: m.sceneId, startFrame: m.startFrame, endFrame: m.endFrame, spec: m.subject.spec?.spec })),
     });
+    await clearBlackShots(tl, log);
     const status = readPoolStatus(dir);
     const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
     writeJson(path.join(dir, "footage_share.json"), report);
@@ -202,7 +208,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     height: res.height ?? 1080,
     duration: scenes[scenes.length - 1].end,
     voice: project.audio,
-    music: { files: musicEnabled(style, loadProjectNiche(project, style)) ? musicFiles(chDir, style) : [], volumeDb: music.volumeDb ?? -18, duckDb: music.duckDb ?? -10 },
+    music: { files: resolvedMusic.files, volumeDb: resolvedMusic.volumeDb, duckDb, duck: resolvedMusic.duck },
     motion: motionCfg,
     logo: logoOf(style),
     captions: {
@@ -213,6 +219,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       background: String(cap.background ?? "rgba(0,0,0,0.55)"),
       textColor: colors.text ?? "#FFFFFF",
       marginV: 70,
+      ...(isCaptionPreset(cap.preset) ? { preset: cap.preset } : {}),
     },
     scenes: tl,
   };
@@ -230,7 +237,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   markDone(dir, "timeline", inputs);
   const moves = tl.reduce<Record<string, number>>((m, s) => ((m[s.motion] = (m[s.motion] ?? 0) + 1), m), {});
   log(`[timeline] ${tl.length} scenes, ${(out.duration / 60).toFixed(1)} min, motions ${JSON.stringify(moves)}`);
-  log(`[timeline] music: ${out.music.files.length ? out.music.files.map((f) => path.basename(f)).join(", ") : musicEnabled(style, loadProjectNiche(project, style)) ? "none (add files to channels/" + channel + "/music)" : "off (style.json music.enabled is not true)"}`);
+  log(`[timeline] music: ${resolvedMusic.note}${out.music.files.length ? ` at ${out.music.volumeDb} dB${out.music.duck ? ", ducked under the voice" : ""}` : ""}`);
   log(`[timeline] captions: ${out.captions.enabled ? "on" : "off"}`);
   const ov = tl.reduce((n, s) => n + (s.overlays?.length ?? 0), 0);
   const fx = tl.reduce((n, s) => n + (s.sfx?.length ?? 0), 0);
@@ -242,16 +249,6 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
 /** Background music is opt-in: style.json music.enabled must be true and the niche must not switch it off. */
 export function musicEnabled(style: Record<string, unknown>, niche?: { music?: { enabled?: boolean } } | null): boolean {
   return (style.music as { enabled?: unknown } | undefined)?.enabled === true && niche?.music?.enabled !== false;
-}
-
-function musicFiles(chDir: string, style: Record<string, unknown>): string[] {
-  const folder = path.join(chDir, String((style.music as Record<string, unknown> | undefined)?.folder ?? "music"));
-  if (!fs.existsSync(folder)) return [];
-  return fs
-    .readdirSync(folder)
-    .filter((f) => AUDIO_EXT.has(path.extname(f).toLowerCase()))
-    .sort()
-    .map((f) => path.join(folder, f));
 }
 
 function logoOf(style: Record<string, unknown>): Timeline["logo"] {
@@ -502,4 +499,35 @@ function nearestFootage(tl: TimelineScene[], i: number): TimelineScene | undefin
 function specFingerprint(channel: string, scenes: Scene[]): string {
   const names = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))].sort();
   return names.map((n) => `${n}:${(readResearch(channel, n)?.specs ?? []).join("|")}`).join(";") + "|exact-model-1";
+}
+
+/**
+ * Pacing sub-shots that would show black (a fade or scene change inside a harvested clip): move the
+ * in-point to a clean part of the same clip, or report the scene when the clip has none.
+ */
+async function clearBlackShots(scenes: { id: number; asset: { shots?: SubShot[] } }[], log: (m: string) => void): Promise<void> {
+  const ff = ffmpegPath();
+  const fp = ffprobePath();
+  if (!ff || !fp) return;
+  let moved = 0;
+  const left: number[] = [];
+  for (const sc of scenes) {
+    for (const sh of sc.asset.shots ?? []) {
+      if (sh.kind !== "video" || !fs.existsSync(sh.path)) continue;
+      const len = sh.frames / 30;
+      const blacks = await blackSpans(ff, sh.path);
+      if (!hitsBlack(blacks, sh.in, len)) continue;
+      const total = Number((await run(fp, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", sh.path])).stdout.trim()) || 0;
+      const at = [0, ...blacks.map((b) => b.e + 0.1)].find((x) => x + len <= total && !hitsBlack(blacks, x, len));
+      if (at === undefined) {
+        left.push(sc.id);
+        continue;
+      }
+      if (sh.srcIn !== undefined) sh.srcIn += at - sh.in;
+      sh.in = Math.round(at * 100) / 100;
+      moved++;
+    }
+  }
+  if (moved) log(`[timeline] black-frame guard: ${moved} shot(s) moved past black frames`);
+  if (left.length) log(`[timeline] WARNING black frames left in scene(s) ${[...new Set(left)].join(", ")} (clip has no clean part long enough) - swap them on the review page`);
 }

@@ -3,6 +3,9 @@ import path from "node:path";
 import type { IncomingMessage } from "node:http";
 import { paths } from "./paths.js";
 import { slug } from "./assets/presskit.js";
+import { isAudioFile, libraryDir } from "./music.js";
+import { isCaptionPreset } from "./render/captionPresets.js";
+import { loadStyle } from "./style.js";
 
 const readJsonFile = (f: string) => JSON.parse(fs.readFileSync(f, "utf8").replace(/^﻿/, ""));
 const styleFile = (ch: string) => path.join(paths.channels, ch, "style.json");
@@ -39,6 +42,7 @@ export function updateStyle(channel: string, patch: Record<string, unknown>): Re
   if (typeof p.captions?.enabled === "boolean") s.captions.enabled = p.captions.enabled;
   set(s.captions, "fontSize", num(p.captions?.fontSize, 30, 90));
   set(s.captions, "maxWordsPerLine", num(p.captions?.maxWordsPerLine, 3, 12));
+  if (isCaptionPreset(p.captions?.preset)) s.captions.preset = p.captions.preset;
   s.music ??= {};
   // Background music is OFF unless a channel turns it on explicitly.
   if (typeof p.music?.enabled === "boolean") s.music.enabled = p.music.enabled;
@@ -120,9 +124,9 @@ export function removeLogo(channel: string): void {
 /** Background music track with a required licence note (kept in music/sources.json). */
 export async function saveMusic(req: IncomingMessage, channel: string, filename: string, note: string): Promise<string> {
   const ext = path.extname(filename).toLowerCase();
-  if (![".mp3", ".wav", ".m4a", ".ogg", ".flac"].includes(ext)) throw new Error("music must be mp3, wav, m4a, ogg or flac");
+  if (!isAudioFile(filename)) throw new Error("music must be mp3, wav, m4a, ogg or flac");
   if (!note.trim()) throw new Error("write where the track comes from (licence)");
-  const dir = path.join(paths.channels, channel, "music");
+  const dir = musicDir(channel);
   fs.mkdirSync(dir, { recursive: true });
   const base = slug(path.basename(filename, ext)) || "track";
   let name = `${base}${ext}`;
@@ -135,19 +139,22 @@ export async function saveMusic(req: IncomingMessage, channel: string, filename:
   return name;
 }
 
+/** The channel's music library folder (style.json music.folder, default "music"). */
+export const musicDir = (channel: string) => libraryDir(path.join(paths.channels, channel), loadStyle(channel));
+
 export function listMusic(channel: string): { name: string; license: string; bytes: number }[] {
-  const dir = path.join(paths.channels, channel, "music");
+  const dir = musicDir(channel);
   if (!fs.existsSync(dir)) return [];
   const src = path.join(dir, "sources.json");
   const meta = fs.existsSync(src) ? readJsonFile(src) : {};
   return fs
     .readdirSync(dir)
-    .filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f))
+    .filter(isAudioFile)
     .map((f) => ({ name: f, license: meta[f]?.license ?? "", bytes: fs.statSync(path.join(dir, f)).size }));
 }
 
 export function removeMusic(channel: string, name: string): void {
-  const dir = path.join(paths.channels, channel, "music");
+  const dir = musicDir(channel);
   const file = path.join(dir, path.basename(name));
   if (file.startsWith(dir)) fs.rmSync(file, { force: true });
 }

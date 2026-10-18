@@ -85,6 +85,9 @@ export interface AudioClip extends ClipBase {
   gainDb: number;
   /** Music only: dip under the voice. */
   duck?: boolean;
+  /** Music only: fade in / out at the ends of the bed, seconds (renderer default 2 / 3). */
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
 export interface SfxClip extends ClipBase {
@@ -151,6 +154,8 @@ export interface RenderSettings {
   captions?: { enabled: boolean; [k: string]: unknown };
   logo?: { path: string; position: string; opacity: number } | null;
   sfx?: { enabled: boolean; gainDb: number };
+  /** Voice cleanup (src/audio/voiceCleanup.ts); missing = off. */
+  voice?: { denoise: "off" | "light" | "strong"; rumble: boolean; even: boolean; loudness: boolean };
 }
 
 export interface MultiTrackTimeline {
@@ -263,7 +268,7 @@ export interface LegacyTimeline {
   width: number;
   height: number;
   voice: string;
-  music: { files: string[]; volumeDb: number };
+  music: { files: string[]; volumeDb: number; duck?: boolean };
   motion?: { sfx?: boolean; sfxDb?: number };
   captions?: { enabled: boolean; [k: string]: unknown };
   logo?: { path: string; position: string; opacity: number } | null;
@@ -301,7 +306,7 @@ export function fromLegacyTimeline(legacy: LegacyTimeline, sceneText: Record<num
   const [voice, broll, overlay, music, sfx] = tracks;
   voice.clips.push({ id: "voice_0", trackId: voice.id, kind: "audio", start: ZERO, duration, media: { path: legacy.voice, kind: "audio", sourceIn: ZERO }, gainDb: 0 });
   legacy.music.files.forEach((f, i) =>
-    music.clips.push({ id: `music_${i}`, trackId: music.id, kind: "audio", start: ZERO, duration, media: { path: f, kind: "audio", sourceIn: ZERO }, gainDb: legacy.music.volumeDb, duck: true }),
+    music.clips.push({ id: `music_${i}`, trackId: music.id, kind: "audio", start: ZERO, duration, media: { path: f, kind: "audio", sourceIn: ZERO }, gainDb: legacy.music.volumeDb, duck: legacy.music.duck ?? true }),
   );
   const scenes: SceneBlock[] = [];
   for (const s of legacy.scenes) {

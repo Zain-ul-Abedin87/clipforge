@@ -1,6 +1,7 @@
 import type { AlignedWord, Sentence } from "../../commands/align.js";
 import type { Section } from "../scenes.js";
 import { norm } from "../text.js";
+import { OUTRO_RE } from "./introOutro.js";
 
 export interface Span {
   start: number;
@@ -10,7 +11,6 @@ export interface Span {
 }
 
 const HEADER_RE = /^(?:and\s+)?(?:(?:coming\s+in\s+)?at\s+|our\s+)?(?:number|no\.?|#)\s*([a-z0-9-]+)\b/i;
-const OUTRO_RE = /\b(that wraps up|wrap(?:s|ping)? (?:it|things) up|thanks for watching|let us know in the comments|see you in the next|that's (?:it|all) for)\b/i;
 
 function rankOf(sentence: string): number | null {
   const m = sentence.trim().match(HEADER_RE);

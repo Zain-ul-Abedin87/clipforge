@@ -8,6 +8,7 @@ import { paths } from "../lib/paths.js";
 import { heuristicLabels, llmLabels } from "../lib/planner/label.js";
 import { routeSegments } from "../lib/planner/segmentRoute.js";
 import { detectSections, splitIntoScenes } from "../lib/planner/structure.js";
+import { applyBounds, findBounds } from "../lib/planner/introOutro.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { Scene, Section, validateScenes } from "../lib/scenes.js";
 import { loadStyle } from "../lib/style.js";
@@ -81,15 +82,16 @@ function splitAdjacentCards(scenes: Scene[], brollQuery: string, log: (m: string
  * Imported scripts carry their own sections (one beat per paragraph). Each section starts at the
  * first aligned sentence of its paragraph. Unranked lists get no "#N" (rank stays undefined).
  */
-function sectionsFromScript(beats: ScriptSection[], aligned: Aligned, duration: number): Section[] {
+export function sectionsFromScript(beats: ScriptSection[], aligned: Pick<Aligned, "sentences">, duration: number): Section[] {
   const out: Section[] = [];
   beats.forEach((b, p) => {
     const first = aligned.sentences.find((s) => s.paragraph === p);
     if (!first) return;
     const start = out.length === 0 ? 0 : first.start;
     if (out.length) out[out.length - 1].end = start;
-    const kind = b.kind === "body" ? "outro" : b.kind;
-    out.push({ id: out.length, kind, start, end: duration, ...(b.product_name ? { product_name: b.product_name } : {}) });
+    // A non-product beat between items ("Buying guide") stays "body"; only the last one is the outro
+    // (scriptSections marks it). It used to become "outro", i.e. a "Final thoughts" chapter mid-video.
+    out.push({ id: out.length, kind: b.kind, start, end: duration, ...(b.label ? { label: b.label } : {}), ...(b.product_name ? { product_name: b.product_name } : {}) });
   });
   // Merge consecutive non-product beats (e.g. a short "Subscribe" between items) into the previous section.
   const merged: Section[] = [];
@@ -111,6 +113,12 @@ function repair(scenes: Scene[], sections: Section[], fallback: Scene[]): Scene[
       else fixed.type = "stock";
     }
     if (fixed.type === "graphic" && !fixed.graphic) fixed.type = fallback[i].type === "graphic" ? "stock" : fallback[i].type;
+    // No full-scene intro card: the opening is footage (the hook needs moving pictures, not a title).
+    if (fixed.graphic?.kind === "intro_card") {
+      delete fixed.graphic;
+      fixed.type = "stock";
+      fixed.queries = fallback[i].queries.length ? [...fallback[i].queries] : fixed.queries;
+    }
     if (fixed.type !== "graphic") delete fixed.graphic;
     if (fixed.type === "product" && fixed.product_name && !fixed.queries.includes(fixed.product_name)) {
       fixed.queries.unshift(fixed.product_name);
@@ -141,7 +149,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     glossary: fingerprint(glossaryFile),
     scriptSections: fingerprint(path.join(dir, "script_sections.json")),
     niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
-    labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v2:route-v1`,
+    labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v3:route-v1:bounds-v1`,
     micro: JSON.stringify(microConfig(niche)) + "micro-v1",
   };
   if (!opts.force && isCached(dir, "plan", inputs, ["scenes.json"])) {
@@ -155,12 +163,20 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
   const limits = niche.scenes ?? style.scenes;
 
   const scriptSecFile = path.join(dir, "script_sections.json");
-  const sections =
-    aligned.mode === "script" && fs.existsSync(scriptSecFile)
+  const labelled = aligned.mode === "script" && fs.existsSync(scriptSecFile);
+  const detected =
+    labelled
       ? sectionsFromScript(readJson<ScriptSection[]>(scriptSecFile), aligned, duration)
       : niche.structure.detectListicle
         ? detectSections(aligned.sentences, duration, loadGlossary(glossaryFile))
         : [{ id: 0, kind: "body" as const, start: 0, end: duration }];
+  // Hook / intro / outro from the narration (LLM, regex fallback). A countdown's outro must come
+  // after its last "Number N" header.
+  const lastItem = [...detected].reverse().find((x) => x.kind === "item");
+  const afterIdx = lastItem ? aligned.sentences.findIndex((x) => x.start >= lastItem.start - 0.05) : -1;
+  const bounds = await findBounds(aligned.sentences, duration, { useLlm, afterIdx, log });
+  const sections = applyBounds(detected, bounds, aligned.sentences, duration, limits.minLengthSec, labelled);
+  log(`[plan] hook ends ${bounds.hookEnd.toFixed(1)}s${bounds.outroStart !== undefined ? `, outro from ${bounds.outroStart.toFixed(1)}s` : ", no outro found"} (${bounds.source})`);
   const spans = splitIntoScenes(sections, aligned.words, limits);
   log(`[plan] video type: ${niche.label}`);
   log(`[plan] ${sections.length} sections: ${sections.map((s) => (s.kind === "item" ? `${s.rank !== undefined ? `#${s.rank} ` : ""}${s.product_name ?? "?"}` : s.kind)).join(" | ")}`);

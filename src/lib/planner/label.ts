@@ -79,9 +79,7 @@ export function heuristicLabels(spans: Span[], sections: Section[], niche: Niche
       const graphic: Graphic = { kind: "title_card", title: product ?? `Number ${sec.rank}`, lines: [], rank: sec.rank };
       return { ...base, type: "graphic", queries: product ? [product] : [], product_name: product, graphic };
     }
-    if (sec.kind === "intro" && k === 0) {
-      return { ...base, type: "graphic", queries: [stockQ], graphic: { kind: "intro_card", title: "Top Picks", lines: [] } };
-    }
+    // The intro opens on footage, never a full-scene "Top Picks" card (sections[0].hookEnd marks the hook).
     if (sec.kind === "outro" && id === spans.length - 1) {
       return { ...base, type: "graphic", queries: [stockQ], graphic: { kind: "end_card", title: "Thanks for watching", lines: [] } };
     }
@@ -147,7 +145,7 @@ For every scene return:
   - price_badge: when the narration states a price.
   - spec_card: key specs or features as 2-4 short lines (max 5 words each).
   - pros_cons: lines prefixed "+ " or "- ".
-  - intro_card / end_card: first scene of the intro / last scene of the video.
+  - end_card: last scene of the video. Never use intro_card: the intro must show footage.
 
 Rules: keep graphics to roughly a quarter of the scenes; never use the same type more than 3 times in a row; prefer "product" while an item is being described; only describe what the narration says, never invent specs or prices. Return exactly one entry per input scene id, in order.`;
 

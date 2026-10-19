@@ -21,6 +21,10 @@ export interface Section {
   end: number;
   rank?: number;
   product_name?: string;
+  /** First section only: end of the opening hook line(s), seconds (planner/introOutro.ts). */
+  hookEnd?: number;
+  /** Beat label of an imported script ("Buying guide"), used as the chapter name. */
+  label?: string;
 }
 
 /** scenes.json contract: [{id,start,end,text,type,queries[],product_name?}] plus planner extras. */

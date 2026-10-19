@@ -255,7 +255,7 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
 
   // ---- publish package ----
   const items = sections.filter((s) => s.kind === "item");
-  const chapterList = sections.map((s) => ({ t: s.start, label: s.kind === "item" ? `#${s.rank} ${s.product_name ?? ""}`.trim() : s.kind === "intro" ? "Intro" : s.kind === "outro" ? "Final thoughts" : "Start" }));
+  const chapterList = sections.map((s) => ({ t: s.start, label: s.kind === "item" ? `#${s.rank} ${s.product_name ?? ""}`.trim() : s.kind === "intro" ? "Intro" : s.kind === "outro" ? "Final thoughts" : s.label || "Start" }));
   if (chapterList.length && chapterList[0].t > 0) chapterList[0].t = 0;
   const ytCh = youtubeChapters(readChapters(dir));
   const chapters = ytCh ? ytCh : chapterList.length >= 3 ? chapterList.map((c) => `${fmt(c.t)} ${c.label}`).join("\n") : "";

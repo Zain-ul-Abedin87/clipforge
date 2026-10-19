@@ -303,7 +303,6 @@ describe("Phase 4: scene content hash", () => {
   });
   const base = (): SceneHashInput => ({
     sceneId: 1,
-    audio: { file: voice, start: 1, end: 3 },
     asset: { path: media, kind: "image", source: "local" },
     captions: { lines: [{ text: "hi", start: 1, end: 2 }] },
     overlays: [],
@@ -321,12 +320,13 @@ describe("Phase 4: scene content hash", () => {
     assert.match(sceneContentHash(base()), /^[0-9a-f]{64}$/);
   });
 
-  test("captions, motion, transition, audio slice and asset file changes all change the hash", () => {
+  test("captions, motion, transition and asset file changes all change the hash; position does not", () => {
     const h = sceneContentHash(base());
     assert.notEqual(sceneContentHash({ ...base(), captions: { lines: [{ text: "hey", start: 1, end: 2 }] } }), h);
     assert.notEqual(sceneContentHash({ ...base(), motion: "pan_left" }), h);
     assert.notEqual(sceneContentHash({ ...base(), transition: "fade" }), h);
-    assert.notEqual(sceneContentHash({ ...base(), audio: { file: voice, start: 1, end: 3.5 } }), h);
+    assert.notEqual(sceneContentHash({ ...base(), frames: 61 }), h);
+    assert.equal(sceneContentHash({ ...base(), sceneId: 7 }), h, "a renumbered scene keeps its segment");
     const t = new Date(Date.now() + 60_000);
     fs.utimesSync(media, t, t);
     assert.notEqual(sceneContentHash(base()), h, "touching the asset file invalidates the segment");

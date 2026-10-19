@@ -82,6 +82,17 @@ export interface PacingConfig {
   introChoices?: number[];
 }
 
+/**
+ * Seed from what a scene says and how long it is, not where it sits: a scene that only moved
+ * (an earlier sentence changed length) cuts the same way and keeps its render-cache entry.
+ */
+export function contentSeed(start: number, end: number, words: Word[], salt: number): number {
+  const said = words.filter((w) => w.start >= start - 0.01 && w.start < end - 0.01).map((w) => w.word).join(" ");
+  let h = 2166136261 ^ salt;
+  for (const ch of `${said}|${Math.round((end - start) * 1000)}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return h >>> 0;
+}
+
 /** Small deterministic PRNG (mulberry32): same seed, same cuts, so the render cache stays valid. */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0;
@@ -207,7 +218,7 @@ export function cutTimes(start: number, end: number, words: Word[], cfg: PacingC
   const h = cfg.hookEnd;
   if (h !== undefined && cfg.teaserChoices?.length && start < h - 0.3) {
     const tEnd = Math.min(end, h);
-    const cuts = boundariesOf(start, randomPieces(tEnd - start, cfg.teaserChoices, seededRandom(Math.round(start * 1000) + 7)));
+    const cuts = boundariesOf(start, randomPieces(tEnd - start, cfg.teaserChoices, seededRandom(contentSeed(start, tEnd, words, 7))));
     const rest = { ...cfg, hookEnd: undefined };
     // A tail shorter than one teaser shot stays on the last teaser shot.
     if (end - tEnd < Math.min(...cfg.teaserChoices)) return cuts;
@@ -252,7 +263,7 @@ function boundariesOf(start: number, pieces: number[]): number[] {
  * 0.35 s) only when both pieces around it stay inside the allowed range, so the maximum holds.
  */
 export function randomCuts(start: number, end: number, words: Word[], choices: number[]): number[] {
-  const pieces = randomPieces(end - start, choices, seededRandom(Math.round(start * 1000) + 1));
+  const pieces = randomPieces(end - start, choices, seededRandom(contentSeed(start, end, words, 1)));
   if (pieces.length < 2) return [];
   const lo = Math.min(...choices);
   const hi = Math.max(...choices);

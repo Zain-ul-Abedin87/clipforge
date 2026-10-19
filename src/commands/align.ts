@@ -7,6 +7,8 @@ import { paths } from "../lib/paths.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { endsSentence, norm, tokenize } from "../lib/text.js";
 import { applyWordEdits } from "../lib/wordEdits.js";
+import { ttsTimingsFor } from "../lib/ttsChunks.js";
+import { writeModeBTimings } from "./tts.js";
 
 export type WordSource = "script" | "whisper" | "glossary" | "interpolated" | "extra";
 
@@ -72,6 +74,14 @@ const round = (x: number) => Math.round(x * 1000) / 1000;
 
 export async function align(opts: AlignOpts): Promise<number> {
   const dir = projectDir(opts.project);
+  // Mode B: aligned.json comes from the TTS sentence times (exact edges, no Whisper drift).
+  const projFile = path.join(dir, "project.json");
+  const modeB = ttsTimingsFor(dir, fs.existsSync(projFile) ? readJson<{ audio?: string }>(projFile).audio : null);
+  if (modeB) {
+    writeModeBTimings(dir, modeB);
+    console.log(`[align] Mode B: ${modeB.units.length} sentence(s) timed by TTS, Whisper alignment skipped`);
+    return 0;
+  }
   const wordsFile = path.join(dir, "words.json");
   if (!fs.existsSync(wordsFile)) {
     console.error(`[align] ${wordsFile} missing. Run \`clipforge transcribe\` first.`);

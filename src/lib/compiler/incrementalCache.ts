@@ -4,18 +4,19 @@ import path from "node:path";
 
 /**
  * Incremental render cache. Every scene segment is stored under a SHA-256 of everything that
- * changes its pixels or its place in the cut: the audio slice under it, the asset file(s) (path +
- * size + mtime, so replacing a file on disk invalidates it), captions, overlays (and their files),
- * transition, motion, backdrop, logo and frame count. Same hash = reuse the cached file; one edited
- * scene re-renders alone and the rest are stitched from cache (concatDemuxer.ts).
+ * changes its pixels: the asset file(s) (path + size + mtime, so replacing a file on disk
+ * invalidates it), captions (times relative to the segment), overlays (and their files),
+ * transition, motion, backdrop, logo and frame count. Segments are video only (the voice is muxed
+ * once at the end), so neither the voice file nor the scene's position in the video is part of the
+ * hash: a scene that only moved (an earlier sentence got longer) keeps its cached file. Files are
+ * content-addressed (seg_<hash>.mp4), so a renumbered scene finds its old segment too.
  * (Moved from src/lib/render/sceneHash.ts, which re-exports this module.)
  */
 
 export interface SceneHashInput {
   sceneId: number;
-  /** Voiceover file and the slice of it this scene covers. */
-  audio: { file: string; start: number; end: number };
   asset: { path: string; kind: string; source?: string; in?: number; shots?: { path: string; kind: string; in?: number; frames: number; variant?: string }[] };
+  /** Caption lines with times relative to the segment start (see relativeCaptions). */
   captions: unknown;
   overlays: readonly object[];
   transition: string;
@@ -55,10 +56,8 @@ export function canonicalJson(v: unknown): string {
 }
 
 export function sceneContentHash(i: SceneHashInput): string {
-  const r3 = (x: number) => Math.round(x * 1000) / 1000;
   const payload = {
     v: i.version,
-    audio: { file: fileStamp(i.audio.file), start: r3(i.audio.start), end: r3(i.audio.end) },
     asset: {
       file: fileStamp(i.asset.path),
       kind: i.asset.kind,
@@ -83,8 +82,14 @@ export function sceneContentHash(i: SceneHashInput): string {
   return crypto.createHash("sha256").update(canonicalJson(payload)).digest("hex");
 }
 
-/** Cached segment file for a scene + hash. */
-export const segmentFile = (cacheDir: string, sceneId: number, hash: string) => path.join(cacheDir, `seg_${String(sceneId).padStart(4, "0")}_${hash.slice(0, 16)}.mp4`);
+/** Caption lines shifted to the segment's own clock, so a moved scene hashes the same. */
+export function relativeCaptions<T extends { start: number; end: number }>(lines: T[], segStart: number): T[] {
+  const r3 = (x: number) => Math.round(x * 1000) / 1000;
+  return lines.map((l) => ({ ...l, start: r3(l.start - segStart), end: r3(l.end - segStart) }));
+}
+
+/** Cached segment file: content-addressed (the scene id is not part of the name). */
+export const segmentFile = (cacheDir: string, _sceneId: number, hash: string) => path.join(cacheDir, `seg_${hash.slice(0, 24)}.mp4`);
 
 export interface SegmentManifest {
   updatedAt: string;
@@ -139,6 +144,6 @@ export class SegmentCache {
     const manifest: SegmentManifest = { updatedAt: new Date().toISOString(), scenes: Object.fromEntries(segs.map((s) => [String(s.sceneId), { hash: s.hash, file: path.basename(s.out), frames: s.frames }])) };
     fs.writeFileSync(this.manifestFile, JSON.stringify(manifest, null, 1));
     const keep = new Set(segs.flatMap((s) => [path.basename(s.out), `${path.basename(s.out)}.enc`]));
-    for (const f of fs.readdirSync(this.dir)) if (/^seg_\d+_[0-9a-f]+\.mp4(\.enc)?$/.test(f) && !keep.has(f)) fs.rmSync(path.join(this.dir, f), { force: true });
+    for (const f of fs.readdirSync(this.dir)) if (/^seg_(\d+_)?[0-9a-f]+\.mp4(\.enc)?$/.test(f) && !keep.has(f)) fs.rmSync(path.join(this.dir, f), { force: true });
   }
 }

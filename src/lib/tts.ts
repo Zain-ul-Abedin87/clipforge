@@ -84,7 +84,7 @@ export function ttsStatus(get: EnvGet = env): { configured: boolean; provider: s
 }
 
 /** Per-request character limits (with margin) of each engine. */
-const CHUNK_CHARS: Record<TtsProvider, number> = { elevenlabs: 2400, openai: 3800, piper: 20000, windows: 20000 };
+export const CHUNK_CHARS: Record<TtsProvider, number> = { elevenlabs: 2400, openai: 3800, piper: 20000, windows: 20000 };
 
 /** Splits text into chunks at sentence (then word) boundaries, each at most `max` characters. */
 export function chunkText(text: string, max: number): string[] {
@@ -165,7 +165,7 @@ export async function synthesize(opts: SynthesizeOpts): Promise<SynthesizeResult
   return { file: opts.outFile, provider: config.provider, chunks: chunks.length, payload, overridesApplied };
 }
 
-async function speakChunk(c: TtsConfig, text: string, fetchImpl: typeof fetch): Promise<Buffer> {
+export async function speakChunk(c: TtsConfig, text: string, fetchImpl: typeof fetch = fetch): Promise<Buffer> {
   if (c.provider === "piper") return piperChunk(c, text);
   if (c.provider === "windows") return windowsChunk(c, text);
   const req: { url: string; headers: Record<string, string>; body: Record<string, unknown> } =

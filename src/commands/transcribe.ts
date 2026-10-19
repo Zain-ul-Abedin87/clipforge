@@ -6,6 +6,8 @@ import { paths } from "../lib/paths.js";
 import { fingerprint, isCached, markDone, projectDir, projectNameFromAudio } from "../lib/project.js";
 import { venvPythonPath } from "../lib/tools.js";
 import { localModelDir } from "./fetchModel.js";
+import { ttsTimingsFor } from "../lib/ttsChunks.js";
+import { writeModeBTimings } from "./tts.js";
 
 export interface TranscribeOpts {
   audio?: string;
@@ -28,6 +30,14 @@ export async function transcribe(opts: TranscribeOpts): Promise<number> {
   if (!audio || !fs.existsSync(audio)) {
     console.error("No audio found. Put inputs/voiceover.mp3 or pass --audio <file>.");
     return 1;
+  }
+  // Mode B: the TTS step already knows every sentence's time; Whisper is only for uploaded voices.
+  const modeB = opts.project ? ttsTimingsFor(projectDir(opts.project), audio) : null;
+  if (modeB) {
+    const dir = projectDir(opts.project!);
+    if (!fs.existsSync(path.join(dir, "words.json"))) writeModeBTimings(dir, modeB);
+    console.log(`[transcribe] Mode B: timings from ${modeB.units.length} TTS sentence(s), Whisper skipped`);
+    return 0;
   }
   const py = venvPythonPath();
   if (!py) {

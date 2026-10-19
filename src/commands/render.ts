@@ -11,7 +11,7 @@ import { buildAss, captionLines, CaptionLine, CaptionStyle } from "../lib/render
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
 import { duckGraph } from "../audio/duck.js";
-import { CachedSegment, sceneContentHash, SegmentCache } from "../lib/compiler/incrementalCache.js";
+import { CachedSegment, relativeCaptions, sceneContentHash, SegmentCache } from "../lib/compiler/incrementalCache.js";
 import { concatInput, muxDuration, writeConcatList } from "../lib/compiler/concatDemuxer.js";
 import { compileTimeline, CompiledLayer, CompiledScene, CompiledTimeline, limitFrames, loadTimeline } from "../lib/compiler/timelineCompiler.js";
 import { toNumber } from "../domain/rational.math.js";
@@ -343,9 +343,8 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     const showcase = showcases.get(s.id);
     const hash = sceneContentHash({
       sceneId: s.id,
-      audio: { file: tl.audio.voice, start: startSec, end: endFrame / 30 },
       asset: s.asset,
-      captions: segLines.length ? { lines: segLines, style: capStyle } : null,
+      captions: segLines.length ? { lines: relativeCaptions(segLines, startSec), style: capStyle } : null,
       overlays: s.overlays ?? [],
       transition: s.transition,
       motion: s.motion,
@@ -355,7 +354,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
       backdrop: s.backdrop ?? null,
       logo: tl.logo ?? null,
       showcase: showcase ?? null,
-      version: 5,
+      version: 6,
     });
     return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, hash, out: cache.file(s.id, hash), assFile: segLines.length ? assFile : null };
   });
@@ -369,7 +368,8 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     cache.invalidate(segs.filter((x) => want.has(x.sceneId)));
     log(`[render] single-scene rerender: ${[...want].filter((id) => !unknown.includes(id)).join(", ")}`);
   }
-  const todo = jobs.filter((j) => !fs.existsSync(j.out));
+  // Identical scenes share one content-addressed file: render it once.
+  const todo = [...new Map(jobs.filter((j) => !fs.existsSync(j.out)).map((j) => [j.out, j])).values()];
   const changed = cache.changed(segs);
   if (cache.previous && changed.length && changed.length < jobs.length) log(`[render] scenes changed since the last render: ${changed.join(", ")}`);
   log(`[render] ${jobs.length} segments (${jobs.length - todo.length} reused from cache), ${(duration / 60).toFixed(1)} min`);

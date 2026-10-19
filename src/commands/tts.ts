@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { paths } from "../lib/paths.js";
 import { fingerprint, projectDir, readJson, writeJson } from "../lib/project.js";
-import { resolveTtsConfig, synthesize, ttsExtension, TtsConfigError } from "../lib/tts.js";
+import { resolveTtsConfig, TtsConfigError } from "../lib/tts.js";
+import { alignedFromChunks, synthesizeUnits } from "../lib/ttsChunks.js";
+import { applyWordEdits } from "../lib/wordEdits.js";
 
 export interface TtsOpts {
   project: string;
@@ -13,8 +15,10 @@ export interface TtsOpts {
 }
 
 /**
- * Mode B: script -> narration with the configured TTS provider. Writes workspace/<project>/voiceover_tts.*,
- * tts_payload.txt (what the engine read) and tts.json, and points project.json at the new audio.
+ * Mode B: script -> narration with the configured TTS provider, one cached request per sentence
+ * (lib/ttsChunks.ts). Writes workspace/<project>/voiceover_tts.wav, tts_chunks.json (every
+ * sentence's time on the track), aligned.json + words.json from those times (Whisper is not
+ * needed), tts_payload.txt and tts.json, and points project.json at the new audio.
  * The script file itself is only read.
  */
 export async function tts(opts: TtsOpts, log: (m: string) => void = console.log): Promise<number> {
@@ -37,25 +41,29 @@ export async function tts(opts: TtsOpts, log: (m: string) => void = console.log)
   const glossaryFile = opts.glossary ? path.resolve(opts.glossary) : path.join(paths.inputs, "glossary.txt");
   const script = fs.readFileSync(scriptFile, "utf8");
   const scriptHash = crypto.createHash("sha256").update(script).digest("hex");
-  const out = path.join(dir, `voiceover_tts${ttsExtension(config.provider)}`);
-  const metaFile = path.join(dir, "tts.json");
-  const voice = config.provider === "elevenlabs" ? config.voiceId : config.provider === "openai" ? config.voice : config.provider === "piper" ? config.model : `rate ${config.rate}`;
-  const key = { provider: config.provider, scriptHash, glossary: fingerprint(glossaryFile), voice };
+  const out = path.join(dir, "voiceover_tts.wav");
   if (config.provider === "windows") log("[tts] using the computer's built-in voice (set TTS_PROVIDER for a natural voice)");
-  if (!opts.force && fs.existsSync(out) && fs.existsSync(metaFile)) {
-    const prev = readJson<{ key?: unknown }>(metaFile);
-    if (JSON.stringify(prev.key) === JSON.stringify(key)) {
-      log(`[tts] cached -> ${out} (use --force to redo)`);
-      setProjectAudio(dir, out);
-      return 0;
-    }
-  }
-  const r = await synthesize({ script, outFile: out, glossaryFile, config, log });
-  fs.writeFileSync(path.join(dir, "tts_payload.txt"), r.payload);
-  writeJson(metaFile, { key, provider: r.provider, chunks: r.chunks, overridesApplied: r.overridesApplied, scriptFile, createdAt: new Date().toISOString() });
+  // --force re-synthesises every sentence of this script (its shared cache entries are replaced).
+  const m = await synthesizeUnits({ script, outFile: out, config, glossaryFile, cacheDir: path.join(paths.root, "cache", "tts"), force: opts.force, log });
+  const { synthesized, reused, ...manifest } = m;
+  writeJson(path.join(dir, "tts_chunks.json"), manifest);
+  writeModeBTimings(dir, manifest);
+  fs.writeFileSync(path.join(dir, "tts_payload.txt"), m.units.map((u) => u.payload).join("\n"));
+  writeJson(path.join(dir, "tts.json"), { key: { provider: config.provider, scriptHash, glossary: fingerprint(glossaryFile) }, provider: config.provider, sentences: m.units.length, synthesized, reused, duration: m.duration, scriptFile, createdAt: new Date().toISOString() });
   setProjectAudio(dir, out);
-  log(`[tts] ${r.provider}: ${r.chunks} chunk(s), ${r.overridesApplied} pronunciation override(s) -> ${out}`);
+  log(`[tts] ${config.provider}: ${m.units.length} sentence(s), ${reused} reused, ${synthesized} new, ${m.duration.toFixed(1)} s -> ${out}`);
   return 0;
+}
+
+/** aligned.json + words.json from the sentence times (hand word corrections from the review page kept). */
+export function writeModeBTimings(dir: string, manifest: Parameters<typeof alignedFromChunks>[0]): void {
+  const aligned = alignedFromChunks(manifest);
+  if (applyWordEdits(dir, aligned.words)) {
+    for (const st of aligned.sentences) st.text = aligned.words.slice(st.firstWord, st.lastWord + 1).map((w) => w.word).join(" ");
+  }
+  writeJson(path.join(dir, "aligned.json"), aligned);
+  writeJson(path.join(dir, "words.json"), aligned.words.map((w) => ({ word: w.word, start: w.start, end: w.end, prob: 1 })));
+  fs.rmSync(path.join(dir, "discrepancies.json"), { force: true });
 }
 
 function setProjectAudio(dir: string, audio: string): void {

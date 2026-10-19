@@ -5,10 +5,11 @@ import { run } from "../lib/exec.js";
 import { loadGlossary } from "../lib/glossary.js";
 import { buildMicroPlan, microConfig, microPlanFile } from "../lib/planner/activeSubject.js";
 import { paths } from "../lib/paths.js";
-import { heuristicLabels, llmLabels } from "../lib/planner/label.js";
-import { routeSegments } from "../lib/planner/segmentRoute.js";
+import { heuristicLabels, llmLabels, type SectionLabels } from "../lib/planner/label.js";
+import { LlmCache } from "../lib/llmCache.js";
+import { routeSegments, type RouteCache } from "../lib/planner/segmentRoute.js";
 import { detectSections, splitIntoScenes } from "../lib/planner/structure.js";
-import { applyBounds, findBounds } from "../lib/planner/introOutro.js";
+import { applyBounds, findBounds, type BoundAnchors } from "../lib/planner/introOutro.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { Scene, Section, validateScenes } from "../lib/scenes.js";
 import { loadStyle } from "../lib/style.js";
@@ -174,7 +175,9 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
   // after its last "Number N" header.
   const lastItem = [...detected].reverse().find((x) => x.kind === "item");
   const afterIdx = lastItem ? aligned.sentences.findIndex((x) => x.start >= lastItem.start - 0.05) : -1;
-  const bounds = await findBounds(aligned.sentences, duration, { useLlm, afterIdx, log });
+  const boundsCache = new LlmCache<BoundAnchors>(path.join(dir, "plan_bounds_cache.json"));
+  const bounds = await findBounds(aligned.sentences, duration, { useLlm, afterIdx, log, cache: boundsCache });
+  boundsCache.save();
   const sections = applyBounds(detected, bounds, aligned.sentences, duration, limits.minLengthSec, labelled);
   log(`[plan] hook ends ${bounds.hookEnd.toFixed(1)}s${bounds.outroStart !== undefined ? `, outro from ${bounds.outroStart.toFixed(1)}s` : ", no outro found"} (${bounds.source})`);
   const spans = splitIntoScenes(sections, aligned.words, limits);
@@ -185,8 +188,11 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
   const fallback = heuristicLabels(spans, sections, niche);
   let scenes = fallback;
   let cost = 0;
+  // Per-section / per-line LLM answers keyed by their text: an edit re-asks only for what changed.
+  const labelCache = new LlmCache<SectionLabels>(path.join(dir, "plan_labels_cache.json"));
+  const routeCache: RouteCache = new LlmCache(path.join(dir, "plan_route_cache.json"));
   if (useLlm) {
-    const res = await llmLabels(spans, sections, log, niche);
+    const res = await llmLabels(spans, sections, log, niche, labelCache);
     if (res) {
       scenes = repair(res.scenes, sections, fallback);
       // Pricing per 1M tokens (input, output) for the models this tool is expected to use.
@@ -207,7 +213,9 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
 
   scenes = capGraphics(scenes, niche.structure.targetGraphicShare, duration, niche.stock.fallbackQuery, log);
   scenes = splitAdjacentCards(scenes, niche.stock.fallbackQuery, log);
-  scenes = await routeSegments(scenes, niche, project.name ?? opts.project, useLlm, log);
+  scenes = await routeSegments(scenes, niche, project.name ?? opts.project, useLlm, log, routeCache);
+  labelCache.save();
+  routeCache.save();
   const kept = applyPlanEdits(dir, scenes);
   if (kept) log(`[plan] kept ${kept} footage search edit(s) from the plan review`);
 

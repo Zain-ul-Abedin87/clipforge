@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { env } from "./env.js";
 import type { Scene } from "./scenes.js";
 import type { Niche } from "./niche.js";
@@ -302,7 +303,8 @@ export function sourceKey(path: string, url?: string): string {
  * source). Stills occupy the whole file. A segment is free when it does not overlap a used one.
  */
 export class ShotLedger {
-  used: { key: string; a: number; b: number; scene: number }[] = [];
+  /** `reserved`: held for a locked sub-shot (shot_locks.json) that has not been placed yet. */
+  used: { key: string; a: number; b: number; scene: number; reserved?: string }[] = [];
   forced: string[] = [];
   /** Timeline second (end) of the last on-screen use of each source key. */
   lastAt = new Map<string, number>();
@@ -312,8 +314,21 @@ export class ShotLedger {
   gapOk(key: string, gap: number): boolean {
     return (this.times.get(key) ?? []).every((t) => Math.abs(this.now - t) >= gap);
   }
-  free(key: string, a: number, b: number): boolean {
-    return !this.used.some((u) => u.key === key && a < u.b - 0.05 && b > u.a + 0.05);
+  /** `ignoreReserved`: intro previews may show a moment a later scene holds (they do not use it up). */
+  free(key: string, a: number, b: number, ignoreReserved = false): boolean {
+    return !this.used.some((u) => u.key === key && a < u.b - 0.05 && b > u.a + 0.05 && !(ignoreReserved && u.reserved));
+  }
+  /** Holds a window for a locked sub-shot before any new picks run (no on-screen time yet). */
+  reserve(key: string, a: number, b: number, scene: number, id: string): void {
+    this.used.push({ key, a, b, scene, reserved: id });
+  }
+  /** Places a reserved window on screen now. */
+  claim(id: string): void {
+    const u = this.used.find((x) => x.reserved === id);
+    if (!u) return;
+    delete u.reserved;
+    this.lastAt.set(u.key, this.now);
+    this.times.set(u.key, [...(this.times.get(u.key) ?? []), this.now]);
   }
   take(key: string, a: number, b: number, scene: number): void {
     this.used.push({ key, a, b, scene });
@@ -330,6 +345,7 @@ export class ShotLedger {
 }
 
 const STILL = 1e6;
+const sha1 = (x: string) => crypto.createHash("sha1").update(x).digest("hex");
 
 /**
  * In-point for a forced repeat: inside [0, dur - need] (never past the file's end, where the
@@ -364,6 +380,16 @@ export function applyPacing(
     maxStockShare?: number;
     /** micro_scenes.json: frame-exact 2.5-4 s cut points + the spec each piece talks about. */
     micro?: { sceneId: number; startFrame: number; endFrame: number; spec?: string }[];
+    /**
+     * Shot locks from the last run (shot_locks.json): a sub-shot whose scene text, searches, own
+     * clip, product and length are unchanged gets the same shot again, reserved before any new pick
+     * runs, so an edited scene cannot take it and the change does not cascade down the video.
+     */
+    locks?: Map<string, SubShot>;
+    /** Filled with this run's locks (written back to shot_locks.json by the timeline step). */
+    lockOut?: Map<string, SubShot>;
+    /** A locked shot's file is still usable (default: always). */
+    lockUsable?: (s: SubShot) => boolean;
   } = {},
 ): ChapterShare[] {
   // Only exact-model verified pool shots count as (and may be used as) product footage.
@@ -491,7 +517,7 @@ export function applyPacing(
       let at: number | undefined;
       let staticAt: number | undefined;
       for (let t = 0; t + len <= p.duration + 0.01; t += 0.25) {
-        if (!ledger.free(local, base + t, base + t + len) || previewBusy(local, base + t, base + t + len)) continue;
+        if (!ledger.free(local, base + t, base + t + len, preview) || previewBusy(local, base + t, base + t + len)) continue;
         if (movingShare(p.motion, p.motionFps ?? 10, t, len) >= 0.5) { at = t; break; }
         staticAt ??= t;
       }
@@ -565,24 +591,16 @@ export function applyPacing(
   let lastKey: string | undefined;
   let genericProductShots = 0;
   const order = [...tl.keys()].sort((x, y) => Number(!!tl[x].backdrop) - Number(!!tl[y].backdrop)); // cards over footage last
+  const isCard = (i: number) => tl[i].asset.source === "graphic" || (scenes[i].type === "graphic" && !tl[i].backdrop);
+  // Cut plan of every footage scene first (same order and carry as before), so locked shots can
+  // be reserved before any scene picks.
+  const plans = new Map<number, { start: number; end: number; bounds: number[]; frames: number[]; micro?: { startFrame: number; spec?: string }[]; teaserHere: boolean }>();
   for (const i of order) {
+    if (isCard(i)) continue;
     const t = tl[i];
     const sc = scenes[i];
-    const a = t.asset;
     const start = t.startFrame / FPS;
     const end = t.endFrame / FPS;
-    // Rendered cards (PNG background) and side-panel product cards keep their single picture.
-    if (a.source === "graphic" || (sc.type === "graphic" && !t.backdrop)) {
-      totalShots++;
-      continue;
-    }
-    const product = t.backdrop ? cardProduct(i) : productOf.get(sc.id);
-    // A line outside a chapter that names a product (brand + model, or the model words) shows that
-    // product's verified pool, not "brand" stock.
-    const lower = sc.text.toLowerCase();
-    const mentioned = product ? undefined : names.find((n) => lower.includes(n.toLowerCase()) || (n.split(/\s+/).length > 1 && lower.includes(n.split(/\s+/).slice(1).join(" ").toLowerCase())));
-    const st = productOf.has(sc.id) && !t.backdrop ? sentenceType(sc.text, firstSceneOf.has(sc.id)) : "other";
-    if (productOf.has(sc.id) && !t.backdrop) sentenceStats[st] = (sentenceStats[st] ?? 0) + 1;
     // Micro-scene plan (fast niches): its frame-exact boundaries are the cuts; else word-snapped pacing.
     const micro = opts.micro?.filter((m) => m.sceneId === sc.id);
     // The hook's teaser montage overrides the micro-scene plan (its pieces are 2.5-4 s).
@@ -590,6 +608,49 @@ export function applyPacing(
     const cuts = micro?.length && !teaserHere ? micro.slice(1).map((m) => m.startFrame / FPS).filter((c) => c > start && c < end) : cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
     const bounds = [start, ...cuts, end];
     const frames = bounds.slice(1).map((b, k) => Math.round(b * FPS) - Math.round(bounds[k] * FPS));
+    plans.set(i, { start, end, bounds, frames, micro, teaserHere });
+  }
+  /** Lock identity of a sub-shot: what decides its picture, not where it sits in the video. */
+  const lockKey = (i: number, k: number, f: number) => {
+    const sc = scenes[i];
+    const product = tl[i].backdrop ? cardProduct(i) : productOf.get(sc.id);
+    return sha1(JSON.stringify([sc.text, sc.queries ?? [], product ?? "", tl[i].asset.path, !!tl[i].backdrop, k, f]));
+  };
+  const reservedShots = new Map<string, SubShot>();
+  if (opts.locks?.size) {
+    for (const i of order) {
+      const p = plans.get(i);
+      if (!p) continue;
+      p.frames.forEach((f, k) => {
+        const lock = opts.locks!.get(lockKey(i, k, f));
+        if (!lock?.key || lock.srcIn === undefined || !(opts.lockUsable?.(lock) ?? true)) return;
+        // A pool shot must still be in the (shot-QA filtered) pool.
+        if (lock.source === "web_crawl" && lock.product && !pool.some((x) => x.path === lock.path)) return;
+        const a = lock.srcIn, b = lock.kind === "image" ? STILL : lock.srcIn + f / FPS;
+        if (!ledger.free(lock.key, a, b)) return;
+        ledger.reserve(lock.key, a, b, scenes[i].id, `${i}:${k}`);
+        reservedShots.set(`${i}:${k}`, lock);
+      });
+    }
+  }
+  let lockedShots = 0;
+  for (const i of order) {
+    const t = tl[i];
+    const sc = scenes[i];
+    const a = t.asset;
+    // Rendered cards (PNG background) and side-panel product cards keep their single picture.
+    if (isCard(i)) {
+      totalShots++;
+      continue;
+    }
+    const { bounds, frames, micro, teaserHere } = plans.get(i)!;
+    const product = t.backdrop ? cardProduct(i) : productOf.get(sc.id);
+    // A line outside a chapter that names a product (brand + model, or the model words) shows that
+    // product's verified pool, not "brand" stock.
+    const lower = sc.text.toLowerCase();
+    const mentioned = product ? undefined : names.find((n) => lower.includes(n.toLowerCase()) || (n.split(/\s+/).length > 1 && lower.includes(n.split(/\s+/).slice(1).join(" ").toLowerCase())));
+    const st = productOf.has(sc.id) && !t.backdrop ? sentenceType(sc.text, firstSceneOf.has(sc.id)) : "other";
+    if (productOf.has(sc.id) && !t.backdrop) sentenceStats[st] = (sentenceStats[st] ?? 0) + 1;
     const subs: SubShot[] = [];
     frames.forEach((f, k) => {
       const need = f / FPS;
@@ -598,15 +659,24 @@ export function applyPacing(
       const prevKey = subs.length ? subs[subs.length - 1].key : lastKey;
       prevKeyNow = prevKey;
       let s: SubShot | undefined;
+      // Locked from the last run: the same shot again (its window was reserved above).
+      const held = reservedShots.get(`${i}:${k}`);
+      if (held) {
+        ledger.claim(`${i}:${k}`);
+        s = { ...held };
+        lastUp.push(held.author);
+        if (product && !held.verified && !t.backdrop) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
+        lockedShots++;
+      }
       // Intro / outro follow the words: a product named right now gets its best verified shot (in
       // the intro as a preview its chapter may show again; in the outro a recap moment).
       const a0 = bounds[k];
       const inIntro = !t.backdrop && a0 < introUntil - 0.05;
       const inOutro = !t.backdrop && inOutroScene(sc);
       const said = inIntro || inOutro ? mentionedProduct(words.length ? spoken(a0, a0 + need) : sc.text, poolNames) : undefined;
-      if (said && inIntro) s = poolPick(said, need, sc.id, prevKey, true);
-      if (said && inOutro) s = poolPick(said, need, sc.id, prevKey) ?? reusePick(said, need, sc.id, prevKey, false);
-      if (s) mentionShots++;
+      if (!s && said && inIntro) s = poolPick(said, need, sc.id, prevKey, true);
+      if (!s && said && inOutro) s = poolPick(said, need, sc.id, prevKey) ?? reusePick(said, need, sc.id, prevKey, false);
+      if (s && !held) mentionShots++;
       // Hook teaser: the best verified shot of a different product each cut, else other B-roll.
       if (!s && teaserHere && bounds[k] < cfg.hookEnd! - 0.05) {
         s = teaserPick(need, sc.id, prevKey);
@@ -669,6 +739,8 @@ export function applyPacing(
       }
       s.frames = f;
       if (s.source === "web_crawl" && s.product) poolShots++;
+      // Fresh, unshared picks are locked for the next run (previews and repeats are not).
+      if (opts.lockOut && !s.preview && !s.reused && s.key && s.srcIn !== undefined) opts.lockOut.set(lockKey(i, k, f), { ...s, frames: 0 });
       subs.push(s);
     });
     a.shots = subs;
@@ -728,6 +800,7 @@ export function applyPacing(
   log(`[pacing] sentence types (product scenes): ${JSON.stringify(sentenceStats)}`);
   log(`[pacing] generic scenes: ${genericProductShots} shot(s) filled with verified product b-roll instead of a repeat`);
   log(`[pacing] reuse: ${reusedCount} reused verified moment(s), ${reusedSec.toFixed(1)} s (gap >= ${REUSE_GAP} s preferred, mirror/punch-in variants)`);
+  if (opts.locks?.size) log(`[pacing] shot locks: ${lockedShots} sub-shot(s) kept from the last run, ${reservedShots.size - lockedShots} unused`);
   log(`[pacing] footage ledger: ${ledger.used.length} segments, ${ledger.forced.length} forced reuse(s)${ledger.forced.length ? ": " + ledger.forced.join("; ") : ""}`);
   log(`[pacing] ${totalShots} shots (${poolShots} from product pools), avg ${(dur / totalShots).toFixed(2)} s, ${((totalShots - 1) / (dur / 60)).toFixed(1)} cuts/min, ${flashes} product-boundary flash(es)`);
   return shares;

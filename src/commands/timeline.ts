@@ -170,12 +170,20 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     const nicheCfg = loadProjectNiche(project, style) as unknown as { productPool?: { mix?: Record<string, number>; rankCardAtSec?: [number, number] } };
     const niche = loadProjectNiche(project, style);
     const pool = await filterPoolByShotQa(readProductPool(dir), poolConfig(niche).category, log);
+    // Shot locks: unchanged scenes keep last run's shots (see applyPacing opts.locks).
+    const lockFile = path.join(dir, "shot_locks.json");
+    const locks = new Map<string, SubShot>(fs.existsSync(lockFile) && env("SHOT_LOCKS", "on").toLowerCase() !== "off" ? Object.entries(readJson<Record<string, SubShot>>(lockFile)) : []);
+    const lockOut = new Map<string, SubShot>();
     const shares = applyPacing(tl, scenes, words, pool, pace, log, {
+      locks,
+      lockOut,
+      lockUsable: (s) => fs.existsSync(s.path),
       photosOf: (p) => productPhotos(channel, p),
       mix: nicheCfg.productPool?.mix,
       maxStockShare: Number(env("MAX_STOCK_SHARE", "0.2")),
       micro: readMicroPlan(dir)?.scenes.map((m) => ({ sceneId: m.sceneId, startFrame: m.startFrame, endFrame: m.endFrame, spec: m.subject.spec?.spec })),
     });
+    writeJson(lockFile, Object.fromEntries(lockOut));
     const status = readPoolStatus(dir);
     const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
     writeJson(path.join(dir, "footage_share.json"), report);

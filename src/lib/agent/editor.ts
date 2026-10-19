@@ -1,11 +1,10 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
 import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { LlmCache } from "../llmCache.js";
 
 /**
  * The editor's two judgement calls that keyword search and CLIP cannot make:
@@ -42,8 +41,12 @@ For every scene decide:
   - generic: the sentence is about something else (ammunition choice, practice, holsters, the market, the company's reputation) and a fitting generic shot is better than the product.
 Return every scene id in order.`;
 
+/**
+ * Who each scene is about. Cached per section (its scene texts, the product list and topic), so
+ * an edited sentence re-asks only for its own section; the others keep their subjects and shots.
+ */
 export async function planSubjects(
-  scenes: { id: number; text: string }[],
+  scenes: { id: number; text: string; section?: number }[],
   products: string[],
   topic: string,
   cacheFile: string,
@@ -51,31 +54,37 @@ export async function planSubjects(
 ): Promise<Map<number, SceneSubject>> {
   const out = new Map<number, SceneSubject>();
   if (!agentEnabled() || !products.length || !scenes.length) return out;
-  const key = crypto.createHash("sha1").update(JSON.stringify({ m: agentModel(), products, topic, t: scenes.map((s) => s.text), v: 1 })).digest("hex");
-  const cache = fs.existsSync(cacheFile) ? (JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { key: string; scenes: { id: number; subject: string | null; shot: Shot }[] }) : null;
-  let rows = cache?.key === key ? cache.scenes : null;
-  if (!rows) {
+  const cache = new LlmCache<{ subject: string | null; shot: Shot }[]>(cacheFile);
+  const groups = new Map<number, typeof scenes>();
+  for (const s of scenes) groups.set(s.section ?? -1, [...(groups.get(s.section ?? -1) ?? []), s]);
+  const keyOf = (g: typeof scenes) => LlmCache.key({ v: 2, m: agentModel(), products, topic, t: g.map((s) => s.text) });
+  const todo: typeof scenes = [];
+  for (const g of groups.values()) {
+    const hit = cache.get(keyOf(g));
+    if (hit && hit.length === g.length) g.forEach((s, k) => out.set(s.id, hit[k]));
+    else todo.push(...g);
+  }
+  if (todo.length) {
     try {
       const res = await client().messages.parse({
         model: agentModel(),
         max_tokens: 16000,
         output_config: outputConfig(SubjectsSchema),
         system: SUBJECTS,
-        messages: [{ role: "user", content: JSON.stringify({ topic, products, scenes }) }],
+        messages: [{ role: "user", content: JSON.stringify({ topic, products, scenes: todo.map((s) => ({ id: s.id, text: s.text })) }) }],
       });
-      rows = (res.parsed_output?.scenes ?? []).map((r) => ({
-        id: r.id,
-        subject: products.find((p) => p.toLowerCase() === r.subject.toLowerCase()) ?? null,
-        shot: r.shot,
-      }));
-      fs.writeFileSync(cacheFile, JSON.stringify({ key, scenes: rows }, null, 1));
-      log(`[editor] subjects for ${rows.length} scenes (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
+      const rows = new Map((res.parsed_output?.scenes ?? []).map((r) => [r.id, { subject: products.find((p) => p.toLowerCase() === r.subject.toLowerCase()) ?? null, shot: r.shot }]));
+      for (const g of groups.values()) {
+        if (!g.every((s) => rows.has(s.id) || out.has(s.id))) continue;
+        for (const s of g) if (rows.has(s.id)) out.set(s.id, rows.get(s.id)!);
+        if (g.some((s) => rows.has(s.id))) cache.set(keyOf(g), g.map((s) => out.get(s.id)!));
+      }
+      log(`[editor] subjects for ${rows.size} scene(s), ${scenes.length - todo.length} unchanged (cached) (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
     } catch (err) {
       log(`[editor] subject tracking failed: ${String((err as Error).message ?? err).slice(0, 160)}`);
-      return out;
     }
-  }
-  for (const r of rows) out.set(r.id, { subject: r.subject, shot: r.shot });
+  } else log(`[editor] subjects: all ${scenes.length} scene(s) unchanged (cached)`);
+  cache.save();
   return out;
 }
 

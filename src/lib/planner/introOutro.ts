@@ -3,6 +3,7 @@ import { z } from "zod";
 import { env } from "../env.js";
 import type { Section } from "../scenes.js";
 import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { LlmCache } from "../llmCache.js";
 
 /**
  * Hook / intro / outro boundaries from the narration itself (plan step, any video type).
@@ -110,7 +111,7 @@ const SYSTEM =
 export async function findBounds(
   sentences: BoundSentence[],
   duration: number,
-  opts: { useLlm: boolean; afterIdx?: number; log?: (m: string) => void; ask?: (prompt: string) => Promise<RawBounds | null> },
+  opts: { useLlm: boolean; afterIdx?: number; log?: (m: string) => void; ask?: (prompt: string) => Promise<RawBounds | null>; cache?: LlmCache<BoundAnchors> },
 ): Promise<Bounds> {
   const log = opts.log ?? (() => {});
   const fallback = heuristicBounds(sentences, duration, opts.afterIdx);
@@ -118,7 +119,14 @@ export async function findBounds(
   const lines = sentences.map((s, i) => `${i} [${s.start.toFixed(1)}s]: ${s.text.slice(0, 200)}`).join("\n");
   const prompt = `Video length ${duration.toFixed(0)} s.\n${lines}`;
   try {
-    const raw = opts.ask ? await opts.ask(prompt) : await askLlm(prompt);
+    // Cached by the opening and closing lines only: an edit in the middle keeps hook and outro.
+    const key = LlmCache.key({ v: 1, model: env("ROUTE_MODEL", env("LLM_MODEL", "claude-haiku-4-5")), head: sentences.slice(0, 10).map((s) => s.text), tail: sentences.slice(-25).map((s) => s.text) });
+    const hit = opts.cache?.get(key);
+    let raw = hit ? fromAnchors(hit, sentences) : null;
+    if (!raw) {
+      raw = opts.ask ? await opts.ask(prompt) : await askLlm(prompt);
+      if (raw && opts.cache) opts.cache.set(key, toAnchors(raw, sentences));
+    } else log(`[plan] intro/outro bounds unchanged (cached)`);
     const b = pickBounds(raw, sentences, duration, fallback);
     // A countdown's outro must still come after its last header.
     const header = opts.afterIdx !== undefined && opts.afterIdx >= 0 ? sentences[opts.afterIdx] : undefined;
@@ -131,6 +139,30 @@ export async function findBounds(
     log(`[plan] intro/outro LLM failed (${String((err as Error).message ?? err).slice(0, 120)}); heuristic used`);
     return fallback;
   }
+}
+
+/** An LLM answer stored as sentence texts, so it still applies after sentences are added or removed. */
+export interface BoundAnchors {
+  hook: string | null;
+  intro: string | null;
+  outro: string | null;
+}
+
+const toAnchors = (r: RawBounds, s: BoundSentence[]): BoundAnchors => ({
+  hook: s[r.hook_end_sentence]?.text ?? null,
+  intro: r.intro_end_sentence !== null ? s[r.intro_end_sentence]?.text ?? null : null,
+  outro: r.outro_start_sentence !== null ? s[r.outro_start_sentence]?.text ?? null : null,
+});
+
+/** Anchors back to indices (hook / intro searched from the start, outro from the end); null if one is gone. */
+function fromAnchors(a: BoundAnchors, s: BoundSentence[]): RawBounds | null {
+  const first = (t: string) => s.findIndex((x) => x.text === t);
+  const last = (t: string) => s.map((x) => x.text).lastIndexOf(t);
+  const hook = a.hook !== null ? first(a.hook) : -1;
+  const intro = a.intro !== null ? first(a.intro) : null;
+  const outro = a.outro !== null ? last(a.outro) : null;
+  if (hook < 0 || intro === -1 || outro === -1) return null;
+  return { hook_end_sentence: hook, intro_end_sentence: intro, outro_start_sentence: outro };
 }
 
 async function askLlm(prompt: string): Promise<RawBounds | null> {

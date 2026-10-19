@@ -6,6 +6,7 @@ import { GRAPHIC_KINDS, Graphic, Scene, SCENE_TYPES, Section, SceneType } from "
 import type { Span } from "./structure.js";
 import { Niche, nicheHints } from "../niche.js";
 import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
+import { LlmCache } from "../llmCache.js";
 
 const STOP = new Set(
   "the a an and or but if then this that these those it its is are was were be been being of to in on for with as at by from up out over into about than very really just also can will would could should has have had do does did not no so too our your their they them we you he she his her my me i one some any all more most such only own same other which who whom what when where why how there here".split(" "),
@@ -166,23 +167,54 @@ function toScene(sp: Span, id: number, l: Labels["scenes"][number]): Scene {
   return scene;
 }
 
-/** Labels scenes with Claude in section-sized batches. Returns null when no key is configured. */
+/** One section's LLM labels, in span order (cached by the section's text; ids are positions). */
+export type SectionLabels = Labels["scenes"];
+
+/**
+ * Labels scenes with Claude in section-sized batches. Returns null when no key is configured.
+ * With a cache, a section whose kind, product and scene texts are unchanged reuses its earlier
+ * labels and is not sent again; only edited sections cost tokens (and only they can change).
+ */
 export async function llmLabels(
   spans: Span[],
   sections: Section[],
   log: (msg: string) => void,
   niche: Niche,
-): Promise<{ scenes: Scene[]; inputTokens: number; outputTokens: number } | null> {
+  cache?: LlmCache<SectionLabels>,
+): Promise<{ scenes: Scene[]; inputTokens: number; outputTokens: number; cachedSections: number } | null> {
   if (!llmAvailable()) return null;
   const client = llm();
   const model = env("LLM_MODEL", "claude-opus-5-5");
+  const system = `${SYSTEM}
+
+Niche rules (${niche.label}): ${niche.llmGuidance}`;
+  const sectionOf = (i: number) => {
+    const sec = sections[spans[i].section];
+    return sec.kind === "item" ? `item #${sec.rank}${sec.product_name ? ` (${sec.product_name})` : ""}` : sec.kind;
+  };
+  const seconds = (i: number) => Math.round(spans[i].end - spans[i].start);
+
+  // Span indices per section, and each section's cache key (model, prompt, what the LLM is shown).
+  const members = new Map<number, number[]>();
+  spans.forEach((sp, i) => members.set(sp.section, [...(members.get(sp.section) ?? []), i]));
+  const keyOf = (ids: number[]) => LlmCache.key({ v: 1, model, system, section: sectionOf(ids[0]), spans: ids.map((i) => [spans[i].text, seconds(i)]) });
+  const done = new Map<number, Scene>();
+  let cachedSections = 0;
+  for (const ids of members.values()) {
+    const hit = cache?.get(keyOf(ids));
+    if (!hit || hit.length !== ids.length) continue;
+    ids.forEach((i, k) => done.set(i, toScene(spans[i], i, { ...hit[k], id: i })));
+    cachedSections++;
+  }
+  const todo = spans.map((_, i) => i).filter((i) => !done.has(i));
+  if (cache) log(`[plan] labels: ${cachedSections}/${members.size} section(s) unchanged (cached), ${todo.length} scene(s) to label`);
 
   // Batch whole sections together, ~60 scenes per request (fewer for a local model).
   const size = batchSize(60);
   const batches: number[][] = [];
   let cur: number[] = [];
-  for (let i = 0; i < spans.length; i++) {
-    const newSection = i > 0 && spans[i].section !== spans[i - 1].section;
+  for (const [n, i] of todo.entries()) {
+    const newSection = n > 0 && spans[i].section !== spans[todo[n - 1]].section;
     if (cur.length >= size || (newSection && cur.length >= Math.round(size * 0.67))) {
       batches.push(cur);
       cur = [];
@@ -191,19 +223,12 @@ export async function llmLabels(
   }
   if (cur.length) batches.push(cur);
 
-  const out: Scene[] = [];
+  /** LLM answers by span index (only these are cached; heuristic fallbacks are not). */
+  const fromLlm = new Map<number, Labels["scenes"][number]>();
   let inputTokens = 0;
   let outputTokens = 0;
   for (const [b, ids] of batches.entries()) {
-    const payload = ids.map((i) => {
-      const sec = sections[spans[i].section];
-      return {
-        id: i,
-        section: sec.kind === "item" ? `item #${sec.rank}${sec.product_name ? ` (${sec.product_name})` : ""}` : sec.kind,
-        seconds: Math.round(spans[i].end - spans[i].start),
-        text: spans[i].text,
-      };
-    });
+    const payload = ids.map((i) => ({ id: i, section: sectionOf(i), seconds: seconds(i), text: spans[i].text }));
 
     let labels: Labels | null = null;
     for (let attempt = 1; attempt <= 2 && !labels; attempt++) {
@@ -216,9 +241,7 @@ export async function llmLabels(
           output_config: model.startsWith("claude-haiku")
             ? { format: zodOutputFormat(LabelSchema) }
             : { effort: "low", format: zodOutputFormat(LabelSchema) },
-          system: `${SYSTEM}
-
-Niche rules (${niche.label}): ${niche.llmGuidance}`,
+          system,
           messages: [{ role: "user", content: JSON.stringify(payload) }],
         });
         inputTokens += res.usage.input_tokens;
@@ -241,8 +264,13 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`,
       }
     }
 
-    if (labels) ids.forEach((i, k) => out.push(toScene(spans[i], i, labels!.scenes[k])));
-    else out.push(...heuristicLabels(spans, sections, niche).filter((s) => ids.includes(s.id)));
+    if (labels) ids.forEach((i, k) => {
+      fromLlm.set(i, labels!.scenes[k]);
+      done.set(i, toScene(spans[i], i, labels!.scenes[k]));
+    });
+    else for (const s of heuristicLabels(spans, sections, niche).filter((s) => ids.includes(s.id))) done.set(s.id, s);
   }
-  return { scenes: out, inputTokens, outputTokens };
+  // Cache every section the LLM labelled completely (a section split over two batches counts too).
+  if (cache) for (const ids of members.values()) if (ids.every((i) => fromLlm.has(i))) cache.set(keyOf(ids), ids.map((i) => fromLlm.get(i)!));
+  return { scenes: spans.map((_, i) => done.get(i)!), inputTokens, outputTokens, cachedSections };
 }

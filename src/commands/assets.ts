@@ -334,7 +334,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const topic = project.brief || niche.label;
   const productNames = [...new Set(scenes.map((s) => s.product_name).filter((n): n is string => !!n))];
   const subjects = await planSubjects(
-    scenes.filter((s) => s.type !== "graphic").map((s) => ({ id: s.id, text: s.text })),
+    scenes.filter((s) => s.type !== "graphic").map((s) => ({ id: s.id, text: s.text, section: s.section })),
     productNames,
     topic,
     path.join(dir, "subjects.json"),

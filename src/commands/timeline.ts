@@ -105,7 +105,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     // Spec chips come from web research saved in the press kit.
     specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
     logo: JSON.stringify(logoOf(style)) + fingerprint(logoOf(style)?.path),
-    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-5-teaser",
+    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-6-mentions",
     pool: fingerprint(path.join(dir, "product_pool.json")) + fingerprint(path.join(dir, "product_pool_status.json")),
     aligned: fingerprint(path.join(dir, "aligned.json")),
   };
@@ -163,6 +163,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   // Opening from the plan (planner/introOutro.ts): teaser montage until the hook ends, faster intro.
   pace.hookEnd = sections[0]?.hookEnd;
   pace.introEnd = sections.find((x) => x.kind === "intro")?.end;
+  pace.outroStart = sections.find((x) => x.kind === "outro")?.start;
   if (pace.enabled) {
     // Word timings only snap cuts to speech; without aligned.json the scenes are still cut.
     const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words : [];

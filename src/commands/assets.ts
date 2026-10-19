@@ -27,6 +27,7 @@ import { loadStyle } from "../lib/style.js";
 import { FOOTAGE_MODE_LABELS, footageMode, isBlocked, loadProjectNiche, nicheFingerprintPath, nicheHints } from "../lib/niche.js";
 import { ffmpegPath, venvPythonPath } from "../lib/tools.js";
 import { buildProductPools, exactModelPrompt, poolConfig, productRegions } from "../lib/assets/productPool.js";
+import { INTENT_QUERIES, lineIntent, peopleCap } from "../lib/planner/lineIntent.js";
 import { readLedger, reusePenalty, writeLedger } from "../lib/assets/licenseLedger.js";
 import { ensureProductRecords, verifyModelMatch } from "../lib/productResearch.js";
 import { findVaultFor, listVaults, VaultItem, vaultCandidate, vaultPoolShots } from "../lib/agents/youtube/ytExtractor.js";
@@ -345,6 +346,8 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
 
   const breakerIds = new Set<number>();
   const noWebIds = new Set<number>();
+  let intentScenes = 0;
+  const intentCap = peopleCap(scenes.filter((x) => x.type !== "graphic").length);
   for (const sceneOrig of scenes) {
     let scene = sceneOrig;
     const id = String(scene.id);
@@ -358,6 +361,14 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (plan && !scene.edited && scene.type !== "graphic" && scene.type !== "product") scene = { ...scene, queries: plan.queries };
     // Media routing: generic_hook scenes never go to yt-dlp / web crawl; broad cinematic stock only.
     const stockOnly = scene.segment === "generic_hook" && scene.type !== "product" && scene.type !== "graphic";
+    // A line with a clear job (question to the viewer, "comment below", goodbye...) searches for
+    // matching B-roll first (planner/lineIntent.ts), capped so reaction shots stay rare.
+    const intent = stockOnly && !scene.edited ? lineIntent(scene.text) : undefined;
+    const intentQ = intent && intentScenes < intentCap ? INTENT_QUERIES[intent] : [];
+    if (intentQ.length) {
+      intentScenes++;
+      log(`[assets] scene ${scene.id}: "${intent}" line -> ${intentQ[0]}`);
+    }
     if (stockOnly) {
       if (!scene.edited && scene.cinematicQueries?.length) {
         // Rotate the shared cinematic list per scene and keep the scene's own (brand-free) searches,
@@ -366,6 +377,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
         const own = scene.queries.filter((q) => !/\d{3,}/.test(q));
         scene = { ...scene, queries: [...new Set([...c.slice(r), ...c.slice(0, r), ...own].filter(Boolean))] };
       }
+      if (intentQ.length) scene = { ...scene, queries: [...new Set([...intentQ, ...scene.queries])] };
       noWebIds.add(scene.id);
     }
     const productTokens = scene.product_name ? tokens(scene.product_name) : [];

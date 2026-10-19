@@ -33,6 +33,11 @@ export interface SubShot {
   reused?: boolean;
   /** Exact-model verified product footage (pool shot or checked product photo). */
   verified?: boolean;
+  /**
+   * Intro preview: a product's best shot shown while the intro names it. It does not use up the
+   * moment, so the product's chapter may show it once more (QA does not count it as a repeat).
+   */
+  preview?: boolean;
   /** Visual variation applied by the renderer when a verified moment is reused. */
   variant?: "mirror" | "punch" | "mirror_punch";
 }
@@ -71,6 +76,8 @@ export interface PacingConfig {
    */
   hookEnd?: number;
   introEnd?: number;
+  /** Outro (sections.json): its lines are not the last product's chapter; footage follows what is said. */
+  outroStart?: number;
   teaserChoices?: number[];
   introChoices?: number[];
 }
@@ -116,6 +123,18 @@ export function randomPieces(len: number, choices: number[], rand: () => number)
   }
   if (left > eps) out.push(left);
   return out;
+}
+
+/**
+ * Product a piece of narration names: the full name ("Honda HRX217") or, for multi-word names,
+ * the name without the brand ("HRX217"). Longest name first, so "Toro Recycler 22" beats "Toro".
+ */
+export function mentionedProduct(text: string, names: string[]): string | undefined {
+  // Words only; a dot survives only inside a number ("2.0"), so "22." matches "22".
+  const norm = (x: string) => x.toLowerCase().replace(/[^\w$%.]+/g, " ").replace(/\.(?!\d)/g, " ").replace(/\s+/g, " ").trim();
+  const t = ` ${norm(text)} `;
+  const has = (q: string) => !!norm(q) && t.includes(` ${norm(q)} `);
+  return [...names].sort((a, b) => b.length - a.length).find((n) => has(n) || (n.split(/\s+/).length > 1 && has(n.split(/\s+/).slice(1).join(" "))));
 }
 
 /** Target shot length at time t (s). */
@@ -345,6 +364,13 @@ export function applyPacing(
   const regions = productRegions(scenes);
   const productOf = new Map<number, string>();
   for (const [name, list] of regions) for (const s of list) productOf.set(s.id, name);
+  // The outro is not the last product's chapter (productRegions runs it to the end of the video).
+  const inOutroScene = (s: Scene) => cfg.outroStart !== undefined && s.start >= cfg.outroStart - 0.05;
+  for (const s of scenes) if (inOutroScene(s)) productOf.delete(s.id);
+  /** Intro previews (see SubShot.preview): busy for the rest of the intro, free again after it. */
+  const previewTaken: { key: string; a: number; b: number }[] = [];
+  const introUntil = cfg.introEnd ?? cfg.hookEnd ?? -1;
+  const previewBusy = (key: string, a: number, b: number) => ledger.now < introUntil && previewTaken.some((u) => u.key === key && a < u.b - 0.05 && b > u.a + 0.05);
   // A card right before a product's first scene introduces it: its backdrop may use that product.
   const names = [...regions.keys()];
   const cardProduct = (i: number): string | undefined => {
@@ -434,7 +460,7 @@ export function applyPacing(
     ledger.take(sourceKey(ph), 0, STILL, scId);
     return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true, reused: true };
   };
-  const poolPick = (product: string, need: number, scId: number, avoid?: string): SubShot | undefined => {
+  const poolPick = (product: string, need: number, scId: number, avoid?: string, preview = false): SubShot | undefined => {
     const shots = pool.filter((p) => p.product === product); // never another product's shots
     const tu = typeUse.get(product) ?? new Map<string, number>();
     const tot = [...tu.values()].reduce((a, b) => a + b, 0) + 1;
@@ -454,7 +480,7 @@ export function applyPacing(
       let at: number | undefined;
       let staticAt: number | undefined;
       for (let t = 0; t + len <= p.duration + 0.01; t += 0.25) {
-        if (!ledger.free(local, base + t, base + t + len)) continue;
+        if (!ledger.free(local, base + t, base + t + len) || previewBusy(local, base + t, base + t + len)) continue;
         if (movingShare(p.motion, p.motionFps ?? 10, t, len) >= 0.5) { at = t; break; }
         staticAt ??= t;
       }
@@ -469,11 +495,12 @@ export function applyPacing(
     const p = best.p;
     const len = Math.min(need, p.duration);
     const local = p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url);
-    ledger.take(local, (p.srcStart ?? 0) + best.at, (p.srcStart ?? 0) + best.at + len, scId);
+    if (preview) previewTaken.push({ key: local, a: (p.srcStart ?? 0) + best.at, b: (p.srcStart ?? 0) + best.at + len });
+    else ledger.take(local, (p.srcStart ?? 0) + best.at, (p.srcStart ?? 0) + best.at + len, scId);
     lastUp.push(p.author);
     tu.set(p.shotType ?? "", (tu.get(p.shotType ?? "") ?? 0) + 1);
     typeUse.set(product, tu);
-    return { path: p.path, kind: "video", in: Math.round(best.at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + best.at, shotType: p.shotType, verified: true };
+    return { path: p.path, kind: "video", in: Math.round(best.at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: (p.srcStart ?? 0) + best.at, shotType: p.shotType, verified: true, ...(preview ? { preview: true } : {}) };
   };
   const photoPick = (product: string, scId: number, prefer?: string): SubShot | undefined => {
     const list = [...(prefer ? [prefer] : []), ...(opts.photosOf?.(product) ?? [])];
@@ -503,13 +530,17 @@ export function applyPacing(
   };
 
   /** Products in turn, each one's best-fitting free pool shot (poolPick ranks them), then generic clips. */
+  const poolNames = names.filter((n) => pool.some((p) => p.product === n));
+  /** Words spoken in [a, b) (a little before a: the name often starts just before the cut). */
+  const spoken = (a: number, b: number) => words.filter((w) => w.start >= a - 0.3 && w.start < b).map((w) => w.word).join(" ");
+  let mentionShots = 0;
   let teaserTurn = 0;
   let teaserShots = 0;
   const teaserPick = (need: number, scId: number, avoid?: string): SubShot | undefined => {
     const withPool = names.filter((n) => pool.some((p) => p.product === n));
     for (let i = 0; i < withPool.length; i++) {
       const n = withPool[(teaserTurn + i) % withPool.length];
-      const pick = poolPick(n, need, scId, avoid);
+      const pick = poolPick(n, need, scId, avoid, true);
       if (pick) {
         teaserTurn = (teaserTurn + i + 1) % withPool.length;
         return pick;
@@ -556,8 +587,17 @@ export function applyPacing(
       const prevKey = subs.length ? subs[subs.length - 1].key : lastKey;
       prevKeyNow = prevKey;
       let s: SubShot | undefined;
+      // Intro / outro follow the words: a product named right now gets its best verified shot (in
+      // the intro as a preview its chapter may show again; in the outro a recap moment).
+      const a0 = bounds[k];
+      const inIntro = !t.backdrop && a0 < introUntil - 0.05;
+      const inOutro = !t.backdrop && inOutroScene(sc);
+      const said = inIntro || inOutro ? mentionedProduct(words.length ? spoken(a0, a0 + need) : sc.text, poolNames) : undefined;
+      if (said && inIntro) s = poolPick(said, need, sc.id, prevKey, true);
+      if (said && inOutro) s = poolPick(said, need, sc.id, prevKey) ?? reusePick(said, need, sc.id, prevKey, false);
+      if (s) mentionShots++;
       // Hook teaser: the best verified shot of a different product each cut, else other B-roll.
-      if (teaserHere && bounds[k] < cfg.hookEnd! - 0.05) {
+      if (!s && teaserHere && bounds[k] < cfg.hookEnd! - 0.05) {
         s = teaserPick(need, sc.id, prevKey);
         if (s) teaserShots++;
       }
@@ -672,6 +712,7 @@ export function applyPacing(
     const tu = typeUse.get(n);
     if (tu) log(`[pacing] ${n}: pool shot types used ${JSON.stringify(Object.fromEntries(tu))}`);
   }
+  if (mentionShots) log(`[pacing] intro/outro: ${mentionShots} shot(s) show the product the narration names at that moment`);
   if (cfg.hookEnd !== undefined) log(`[pacing] hook teaser: ${teaserShots} fast shot(s) in the first ${cfg.hookEnd.toFixed(1)} s${cfg.introEnd !== undefined ? `, intro paced ${cfg.introChoices?.join("/")} s until ${cfg.introEnd.toFixed(1)} s` : ""}`);
   log(`[pacing] sentence types (product scenes): ${JSON.stringify(sentenceStats)}`);
   log(`[pacing] generic scenes: ${genericProductShots} shot(s) filled with verified product b-roll instead of a repeat`);

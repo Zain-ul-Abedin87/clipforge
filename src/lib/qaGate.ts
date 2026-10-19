@@ -26,6 +26,8 @@ interface ShotLike {
   in?: number;
   frames?: number;
   variant?: string;
+  /** Intro preview of a product's best shot; its chapter may show the same moment once more. */
+  preview?: boolean;
 }
 export interface GateScene {
   id: number;
@@ -81,7 +83,7 @@ export function checkExactRepeats(scenes: GateScene[]): GateCheck {
   for (const s of scenes) {
     if (s.asset.source === "graphic") continue;
     for (const x of shotsOf(s)) {
-      if (x.kind !== "video") continue;
+      if (x.kind !== "video" || x.preview) continue;
       const k = `${x.path}|${Math.round((x.in ?? 0) * 4) / 4}|${x.variant ?? ""}`;
       const first = seen.get(k);
       if (first === undefined) seen.set(k, s.id);

@@ -113,8 +113,8 @@ function repair(scenes: Scene[], sections: Section[], fallback: Scene[]): Scene[
       else fixed.type = "stock";
     }
     if (fixed.type === "graphic" && !fixed.graphic) fixed.type = fallback[i].type === "graphic" ? "stock" : fallback[i].type;
-    // No full-scene intro card: the opening is footage (the hook needs moving pictures, not a title).
-    if (fixed.graphic?.kind === "intro_card") {
+    // No full-scene intro / end card: both show footage that follows what is said.
+    if (fixed.graphic?.kind === "intro_card" || fixed.graphic?.kind === "end_card") {
       delete fixed.graphic;
       fixed.type = "stock";
       fixed.queries = fallback[i].queries.length ? [...fallback[i].queries] : fixed.queries;
@@ -149,7 +149,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     glossary: fingerprint(glossaryFile),
     scriptSections: fingerprint(path.join(dir, "script_sections.json")),
     niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
-    labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v3:route-v1:bounds-v1`,
+    labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v4:route-v1:bounds-v1`,
     micro: JSON.stringify(microConfig(niche)) + "micro-v1",
   };
   if (!opts.force && isCached(dir, "plan", inputs, ["scenes.json"])) {

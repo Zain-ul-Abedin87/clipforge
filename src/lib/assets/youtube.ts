@@ -7,6 +7,7 @@ import { env } from "../env.js";
 import { paths } from "../paths.js";
 import { ffmpegPath, venvPythonPath } from "../tools.js";
 import type { Candidate } from "./types.js";
+import { acquire, limitKeyFor } from "../rateLimit.js";
 
 const CACHE = path.join(paths.root, "cache");
 const SEARCH_CACHE = path.join(CACHE, "search");
@@ -29,8 +30,14 @@ interface Reply {
  * One long-lived Python worker per process (yt-dlp is imported once). Requests are JSON lines;
  * replies are matched by id. A missing yt-dlp or a bad proxy setting disables the provider.
  */
+/** Limiters a worker request uses: searches hit YouTube, fetches the video page's host. */
+const defaultLimits = (req: Record<string, unknown>): string[] => (req.op === "search" ? ["youtube"] : typeof req.url === "string" ? [limitKeyFor(req.url)] : []);
+
 export class Worker {
-  constructor(private script: string = WORKER) {}
+  constructor(
+    private script: string = WORKER,
+    private limits: (req: Record<string, unknown>) => string[] = defaultLimits,
+  ) {}
 
   private child: ChildProcessWithoutNullStreams | null = null;
   private waiting = new Map<number, (r: Reply) => void>();
@@ -94,7 +101,11 @@ export class Worker {
    * request is actually sent (3 parallel downloads would otherwise time out while waiting in line).
    */
   call(req: Record<string, unknown>, timeoutMs: number): Promise<Reply> {
-    const next = this.queue.then(() => this.send(req, timeoutMs));
+    // The rate limiter is waited for before the request's own timeout starts.
+    const next = this.queue.then(async () => {
+      for (const k of this.limits(req)) await acquire(k);
+      return this.send(req, timeoutMs);
+    });
     this.queue = next.catch(() => undefined);
     return next;
   }

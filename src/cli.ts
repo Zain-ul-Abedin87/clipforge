@@ -8,11 +8,13 @@ import { evalDrift, makeTestAudio } from "./commands/devTools.js";
 import { doctor } from "./commands/doctor.js";
 import { fetchModel } from "./commands/fetchModel.js";
 import { plan } from "./commands/plan.js";
-import { serve } from "./server/server.js";
+import { runWorkers, serve } from "./server/server.js";
+import { workerStages } from "./server/pipelineQueue.js";
 import { testNvenc } from "./commands/testNvenc.js";
 import { transcribe } from "./commands/transcribe.js";
 import { tts } from "./commands/tts.js";
 import { harvestKeyword, harvestModel, rescoreVault } from "./lib/agents/youtube/ytExtractor.js";
+import { closeRedis } from "./lib/redis.js";
 
 // Per-project run log: every step run with -p/--project appends its console output (with time and
 // step name) to workspace/<project>/run.log, so a video's whole history is in one file.
@@ -207,6 +209,14 @@ program
   });
 
 program
+  .command("worker")
+  .description("Run pipeline stage workers without the web app (needs REDIS_URL; machines must share the workspace folder)")
+  .option("--stages <list>", "plan,sourcing,render (default: all)", "all")
+  .action(async (o) => {
+    await runWorkers(workerStages(o.stages));
+  });
+
+program
   .command("make-test-audio", { hidden: false })
   .description("[dev] Synthetic voiceover + truth timings in inputs/test/ (Windows TTS)")
   .option("--minutes <n>", "target length", "25")
@@ -225,3 +235,5 @@ program
   });
 
 await program.parseAsync();
+// A finished step must exit: the shared Redis connection (rate limiter / job state) would keep it alive.
+await closeRedis();

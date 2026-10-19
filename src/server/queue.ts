@@ -15,18 +15,28 @@ export interface QueueItem {
   qa?: { pass: number; warn: number; fail: number };
 }
 
-interface QueueState {
+export interface QueueState {
   paused: boolean;
   items: QueueItem[];
 }
 
 const FILE = path.join(paths.workspace, "queue.json");
 
+/** What the batch routes use: the queue.json BatchQueue below, or RedisBatchQueue (pipelineQueue.ts). */
+export interface VideoQueue {
+  list(): (QueueState & { working: boolean }) | Promise<QueueState & { working: boolean }>;
+  add(projects: string[], useLlm: boolean): QueueItem[] | Promise<QueueItem[]>;
+  remove(id: string): boolean | Promise<boolean>;
+  retry(id: string): boolean | Promise<boolean>;
+  clearFinished(): void | Promise<void>;
+  setPaused(paused: boolean): void | Promise<void>;
+}
+
 /**
  * Batch queue: videos run one after another through the whole pipeline (one at a time, so RAM
  * stays low). State lives in workspace/queue.json, so a restart resumes where it stopped.
  */
-export class BatchQueue {
+export class BatchQueue implements VideoQueue {
   private state: QueueState;
   private working = false;
 

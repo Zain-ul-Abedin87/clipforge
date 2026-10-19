@@ -1,0 +1,23 @@
+# Local Redis for ClipForge's persistent queues (BullMQ), job state and per-host rate limits.
+#   docker compose up -d redis
+#   then in .env:  REDIS_URL=redis://localhost:6379
+# Without REDIS_URL the app keeps using workspace/queue.json and needs no Docker at all.
+services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    # Append-only file: queued jobs, job state and logs survive a Redis restart.
+    # noeviction: BullMQ must never lose keys under memory pressure.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

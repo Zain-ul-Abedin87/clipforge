@@ -6,6 +6,7 @@ import { paths } from "../paths.js";
 import { netFetch } from "../net.js";
 import { MEDIA_CACHE, RateLimited } from "./stock.js";
 import type { Candidate } from "./types.js";
+import { limitedFetch } from "../rateLimit.js";
 
 /**
  * Storyblocks (licensed stock video, API v2). Every request is signed: HMAC-SHA256 of the URL path,
@@ -154,7 +155,7 @@ export async function downloadStoryblocks(c: Candidate): Promise<string> {
   const url = pickRendition(answer);
   if (!url) throw new Error(`Storyblocks ${c.location}: no MP4 in download answer (${JSON.stringify(answer).slice(0, 160)})`);
   const part = `${out}.part`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(300_000) });
+  const res = await limitedFetch(url, { signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`Storyblocks file HTTP ${res.status}`);
   fs.writeFileSync(part, Buffer.from(await res.arrayBuffer()));
   fs.renameSync(part, out);

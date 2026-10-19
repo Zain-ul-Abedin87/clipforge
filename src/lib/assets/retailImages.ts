@@ -6,6 +6,7 @@ import { run } from "../exec.js";
 import { paths } from "../paths.js";
 import { venvPythonPath } from "../tools.js";
 import { slug, USER_AGENT } from "./presskit.js";
+import { acquire, limitedFetch } from "../rateLimit.js";
 
 /**
  * Best-effort official / retailer product images (any niche). When a product has fewer than
@@ -33,6 +34,7 @@ export async function fetchRetailImages(channel: string, product: string, catego
   let saved = 0;
   for (const q of [`${product} ${category}`.trim(), `${product} official product photo`, `${product} amazon`]) {
     if (have + saved >= want + 4) break; // a few spare: some will fail the exact-model check
+    await acquire("retail"); // product_web.py: retailer + image search pages
     const r = await run(py, [script, "images", q, "40"], { timeoutMs: 60_000 });
     let j: { ok: boolean; error?: string; images?: { url: string; width: number; height: number; source: string; title: string; provider?: string }[] };
     try {
@@ -55,7 +57,7 @@ export async function fetchRetailImages(channel: string, product: string, catego
       if (seen.has(im.url)) continue;
       seen.add(im.url);
       try {
-        const res = await fetch(im.url, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(20_000) });
+        const res = await limitedFetch(im.url, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(20_000) });
         const type = res.headers.get("content-type") ?? "";
         if (!res.ok || !/image\/(jpeg|png|webp)/.test(type)) continue;
         const buf = Buffer.from(await res.arrayBuffer());
@@ -81,6 +83,7 @@ export async function productWebVideos(query: string, log: (m: string) => void):
   const py = venvPythonPath();
   const script = path.join(paths.python, "product_web.py");
   if (!py || !fs.existsSync(script)) return [];
+  await acquire("retail");
   const r = await run(py, [script, "videos", query, "20"], { timeoutMs: 90_000 }).catch(() => null);
   if (!r) return [];
   try {

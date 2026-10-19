@@ -4,6 +4,7 @@ import { env } from "../env.js";
 import { run } from "../exec.js";
 import { paths } from "../paths.js";
 import { ffmpegPath, venvPythonPath } from "../tools.js";
+import { acquire } from "../rateLimit.js";
 
 /**
  * Last-resort footage source "web_cc": python/web_crawler.py searches DuckDuckGo videos for any
@@ -62,6 +63,8 @@ export async function fetchFromWeb(
     return null;
   }
   crawls++;
+  // One crawl = DuckDuckGo searches plus a few page probes (web_crawler.py paces those per host).
+  await acquire("duckduckgo", log);
   fs.mkdirSync(workspaceDir, { recursive: true });
   const limit = timeoutMs();
   const args = [

@@ -15,7 +15,10 @@ import { approval, gateState, planEstimate, ProjectLike } from "./planGate.js";
 import { saveWordEdit } from "../lib/wordEdits.js";
 import { importFile, listLibrary, removeLibraryFile } from "../lib/assets/library.js";
 import { createChannel, listMusic, removeLogo, removeMusic, saveLogo, saveMusic, updateStyle } from "../lib/channels.js";
-import { BatchQueue } from "./queue.js";
+import { BatchQueue, type VideoQueue } from "./queue.js";
+import { MemoryJobStore, RedisJobStore, type JobStore, type StoredState } from "./jobStore.js";
+import { createDispatcher, LocalDispatcher, RedisBatchQueue, workerStages, type Dispatcher, type PipelineJob, type Stage, type StageResult } from "./pipelineQueue.js";
+import { redis } from "../lib/redis.js";
 import { importOfficial } from "../lib/assets/official.js";
 import { parseScriptHtml, scriptSections, scriptText } from "../lib/scriptImport.js";
 import { footageSummary, listReview, reviewThumb, swapShot } from "../lib/sceneReview.js";
@@ -64,6 +67,58 @@ interface Job {
   awaitingReview?: boolean;
 }
 const jobs = new Map<string, Job>();
+
+// ---------- Job state persistence (Redis when REDIS_URL is set, else this process only) ----------
+let store: JobStore = new MemoryJobStore();
+let dispatcher: Dispatcher = new LocalDispatcher();
+/**
+ * Projects this process is starting or running right now: their map entry is the freshest state
+ * and a refresh from Redis must not replace it. A count, because the enqueue in runJob and the
+ * in-process worker's runSteps can overlap.
+ */
+const localActive = new Map<string, number>();
+const hold = (n: string) => localActive.set(n, (localActive.get(n) ?? 0) + 1);
+const release = (n: string) => {
+  const c = (localActive.get(n) ?? 1) - 1;
+  if (c <= 0) localActive.delete(n);
+  else localActive.set(n, c);
+};
+/** Per-project write chain, so state saves and log lines reach Redis in order. */
+const chains = new Map<string, Promise<unknown>>();
+const pendingLines = new Map<string, string[]>();
+function persist(name: string, fn: () => Promise<unknown>): void {
+  if (store.kind === "memory") return;
+  const next = (chains.get(name) ?? Promise.resolve()).then(fn).catch((e) => console.warn(`[jobs] ${name}: ${String(e?.message ?? e).slice(0, 160)}`));
+  chains.set(name, next);
+}
+const stateOf = ({ log: _log, ...rest }: Job): StoredState => rest;
+/** Saves this job object (the runner's own, never a map lookup a refresh may have replaced). */
+function saveJob(name: string, job: Job | undefined = jobs.get(name)): void {
+  if (job) persist(name, () => store.save(name, stateOf(job)));
+}
+/** Log lines are batched (CLI steps print fast) and flushed after 200 ms or before a state save. */
+function logLine(name: string, line: string): void {
+  if (store.kind === "memory") return;
+  const buf = pendingLines.get(name) ?? [];
+  buf.push(line);
+  if (buf.length === 1) {
+    pendingLines.set(name, buf);
+    setTimeout(() => flushLog(name), 200);
+  }
+}
+function flushLog(name: string): void {
+  const buf = pendingLines.get(name);
+  if (!buf?.length) return;
+  pendingLines.delete(name);
+  persist(name, () => store.append(name, buf));
+}
+/** Pulls the shared state of these projects into the map (Redis mode; workers may run elsewhere). */
+async function refreshJobs(names: string[]): Promise<void> {
+  if (store.kind === "memory" || !names.length) return;
+  const got = await store.loadMany(names.filter((n) => !localActive.has(n))).catch(() => new Map<string, StoredState>());
+  // Checked again after the await: a run may have started here while Redis was being read.
+  for (const [n, st] of got) if (!localActive.has(n)) jobs.set(n, { ...(st as Omit<Job, "log">), log: jobs.get(n)?.log ?? [] });
+}
 
 const validName = (n: string) => /^[A-Za-z0-9_-]{1,64}$/.test(n);
 const projDir = (n: string) => path.join(paths.workspace, n);
@@ -135,70 +190,126 @@ function cliArgs(name: string, step: RunStep, force: boolean, useLlm: boolean, e
   return args;
 }
 
-/** Runs steps as child CLI processes so a crash in one never takes the web server down. */
+/**
+ * Starts a pipeline run. Local mode: runs the steps here to the end (as before). BullMQ mode: the
+ * project is marked queued and the first stage goes to its queue; workers run the stages.
+ */
 async function runJob(name: string, steps: RunStep[], force: boolean, useLlm: boolean, gate = true, extra: ExtraArgs = {}): Promise<void> {
-  reloadEnv();
-  const job: Job = { running: true, step: null, failedStep: null, log: [], startedAt: Date.now() };
-  jobs.set(name, job);
-  const push = (line: string) => {
-    job.log.push(line);
-    if (job.log.length > 2000) job.log.splice(0, job.log.length - 2000);
-  };
-
-  for (const step of steps) {
-    // Plan approval gate: footage is only fetched for a plan the user has approved.
-    if (gate && step === "assets" && gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike) === "waiting") {
-      job.awaitingApproval = true;
-      push("=== plan ready ===");
-      push("Review the scene plan, change searches if you like, then press \"Approve plan & make video\".");
-      break;
-    }
-    job.step = step;
-    push(`=== ${step} ===`);
-    const code = await new Promise<number>((resolve) => {
-      const child = spawn(process.execPath, [TSX_CLI, CLI, ...cliArgs(name, step, force, useLlm, extra)], {
-        cwd: paths.root,
-        windowsHide: true,
-        // Simple UI settings (web crawl on/off and mode) reach every step.
-        env: { ...process.env, ...runEnv(loadAppSettings()) },
-      });
-      let buf = "";
-      const onData = (d: Buffer) => {
-        buf += d.toString();
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl).replace(/\r$/, "");
-          buf = buf.slice(nl + 1);
-          // Hugging Face / tqdm noise is not useful in the UI.
-          if (line.trim() && !/UserWarning|warnings\.warn|symlink|developer mode|HF_TOKEN/i.test(line)) push(line);
-        }
-      };
-      child.stdout.on("data", onData);
-      child.stderr.on("data", onData);
-      child.on("close", (c) => resolve(c ?? 1));
-      child.on("error", (e) => {
-        push(String(e));
-        resolve(1);
-      });
-    });
-    if (code !== 0) {
-      job.failedStep = step;
-      push(step === "tts" && code === 2 ? "!!! tts: no TTS provider configured - see the message above (set TTS_PROVIDER in .env or upload a voiceover)" : `!!! ${step} failed (exit ${code})`);
-      break;
-    }
-    // Scene review gate: projects created with "review before render" stop after the timeline.
-    const pj = readProject(name) ?? {};
-    if (step === "timeline" && steps.includes("render") && pj.review === true && !pj.reviewDone && !extra.render) {
-      job.awaitingReview = true;
-      push("=== review ===");
-      push("Scenes ready: review / swap clips, then press Render.");
-      break;
-    }
+  const job: PipelineJob = { project: name, steps, force, useLlm, gate, extra: extra as Record<string, string[]>, stageIndex: 0 };
+  if (dispatcher.kind !== "bullmq") return dispatcher.start(job);
+  // Visible (and 409-protected) at once, before a worker picks it up.
+  hold(name);
+  try {
+    const queued: Job = { running: true, step: null, failedStep: null, log: ["=== queued ==="], startedAt: Date.now() };
+    jobs.set(name, queued);
+    persist(name, () => store.clearLog(name));
+    saveJob(name, queued);
+    logLine(name, "=== queued ===");
+    flushLog(name);
+    await (chains.get(name) ?? Promise.resolve());
+    await dispatcher.start(job);
+  } finally {
+    release(name);
   }
-  job.running = false;
-  job.step = null;
-  job.finishedAt = Date.now();
-  if (!job.awaitingApproval && !job.awaitingReview) push(job.failedStep ? "Stopped." : "All steps finished.");
+}
+
+/** Stage runner: one job's steps (all of them in local mode, one stage's in BullMQ mode). */
+async function stageRunner(p: PipelineJob, steps: string[], final: boolean): Promise<StageResult> {
+  const name = p.project;
+  if (p.batchId && p.stageIndex === 0 && dispatcher.kind === "bullmq") await RedisBatchQueue.update(redis()!, p.batchId, { status: "running", startedAt: new Date().toISOString() });
+  return runSteps(name, steps as RunStep[], p.force, p.useLlm, p.gate, p.extra as ExtraArgs, { continueLog: p.stageIndex > 0, final });
+}
+
+/** Runs steps as child CLI processes so a crash in one never takes the web server down. */
+async function runSteps(
+  name: string,
+  steps: RunStep[],
+  force: boolean,
+  useLlm: boolean,
+  gate = true,
+  extra: ExtraArgs = {},
+  opts: { continueLog?: boolean; final?: boolean } = {},
+): Promise<StageResult> {
+  reloadEnv();
+  const final = opts.final ?? true;
+  const prev = jobs.get(name);
+  const job: Job = { running: true, step: null, failedStep: null, log: opts.continueLog && prev ? prev.log : [], startedAt: opts.continueLog && prev ? prev.startedAt : Date.now() };
+  jobs.set(name, job);
+  hold(name);
+  try {
+    if (!opts.continueLog && dispatcher.kind === "local") persist(name, () => store.clearLog(name));
+    saveJob(name, job);
+    const push = (line: string) => {
+      job.log.push(line);
+      if (job.log.length > 2000) job.log.splice(0, job.log.length - 2000);
+      logLine(name, line);
+    };
+
+    for (const step of steps) {
+      // Plan approval gate: footage is only fetched for a plan the user has approved.
+      if (gate && step === "assets" && gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike) === "waiting") {
+        job.awaitingApproval = true;
+        push("=== plan ready ===");
+        push("Review the scene plan, change searches if you like, then press \"Approve plan & make video\".");
+        break;
+      }
+      job.step = step;
+      saveJob(name, job);
+      push(`=== ${step} ===`);
+      const code = await new Promise<number>((resolve) => {
+        const child = spawn(process.execPath, [TSX_CLI, CLI, ...cliArgs(name, step, force, useLlm, extra)], {
+          cwd: paths.root,
+          windowsHide: true,
+          // Simple UI settings (web crawl on/off and mode) reach every step.
+          env: { ...process.env, ...runEnv(loadAppSettings()) },
+        });
+        let buf = "";
+        const onData = (d: Buffer) => {
+          buf += d.toString();
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).replace(/\r$/, "");
+            buf = buf.slice(nl + 1);
+            // Hugging Face / tqdm noise is not useful in the UI.
+            if (line.trim() && !/UserWarning|warnings\.warn|symlink|developer mode|HF_TOKEN/i.test(line)) push(line);
+          }
+        };
+        child.stdout.on("data", onData);
+        child.stderr.on("data", onData);
+        child.on("close", (c) => resolve(c ?? 1));
+        child.on("error", (e) => {
+          push(String(e));
+          resolve(1);
+        });
+      });
+      if (code !== 0) {
+        job.failedStep = step;
+        push(step === "tts" && code === 2 ? "!!! tts: no TTS provider configured - see the message above (set TTS_PROVIDER in .env or upload a voiceover)" : `!!! ${step} failed (exit ${code})`);
+        break;
+      }
+      // Scene review gate: projects created with "review before render" stop after the timeline.
+      const pj = readProject(name) ?? {};
+      if (step === "timeline" && steps.includes("render") && pj.review === true && !pj.reviewDone && !extra.render) {
+        job.awaitingReview = true;
+        push("=== review ===");
+        push("Scenes ready: review / swap clips, then press Render.");
+        break;
+      }
+    }
+    const stopped = !!(job.awaitingApproval || job.awaitingReview);
+    job.step = null;
+    if (final || job.failedStep || stopped) {
+      job.running = false;
+      job.finishedAt = Date.now();
+      if (!stopped) push(job.failedStep ? "Stopped." : "All steps finished.");
+    } else push("=== next stage queued ===");
+    flushLog(name);
+    saveJob(name, job);
+    await (chains.get(name) ?? Promise.resolve());
+    return { failedStep: job.failedStep, stopped };
+  } finally {
+    release(name);
+  }
 }
 
 /** Model-vault harvests run as child CLI processes (one per model), independent of projects. */
@@ -240,7 +351,7 @@ function runHarvest(name: string, args: string[]): void {
 }
 
 // Batch queue: one video at a time through every step; waits while any manual run is busy.
-let queue: BatchQueue;
+let queue: VideoQueue;
 let ytStatus: Promise<{ ok: boolean; detail: string }> | undefined;
 
 // ---------- HTTP helpers ----------
@@ -543,18 +654,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   // ----- batch queue -----
   if (parts[1] === "queue") {
-    if (method === "GET") return send(res, 200, queue.list());
+    if (method === "GET") return send(res, 200, await queue.list());
     const body = JSON.parse((await readBody(req)) || "{}");
-    if (method === "POST" && parts[2] === "pause") return (queue.setPaused(true), send(res, 200, { ok: true }));
-    if (method === "POST" && parts[2] === "resume") return (queue.setPaused(false), send(res, 200, { ok: true }));
-    if (method === "POST" && parts[2] === "clear") return (queue.clearFinished(), send(res, 200, { ok: true }));
-    if (method === "POST" && parts[2] === "retry") return send(res, queue.retry(String(body.id)) ? 200 : 400, { ok: true });
+    if (method === "POST" && parts[2] === "pause") return (await queue.setPaused(true), send(res, 200, { ok: true }));
+    if (method === "POST" && parts[2] === "resume") return (await queue.setPaused(false), send(res, 200, { ok: true }));
+    if (method === "POST" && parts[2] === "clear") return (await queue.clearFinished(), send(res, 200, { ok: true }));
+    if (method === "POST" && parts[2] === "retry") return send(res, (await queue.retry(String(body.id))) ? 200 : 400, { ok: true });
     if (method === "POST" && !parts[2]) {
       const names: string[] = (body.projects ?? []).filter((n: string) => validName(n) && readProject(n)?.audio);
       if (!names.length) return send(res, 400, { error: "no uploaded projects to queue" });
-      return send(res, 200, { ok: true, added: queue.add(names, body.useLlm !== false) });
+      return send(res, 200, { ok: true, added: await queue.add(names, body.useLlm !== false) });
     }
-    if (method === "DELETE" && parts[2]) return send(res, queue.remove(parts[2]) ? 200 : 400, { ok: true });
+    if (method === "DELETE" && parts[2]) return send(res, (await queue.remove(parts[2])) ? 200 : 400, { ok: true });
   }
 
   if (parts[1] === "glossary") {
@@ -572,6 +683,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const names = fs.existsSync(paths.workspace)
       ? fs.readdirSync(paths.workspace).filter((n) => validName(n) && fs.existsSync(path.join(projDir(n), "project.json")))
       : [];
+    await refreshJobs(names);
     const list = names.map(summary).sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
     return send(res, 200, list);
   }
@@ -579,6 +691,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const name = parts[2];
   if (!name || !validName(name)) return send(res, 400, { error: "project name: letters, digits, - and _ only" });
   const action = parts[3];
+  await refreshJobs([name]);
 
   if (!action && method === "GET") {
     if (!readProject(name)) return send(res, 404, { error: "no such project" });
@@ -748,6 +861,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (action === "log" && method === "GET") {
     const job = jobs.get(name);
     const since = Number(url.searchParams.get("since") ?? 0);
+    // Redis mode: the shared log (lines written by any worker, also before a restart).
+    const shared = store.kind === "redis" ? await store.logSince(name, since).catch(() => null) : null;
     return send(res, 200, {
       running: job?.running ?? false,
       step: job?.step ?? null,
@@ -755,8 +870,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       awaitingApproval: job?.awaitingApproval ?? false,
       awaitingReview: (job?.awaitingReview ?? false) && !job?.running,
       planGate: gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike),
-      total: job?.log.length ?? 0,
-      lines: job ? job.log.slice(since) : [],
+      total: shared ? shared.total : job?.log.length ?? 0,
+      lines: shared ? shared.lines : job ? job.log.slice(since) : [],
       steps: stepStatus(name),
     });
   }
@@ -1052,16 +1167,70 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   return send(res, 404, { error: "unknown route" });
 }
 
+/** Picks local or BullMQ dispatch (REDIS_URL) and starts this process's stage workers. */
+async function initPipeline(stages: Stage[]): Promise<void> {
+  dispatcher = createDispatcher();
+  if (dispatcher.kind === "bullmq") store = new RedisJobStore(redis()!);
+  await dispatcher.startWorkers(stages, stageRunner, onPipelineDone);
+  if (dispatcher.kind === "bullmq") console.log(`[queue] BullMQ on ${process.env.REDIS_URL?.replace(/\/\/[^@]*@/, "//***@")}: ${stages.length ? `working on ${stages.join(", ")}` : "no workers in this process (QUEUE_WORKERS=none)"}`);
+}
+
+/** Batch items run by BullMQ: record the outcome (any worker, any machine). */
+async function onPipelineDone(p: PipelineJob, r: StageResult): Promise<void> {
+  if (!p.batchId || dispatcher.kind !== "bullmq") return;
+  const qaFile = path.join(projDir(p.project), "qa_report.json");
+  const qa = !r.failedStep && fs.existsSync(qaFile) ? JSON.parse(fs.readFileSync(qaFile, "utf8")).summary : undefined;
+  await RedisBatchQueue.update(redis()!, p.batchId, {
+    status: r.failedStep ? "failed" : "done",
+    finishedAt: new Date().toISOString(),
+    ...(r.failedStep ? { error: `stopped at step: ${r.failedStep}` } : {}),
+    ...(qa ? { qa } : {}),
+  });
+}
+
+/**
+ * After a restart: a run marked running in Redis that has no waiting or active stage job anywhere
+ * was cut off (e.g. the server died before the job was queued). It is marked stopped so the
+ * project is not blocked forever; finished steps are cached, so Go continues where it stopped.
+ */
+async function reconcileJobs(): Promise<void> {
+  const names = fs.existsSync(paths.workspace) ? fs.readdirSync(paths.workspace).filter(validName) : [];
+  await refreshJobs(names);
+  const active = await dispatcher.activeProjects();
+  for (const n of names) {
+    const j = jobs.get(n);
+    if (!j?.running || active.has(n) || localActive.has(n)) continue;
+    Object.assign(j, { running: false, failedStep: j.step ?? j.failedStep ?? null, step: null, finishedAt: Date.now() });
+    logLine(n, "!!! interrupted: no queued or running job was left after a restart. Press Go to continue (finished steps are cached).");
+    flushLog(n);
+    saveJob(n);
+  }
+}
+
+/** `clipforge worker`: stage workers only (no web server), for extra machines sharing the workspace. */
+export async function runWorkers(stages: Stage[]): Promise<void> {
+  if (!redis()) throw new Error("clipforge worker needs REDIS_URL (the queues live in Redis)");
+  fs.mkdirSync(paths.workspace, { recursive: true });
+  await initPipeline(stages);
+  await new Promise(() => {});
+}
+
 export async function serve(port: number): Promise<void> {
   fs.mkdirSync(paths.workspace, { recursive: true });
-  queue = new BatchQueue(
-    async (project, useLlm) => {
-      // Batch runs unattended: no plan approval stop.
-      await runJob(project, [...STEPS], false, useLlm, false);
-      return { failedStep: jobs.get(project)?.failedStep ?? null };
-    },
-    () => [...jobs.values()].some((j) => j.running),
-  );
+  await initPipeline(workerStages());
+  if (dispatcher.kind === "bullmq") {
+    queue = new RedisBatchQueue(redis()!, dispatcher, () => [...STEPS]);
+    await reconcileJobs();
+  } else {
+    queue = new BatchQueue(
+      async (project, useLlm) => {
+        // Batch runs unattended: no plan approval stop.
+        await runJob(project, [...STEPS], false, useLlm, false);
+        return { failedStep: jobs.get(project)?.failedStep ?? null };
+      },
+      () => [...jobs.values()].some((j) => j.running),
+    );
+  }
   const server = http.createServer((req, res) => {
     handle(req, res).catch((err) => {
       console.error(err);

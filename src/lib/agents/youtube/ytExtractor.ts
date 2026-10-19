@@ -12,6 +12,7 @@ import { ffmpegPath, ffprobePath, venvPythonPath } from "../../tools.js";
 import { ensureLandscape } from "../../engine/filters/lavfiBuilder.js";
 import { fuzzyTitleHasModel, fuzzyTokenMatch, suggestSpelling } from "./fuzzyMatcher.js";
 import { clipAvailable, judge, promptSet, ScoringProfile, scoreShots, ShotScore, ShotThresholds, thresholdsFor } from "../vision/clipScorer.js";
+import { acquire, limitKeyFor } from "../../rateLimit.js";
 
 /**
  * Visual-first exact-model extractor. For one brand + exact model it:
@@ -352,10 +353,12 @@ export interface HarvestResult {
 
 const SCRIPT = path.join(paths.python, "yt_extract.py");
 
-/** One request to python/yt_extract.py (JSON in, last JSON line out). */
-function py(op: string, req: unknown, timeoutMs: number): Promise<Record<string, unknown>> {
+/** One request to python/yt_extract.py (JSON in, last JSON line out). Every op talks to YouTube. */
+async function py(op: string, req: unknown, timeoutMs: number): Promise<Record<string, unknown>> {
   const bin = venvPythonPath();
-  if (!bin) return Promise.resolve({ ok: false, error: "no .venv python (see README setup)" });
+  if (!bin) return { ok: false, error: "no .venv python (see README setup)" };
+  const url = (req as { url?: unknown } | null)?.url;
+  await acquire(typeof url === "string" ? limitKeyFor(url) : "youtube");
   return new Promise((resolve) => {
     const child = spawn(bin, ["-u", SCRIPT, op], { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
     let out = "";

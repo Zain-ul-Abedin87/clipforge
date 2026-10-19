@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { paths } from "../paths.js";
+import { limitedFetch } from "../rateLimit.js";
 
 const MEDIA = /\.(jpe?g|png|webp|mp4|mov|m4v|webm)$/i;
 const MAX_BYTES = 600 * 1024 * 1024;
@@ -52,7 +53,7 @@ export async function addPresskitFile(channel: string, product: string, url: str
   const dir = path.join(paths.channels, channel, "presskit", slug(product));
 
   // Media sites (Wikimedia in particular) reject anonymous clients; identify the tool honestly.
-  const res = await fetch(url, { signal: AbortSignal.timeout(300_000), redirect: "follow", headers: { "User-Agent": USER_AGENT } });
+  const res = await limitedFetch(url, { signal: AbortSignal.timeout(300_000), redirect: "follow", headers: { "User-Agent": USER_AGENT } });
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
   const type = res.headers.get("content-type") ?? "";
   // A ".jpg"-looking URL can still be a web page (e.g. a Wikimedia "File:" page): trust the

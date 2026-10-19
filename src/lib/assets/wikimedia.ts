@@ -6,6 +6,7 @@ import { netFetch } from "../net.js";
 import { tokens } from "./local.js";
 import { USER_AGENT } from "./presskit.js";
 import type { Candidate } from "./types.js";
+import { limitedFetch } from "../rateLimit.js";
 
 const CACHE = path.join(paths.root, "cache");
 const SEARCH_CACHE = path.join(CACHE, "search");
@@ -169,7 +170,7 @@ export async function downloadWikimedia(c: Candidate): Promise<string> {
   const ext = c.kind === "video" ? path.extname(new URL(c.location).pathname).toLowerCase() || ".webm" : ".jpg";
   const out = path.join(MEDIA_CACHE, `${c.id}${ext}`);
   if (fs.existsSync(out)) return out;
-  const res = await fetch(c.location, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(300_000) });
+  const res = await limitedFetch(c.location, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`Wikimedia download HTTP ${res.status}`);
   fs.writeFileSync(out, Buffer.from(await res.arrayBuffer()));
   return out;

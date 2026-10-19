@@ -7,6 +7,7 @@ import { paths } from "../paths.js";
 import { ffmpegPath, venvPythonPath } from "../tools.js";
 import type { Candidate } from "./types.js";
 import { Worker } from "./youtube.js";
+import { limitKeyFor } from "../rateLimit.js";
 
 /**
  * Stock provider "web_crawl" (VidRush-style general web crawling). NOT licence-checked:
@@ -27,7 +28,8 @@ const SPLITTER = path.join(paths.python, "split_shots.py");
 
 export const WEB_CRAWL_LICENSE = "unknown/web";
 
-const worker = new Worker(WORKER);
+// web_crawl.py searches YouTube (ytsearch) and DuckDuckGo; fetches go to the hit's host.
+const worker = new Worker(WORKER, (req) => (req.op === "search" ? ["youtube", "duckduckgo"] : typeof req.url === "string" ? [limitKeyFor(req.url)] : []));
 let disabledWhy: string | null = null;
 let searches = 0;
 /** Product-pool searches have their own budget, so stock fallbacks cannot starve a product's pool. */

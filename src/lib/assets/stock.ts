@@ -5,6 +5,7 @@ import { env, hasKey } from "../env.js";
 import { paths } from "../paths.js";
 import { netFetch } from "../net.js";
 import type { Candidate } from "./types.js";
+import { limitedFetch } from "../rateLimit.js";
 
 const CACHE = path.join(paths.root, "cache");
 const SEARCH_CACHE = path.join(CACHE, "search");
@@ -139,7 +140,7 @@ export async function downloadStock(c: Candidate): Promise<string> {
     // A dropped connection usually comes back within seconds on this link.
     if (attempt > 1) await new Promise((r) => setTimeout(r, attempt * 4000));
     try {
-      const res = await fetch(c.location, { signal: AbortSignal.timeout(180_000) });
+      const res = await limitedFetch(c.location, { signal: AbortSignal.timeout(180_000) });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       fs.writeFileSync(part, Buffer.from(await res.arrayBuffer()));
       fs.renameSync(part, out);

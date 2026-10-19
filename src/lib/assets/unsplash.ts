@@ -5,6 +5,7 @@ import { env, hasKey } from "../env.js";
 import { paths } from "../paths.js";
 import { USER_AGENT } from "./presskit.js";
 import type { Candidate } from "./types.js";
+import { limitedFetch } from "../rateLimit.js";
 
 const CACHE = path.join(paths.root, "cache");
 const SEARCH_CACHE = path.join(CACHE, "search");
@@ -36,7 +37,7 @@ export async function searchUnsplash(query: string): Promise<Candidate[]> {
     results = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
   } else {
     const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&orientation=landscape&per_page=20&content_filter=high`;
-    const res = await fetch(url, {
+    const res = await limitedFetch(url, {
       headers: { Authorization: `Client-ID ${env("UNSPLASH_ACCESS_KEY")}`, "Accept-Version": "v1", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(30_000),
     });
@@ -71,11 +72,11 @@ export async function downloadUnsplash(c: Candidate): Promise<string> {
   const out = path.join(MEDIA_CACHE, `${c.id}.jpg`);
   if (fs.existsSync(out)) return out;
   const id = c.id.replace(/^unsplash_/, "");
-  await fetch(`https://api.unsplash.com/photos/${id}/download`, {
+  await limitedFetch(`https://api.unsplash.com/photos/${id}/download`, {
     headers: { Authorization: `Client-ID ${env("UNSPLASH_ACCESS_KEY")}`, "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(30_000),
   }).catch(() => undefined);
-  const res = await fetch(c.location, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(60_000) });
+  const res = await limitedFetch(c.location, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`Unsplash download HTTP ${res.status}`);
   fs.writeFileSync(out, Buffer.from(await res.arrayBuffer()));
   return out;

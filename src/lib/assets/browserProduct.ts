@@ -8,6 +8,7 @@ import { slug, USER_AGENT } from "./presskit.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { agentEnabled, agentModel } from "../agent/footage.js";
 import { llm } from "../agents/llm/llm.js";
+import { limitedFetch } from "../rateLimit.js";
 
 /**
  * Haiku: the most specific shopping category the TEXT supports (this product's narration + official
@@ -73,7 +74,7 @@ export async function browserProduct(channel: string, projectDir: string, produc
     const file0 = `${provider}_${crypto.createHash("sha1").update(url).digest("hex").slice(0, 10)}`;
     if (fs.readdirSync(dir).some((f) => f.startsWith(file0))) return void (counts[provider] = (counts[provider] ?? 0) + 1);
     try {
-      const res = await fetch(url, { headers: { "user-agent": USER_AGENT, referer: page }, signal: AbortSignal.timeout(20_000) });
+      const res = await limitedFetch(url, { headers: { "user-agent": USER_AGENT, referer: page }, signal: AbortSignal.timeout(20_000) });
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || !/image\/(jpeg|png|webp)/.test(type)) return;
       const buf = Buffer.from(await res.arrayBuffer());

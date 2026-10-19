@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { run } from "../lib/exec.js";
+import { nvencUsable } from "../lib/encoder.js";
 import { hasKey } from "../lib/env.js";
 import { paths } from "../lib/paths.js";
 import { stopYoutubeWorker, youtubeStatus } from "../lib/assets/youtube.js";
@@ -47,12 +48,13 @@ export async function doctor(): Promise<number> {
   const fp = ffprobePath();
   if (ff) {
     checks.push({ name: "FFmpeg", status: "ok", detail: `${await firstLine(ff, ["-version"])}  (${ff})` });
-    const enc = await run(ff, ["-hide_banner", "-encoders"]);
-    const nvenc = ["h264_nvenc", "hevc_nvenc"].filter((e) => enc.stdout.includes(e));
+    // A real test encode (FFmpeg lists h264_nvenc on machines that cannot use it). Not blocking:
+    // without NVENC every render uses libx264 on the CPU (lib/encoder.ts), just slower.
+    const nv = await nvencUsable(ff);
     checks.push(
-      nvenc.length
-        ? { name: "NVENC encoders", status: "ok", detail: nvenc.join(", ") }
-        : { name: "NVENC encoders", status: "fail", detail: "ffmpeg build has no NVENC support" },
+      nv.ok
+        ? { name: "NVENC", status: "ok", detail: "h264_nvenc test encode works" }
+        : { name: "NVENC", status: "warn", detail: `not usable (${nv.why || "no GPU"}): renders use libx264 (CPU)` },
     );
   } else {
     checks.push({ name: "FFmpeg", status: "fail", detail: `not found (${process.platform === "win32" ? "winget install Gyan.FFmpeg" : "apt install ffmpeg, or set FFMPEG_PATH"})` });
@@ -68,7 +70,7 @@ export async function doctor(): Promise<number> {
   checks.push(
     smi.code === 0
       ? { name: "NVIDIA GPU", status: "ok", detail: smi.stdout.trim() }
-      : { name: "NVIDIA GPU", status: "fail", detail: "nvidia-smi failed" },
+      : { name: "NVIDIA GPU", status: "warn", detail: "none found: Whisper and rendering run on the CPU (slower, works)" },
   );
 
   const totalGb = os.totalmem() / 1024 ** 3;

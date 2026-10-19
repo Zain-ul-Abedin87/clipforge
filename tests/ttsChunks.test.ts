@@ -8,12 +8,12 @@ import { alignedFromChunks, FPS, frameAlignedGap, scriptUnits, synthesizeUnits, 
 import { relativeCaptions, sceneContentHash } from "../src/lib/compiler/incrementalCache.js";
 import { contentSeed, randomCuts } from "../src/lib/pacing.js";
 import type { TtsConfig } from "../src/lib/tts.js";
+import { ffmpegPath } from "../src/lib/tools.js";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "clipforge-tts-"));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
-// tools.ts looks for ffmpeg(.exe) on PATH; on Linux point it at the system binary when present.
-for (const [k, f] of [["FFMPEG_PATH", "/usr/bin/ffmpeg"], ["FFPROBE_PATH", "/usr/bin/ffprobe"]] as const) if (!process.env[k] && fs.existsSync(f)) process.env[k] = f;
-const ff = process.env.FFMPEG_PATH;
+// The same lookup the app uses (FFMPEG_PATH, else PATH): skipped only where FFmpeg is missing.
+const ff = ffmpegPath();
 const voice: TtsConfig = { provider: "openai", apiKey: "k", voice: "alloy", model: "gpt-4o-mini-tts" };
 
 /** Fake engine: 0.3 s of silence, then a tone 0.06 s per character, then 0.2 s of silence. */

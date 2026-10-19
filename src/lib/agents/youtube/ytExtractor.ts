@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { coreModel, hasModelToken } from "../../productNames.js";
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "../../env.js";
@@ -125,6 +126,8 @@ export function filterHits(
   const rejected: { hit: SearchHit; why: string }[] = [];
   // Exact token match first; fuzzy (letters may be misspelled, digits never) only when asked.
   const names = (title: string) => titleHasModel(title, model) || (fuzzy && fuzzyTitleHasModel(title, model));
+  // A product with an empty model (an LLM "null") must not break every other product's search.
+  otherModels = otherModels.filter(hasModelToken);
   for (const h of hits) {
     if (!names(h.title)) rejected.push({ hit: h, why: "title does not name the exact model" });
     else if (!lengthOk(h, allowShorts)) rejected.push({ hit: h, why: `length ${Math.round(h.duration)} s outside ${MIN_VIDEO_SEC} s - ${MAX_VIDEO_SEC / 60} min` });
@@ -456,6 +459,19 @@ async function searchModelVideos(ctx: HarvestContext, queries: string[], otherMo
         ({ kept, rejected } = filterHits(hits, fixedBrand, model, otherModels, shortsAllowed(), fuzzy));
         ctx.manifest.spelling = `${fixedBrand} ${fixedModel}`;
       }
+    }
+  }
+  // Models padded with description words ("R40 Personal Utility Ruck Case") are never in a title
+  // whole: retry on the core ("R40"), with the brand required in the title so it stays exact.
+  const core = coreModel(model);
+  if (kept.length < num("FUZZY_MIN_HITS", 2) && core !== model && hasModelToken(core)) {
+    const brandRe = new RegExp(`(?<![a-z0-9])${normText(ctx.brand).replace(/[^a-z0-9]+/g, "[^a-z0-9]*")}(?![a-z0-9])`, "i");
+    const byCore = filterHits(hits, ctx.brand, core, otherModels, shortsAllowed(), fuzzy);
+    const extra = byCore.kept.filter((h) => brandRe.test(normText(h.title)) && !kept.some((k) => k.id === h.id));
+    if (extra.length) {
+      ctx.log(`[harvest] "${model}" is not in any title; ${extra.length} more video(s) name "${ctx.brand} ${core}"`);
+      kept = [...kept, ...extra];
+      rejected = rejected.filter((r) => !extra.some((e) => e.id === r.hit.id));
     }
   }
   for (const r of rejected) if (!ctx.manifest.rejectedVideos.some((x) => x.id === r.hit.id)) ctx.manifest.rejectedVideos.push({ id: r.hit.id, title: r.hit.title, why: r.why });

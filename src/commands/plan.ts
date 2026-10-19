@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanProductName, mergeProductNames } from "../lib/productNames.js";
 import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
@@ -106,9 +107,13 @@ export function sectionsFromScript(beats: ScriptSection[], aligned: Pick<Aligned
 
 /** LLM output can be internally inconsistent; fix what is fixable instead of failing the plan. */
 function repair(scenes: Scene[], sections: Section[], fallback: Scene[]): Scene[] {
+  // One name per product: a bare fragment ("Explorer") joins the full name it is part of.
+  const merge = mergeProductNames([...scenes, ...sections].map((x) => x.product_name).filter((n): n is string => !!n));
+  const canon = (n?: string | null) => { const c = cleanProductName(n); return c ? (merge.get(c) ?? c) : undefined; };
+  for (const sec of sections) if (sec.product_name) sec.product_name = canon(sec.product_name);
   return scenes.map((s, i) => {
     const sec = sections[s.section];
-    const fixed: Scene = { ...s, queries: [...s.queries] };
+    const fixed: Scene = { ...s, queries: [...s.queries], product_name: canon(s.product_name) };
     if (fixed.type === "product" && !fixed.product_name) {
       if (sec.product_name) fixed.product_name = sec.product_name;
       else fixed.type = "stock";

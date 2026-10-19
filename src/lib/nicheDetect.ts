@@ -52,7 +52,7 @@ type DetectOut = z.infer<typeof DetectSchema>;
 const SYSTEM = `You classify a faceless YouTube product-listicle script so the editor can pick the right footage rules.
 Return JSON with:
 - category: short snake_case product world (firearms, tech_gadgets, kitchen, tools, outdoor, fitness, beauty, auto, pets, general, ...)
-- label: human label, e.g. "Kitchen appliances"
+- label: 2-4 word human label of THIS script's product world, in words from the script (never a generic example)
 - targetShotSec: average cut length. Use 2.1 for phones/headphones/gadgets, 2.5 for firearms/tactical gear, 2.3 for everything else. Stay between 1.8 and 3.0.
 - fallbackQuery: safe 2-5 word stock B-roll search if nothing else matches
 - allowStock: false ONLY when every product shot must be the exact named model (typical for firearms). true for most consumer niches where stock B-roll of the category is fine.

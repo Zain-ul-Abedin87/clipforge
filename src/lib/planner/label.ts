@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { cleanProductName } from "../productNames.js";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env, hasKey } from "../env.js";
@@ -167,7 +168,7 @@ export function normalizeLabel(l: LooseLabel): Label {
   return {
     id: l.id,
     type,
-    product_name: l.product_name?.trim() || null,
+    product_name: cleanProductName(l.product_name),
     queries: (l.queries ?? []).filter((q) => typeof q === "string" && q.trim()).slice(0, 3),
     graphic_kind,
     graphic_title: type === "graphic" ? (l.graphic_title ?? "") : "",

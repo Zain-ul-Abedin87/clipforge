@@ -272,11 +272,16 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (!vaultCache.has(name)) vaultCache.set(name, findVaultFor(name));
     return vaultCache.get(name)!;
   };
-  /** The product whose vault serves a scene: its own product; in exact-only mode B-roll borrows the nearest product's. */
+  /**
+   * The product whose vault serves a scene: its own product; in exact-only mode B-roll (a scene that
+   * names no product) borrows the nearest product's. A scene about a product with no vault never
+   * borrows another product's footage: that showed the wrong product (video-1019-1843, one clip on
+   * four chapters). It falls through to the no-footage path and the gap is reported.
+   */
   const vaultProductOf = (scene: Scene): string | null => {
     const own = scene.product_name ?? productOfScene.get(scene.id);
     if (own && vaultFor(own)) return own;
-    if (!exactOnly) return null;
+    if (!exactOnly || own) return null;
     const near = scenes
       .map((x) => ({ x, name: x.product_name ?? productOfScene.get(x.id) }))
       .filter((o) => o.name && vaultFor(o.name))

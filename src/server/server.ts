@@ -129,12 +129,21 @@ const projDir = (n: string) => path.join(paths.workspace, n);
 
 function readProject(name: string): Record<string, unknown> | null {
   const f = path.join(projDir(name), "project.json");
-  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+  if (!fs.existsSync(f)) return null;
+  // Notepad / PowerShell write a BOM; one unreadable file must not break the project list.
+  try {
+    return JSON.parse(fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""));
+  } catch (err) {
+    console.error(`[server] ${f}: ${(err as Error).message}`);
+    return { name, broken: true };
+  }
 }
 
 function writeProject(name: string, patch: Record<string, unknown>): void {
   fs.mkdirSync(projDir(name), { recursive: true });
   const cur = readProject(name) ?? { name };
+  // Never overwrite a file that could not be parsed: the user's settings are still in it.
+  if (cur.broken) throw new Error(`${name}/project.json is not valid JSON; fix or delete it first`);
   fs.writeFileSync(path.join(projDir(name), "project.json"), JSON.stringify({ ...cur, ...patch }, null, 2));
 }
 

@@ -196,6 +196,14 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
     writeJson(path.join(dir, "footage_share.json"), report);
     for (const r of report) if (r.insufficient) log(`[timeline] WARNING insufficient footage for ${r.product}: ${r.poolVerified} verified clip(s) (target ${r.poolTarget ?? "?"}); chapter is ${Math.round(r.verifiedShare * 100)}% verified`);
+    // Quality gate: a chapter with no footage of its own product repeats or shows something else.
+    // FOOTAGE_GATE=strict stops here instead of rendering it (default: warn).
+    const bare = report.filter((r) => r.verifiedShare < Number(env("FOOTAGE_GATE_MIN_SHARE", "0.3")));
+    if (bare.length) {
+      const msg = `${bare.length}/${report.length} chapter(s) under ${Math.round(Number(env("FOOTAGE_GATE_MIN_SHARE", "0.3")) * 100)}% own-product footage: ${bare.map((r) => `${r.product} ${Math.round(r.verifiedShare * 100)}%`).join(", ")}. Add clips / photos for them (review page, inputs/) or fix their names, then re-run assets`;
+      if (env("FOOTAGE_GATE", "warn").toLowerCase() === "strict") throw new Error(`[timeline] footage gate: ${msg}`);
+      log(`[timeline] FOOTAGE GATE: ${msg}`);
+    }
     if (motionCfg.graphics) await addRankPriceCards(tl, scenes, sections, cardStyleOf(style), path.join(dir, "graphics"), nicheCfg.productPool?.rankCardAtSec ?? [11, 14], log);
   }
   if (motionCfg.graphics && preset.set.size) {

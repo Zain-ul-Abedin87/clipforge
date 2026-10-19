@@ -6,12 +6,13 @@ import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from
 import type { Scene } from "../lib/scenes.js";
 import { loadStyle } from "../lib/style.js";
 import type { CaptionStyle } from "../lib/render/captions.js";
-import { CardStyle, Layer, renderCardLayers, renderLowerThird, renderRankBadge, renderSidePanel, renderSpecChip } from "../lib/assets/graphics.js";
+import { CardStyle, Layer, renderCardLayers, renderHookText, renderLowerThird, renderRankBadge, renderSidePanel, renderSpecChip } from "../lib/assets/graphics.js";
 import { slug } from "../lib/assets/presskit.js";
 import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
 import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
+import { hookText, hookTitleProps } from "../lib/render/hookTitle.js";
 import { exactModelPrompt, productRegions, readPoolStatus, readProductPool } from "../lib/assets/productPool.js";
 import { verifyCandidates, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
 import { loadProjectNiche } from "../lib/niche.js";
@@ -104,7 +105,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     // Spec chips come from web research saved in the press kit.
     specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
     logo: JSON.stringify(logoOf(style)) + fingerprint(logoOf(style)?.path),
-    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-4-random",
+    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-5-teaser",
     pool: fingerprint(path.join(dir, "product_pool.json")) + fingerprint(path.join(dir, "product_pool_status.json")),
     aligned: fingerprint(path.join(dir, "aligned.json")),
   };
@@ -159,6 +160,9 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   // Channel preset overrides the niche shot length; every chapter start gets the opening pace.
   pace.targetShotSec = pacingTarget(style) ?? pace.targetShotSec;
   pace.chapterStarts = chapters.filter((c) => c.product).map((c) => c.start);
+  // Opening from the plan (planner/introOutro.ts): teaser montage until the hook ends, faster intro.
+  pace.hookEnd = sections[0]?.hookEnd;
+  pace.introEnd = sections.find((x) => x.kind === "intro")?.end;
   if (pace.enabled) {
     // Word timings only snap cuts to speech; without aligned.json the scenes are still cut.
     const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words : [];
@@ -184,9 +188,15 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     // Card set from the channel preset; the theme (colours, font) goes to every card.
     for (const t of tl) for (const l of t.overlays ?? []) {
       if (!l.card) continue;
-      if (!preset.set.has(l.card.comp)) delete l.card;
+      if (l.card.comp !== "HookTitle" && !preset.set.has(l.card.comp)) delete l.card;
       else if (preset.custom) l.card.props = { ...l.card.props, theme: themeOf(preset) };
     }
+  }
+  // Hook line as kinetic words over the teaser montage (HOOK_TITLE=off to skip).
+  if (motionCfg.graphics && pace.hookEnd !== undefined && env("HOOK_TITLE", "on").toLowerCase() !== "off" && fs.existsSync(path.join(dir, "aligned.json"))) {
+    const words = readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words;
+    const n = await addHookTitle(tl, words, pace.hookEnd, cardStyleOf(style), path.join(dir, "graphics"), preset.custom ? themeOf(preset) : undefined);
+    log(`[timeline] hook title: ${n ? `${n} scene(s), first ${pace.hookEnd.toFixed(1)} s` : "no words in the hook"}`);
   }
   // Verified product stills -> 2.5D parallax + light sweep clips (Remotion), before the cards render.
   await parallaxStills(tl, log).catch((e) => log(`[parallax] failed: ${String(e).slice(0, 140)}`));
@@ -238,6 +248,30 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   log(`[timeline] motion graphics: ${motionCfg.graphics ? `${ov} animated layers, ${fx} sound effects` : "off"}`);
   log(`[timeline] wrote ${path.join(dir, "timeline.json")}`);
   return 0;
+}
+
+/**
+ * One HookTitle layer per footage scene the hook overlaps (cards and blurred backdrops already carry
+ * their own text). Returns the number of scenes that got one.
+ */
+async function addHookTitle(tl: TimelineScene[], words: Word[], hookEnd: number, cs: CardStyle, outDir: string, theme: unknown): Promise<number> {
+  let n = 0;
+  for (const t of tl) {
+    if (t.start >= hookEnd - 0.05) break;
+    if (t.backdrop || t.asset.source === "graphic") continue;
+    const props = hookTitleProps(words, t.start, t.end, hookEnd);
+    if (!props) continue;
+    const seconds = Math.min(t.end, hookEnd + 0.4) - t.start;
+    (t.overlays ??= []).unshift({
+      path: await renderHookText(hookText(props), cs, outDir),
+      delay: 0,
+      anim: "fade",
+      out: Math.max(0.5, seconds - 0.3),
+      card: { comp: "HookTitle", props: { ...props, ...(theme ? { theme } : {}) }, seconds },
+    });
+    n++;
+  }
+  return n;
 }
 
 /** Background music is opt-in: style.json music.enabled must be true and the niche must not switch it off. */

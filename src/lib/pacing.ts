@@ -65,6 +65,14 @@ export interface PacingConfig {
    * [2, 3, 4]. Seeded by the scene start, so a re-render cuts the same way. Empty = target mode.
    */
   shotChoices?: number[];
+  /**
+   * Opening (sections.json): until hookEnd the video is a fast teaser montage (teaserChoices, e.g.
+   * 0.6-1 s shots of the best footage); until introEnd shots use introChoices (e.g. 1.5-2.5 s).
+   */
+  hookEnd?: number;
+  introEnd?: number;
+  teaserChoices?: number[];
+  introChoices?: number[];
 }
 
 /** Small deterministic PRNG (mulberry32): same seed, same cuts, so the render cache stays valid. */
@@ -80,34 +88,33 @@ export function seededRandom(seed: number): () => number {
 }
 
 /**
- * Splits `len` seconds into pieces drawn at random from `choices` (e.g. 2 / 3 / 4 s). Every piece
- * stays within [min(choices), max(choices)]: a pick is only allowed when the rest can still be
- * filled, and the last piece takes the remainder. Scenes shorter than the largest choice stay whole.
+ * Splits `len` seconds into pieces drawn at random from `choices` (e.g. 2 / 3 / 4 s), every piece
+ * within [min(choices), max(choices)]. A pick is only allowed when the rest can still be split into
+ * valid pieces; when no listed length keeps that true, an in-range length that does is used. A
+ * length that cannot be split at all (2.6 s with 1.5-2.5 s pieces) becomes equal pieces <= the max.
+ * Scenes no longer than the largest choice stay whole.
  */
 export function randomPieces(len: number, choices: number[], rand: () => number): number[] {
   const c = [...new Set(choices.filter((x) => x > 0))].sort((a, b) => a - b);
-  if (!c.length || len <= c[c.length - 1] + 1e-6) return [len];
+  const eps = 1e-6;
+  if (!c.length || len <= c[c.length - 1] + eps) return [len];
   const lo = c[0];
   const hi = c[c.length - 1];
+  /** r splits into n = ceil(r / hi) pieces of at most hi, each at least lo. */
+  const feasible = (r: number) => r < eps || Math.ceil((r - eps) / hi) * lo <= r + eps;
+  if (!feasible(len)) {
+    const n = Math.ceil((len - eps) / hi);
+    return Array.from({ length: n }, () => len / n);
+  }
   const out: number[] = [];
   let left = len;
-  while (left > hi + 1e-6) {
-    // The remainder after this pick must be one valid piece (>= lo) or splittable further.
-    const ok = c.filter((x) => left - x >= lo - 1e-6);
-    const pick = ok.length ? ok[Math.floor(rand() * ok.length)] : lo;
+  while (left > hi + eps) {
+    const ok = c.filter((x) => left - x >= lo - eps && feasible(left - x));
+    const pick = ok.length ? ok[Math.floor(rand() * ok.length)] : left / Math.ceil((left - eps) / hi);
     out.push(pick);
     left -= pick;
   }
-  if (left > 1e-6) out.push(left);
-  // A remainder below the smallest choice is merged into a neighbour that has room under `hi`.
-  const last = out[out.length - 1];
-  if (out.length > 1 && last < lo - 1e-6) {
-    const k = out.findIndex((x, i) => i < out.length - 1 && x + last <= hi + 1e-6);
-    if (k >= 0) {
-      out[k] += last;
-      out.pop();
-    }
-  }
+  if (left > eps) out.push(left);
   return out;
 }
 
@@ -142,6 +149,8 @@ export function pacingConfig(niche: Niche, envOff: boolean): PacingConfig {
     openingFactor: p.openingFactor ?? 1,
     laterFactor: p.laterFactor ?? 1,
     shotChoices: shotChoicesFor(p),
+    teaserChoices: p.teaserChoices ?? choicesEnv("TEASER_CHOICES", [0.6, 0.8, 1]),
+    introChoices: p.introChoices ?? choicesEnv("INTRO_CHOICES", [1.5, 2, 2.5]),
   };
 }
 
@@ -150,6 +159,14 @@ export function pacingConfig(niche: Niche, envOff: boolean): PacingConfig {
  * where scenes used to hold one clip for 5-12 s. Niches tuned from the channel study keep their
  * target pacing unless they list `shotChoices`. SHOT_CHOICES="2,3,4" overrides; "off" disables.
  */
+/** "0.6,0.8,1" from the environment; "off" = no special opening pace. */
+function choicesEnv(name: string, d: number[]): number[] {
+  const raw = env(name, "").trim().toLowerCase();
+  if (raw === "off") return [];
+  const v = raw ? raw.split(/[,\s]+/).map(Number).filter((x) => Number.isFinite(x) && x > 0) : [];
+  return v.length ? v : d;
+}
+
 function shotChoicesFor(p: Partial<PacingConfig>): number[] {
   const raw = env("SHOT_CHOICES", "").trim().toLowerCase();
   if (raw === "off") return [];
@@ -167,6 +184,17 @@ export interface Word {
 /** Cut times (absolute seconds, excluding scene start/end) snapped to word starts. */
 export function cutTimes(start: number, end: number, words: Word[], cfg: PacingConfig, carry?: { v: number }): number[] {
   const len = end - start;
+  // Hook: fast teaser montage up to the end of the hook line, then the rest of the scene as usual.
+  const h = cfg.hookEnd;
+  if (h !== undefined && cfg.teaserChoices?.length && start < h - 0.3) {
+    const tEnd = Math.min(end, h);
+    const cuts = boundariesOf(start, randomPieces(tEnd - start, cfg.teaserChoices, seededRandom(Math.round(start * 1000) + 7)));
+    const rest = { ...cfg, hookEnd: undefined };
+    // A tail shorter than one teaser shot stays on the last teaser shot.
+    if (end - tEnd < Math.min(...cfg.teaserChoices)) return cuts;
+    return [...cuts, Math.round(tEnd * 1000) / 1000, ...cutTimes(tEnd, end, words, rest, carry)];
+  }
+  if (cfg.introEnd !== undefined && cfg.introChoices?.length && start < cfg.introEnd - 0.3) return randomCuts(start, end, words, cfg.introChoices);
   if (cfg.shotChoices?.length) return randomCuts(start, end, words, cfg.shotChoices);
   const target = targetAt(cfg, (start + end) / 2);
   // carry: rounding error from earlier scenes, so ~4 s scenes average out to the target over the video.
@@ -187,6 +215,17 @@ export function cutTimes(start: number, end: number, words: Word[], cfg: PacingC
     prev = t;
   }
   return cuts;
+}
+
+/** Inner boundaries (absolute, ms-rounded) of consecutive pieces starting at `start`. */
+function boundariesOf(start: number, pieces: number[]): number[] {
+  const out: number[] = [];
+  let t = start;
+  for (const p of pieces.slice(0, -1)) {
+    t += p;
+    out.push(Math.round(t * 1000) / 1000);
+  }
+  return out;
 }
 
 /**
@@ -463,6 +502,21 @@ export function applyPacing(
     return undefined;
   };
 
+  /** Products in turn, each one's best-fitting free pool shot (poolPick ranks them), then generic clips. */
+  let teaserTurn = 0;
+  let teaserShots = 0;
+  const teaserPick = (need: number, scId: number, avoid?: string): SubShot | undefined => {
+    const withPool = names.filter((n) => pool.some((p) => p.product === n));
+    for (let i = 0; i < withPool.length; i++) {
+      const n = withPool[(teaserTurn + i) % withPool.length];
+      const pick = poolPick(n, need, scId, avoid);
+      if (pick) {
+        teaserTurn = (teaserTurn + i + 1) % withPool.length;
+        return pick;
+      }
+    }
+    return genericPick(need, scId, avoid);
+  };
   let totalShots = 0;
   let poolShots = 0;
   const carry = { v: 0 };
@@ -489,7 +543,9 @@ export function applyPacing(
     if (productOf.has(sc.id) && !t.backdrop) sentenceStats[st] = (sentenceStats[st] ?? 0) + 1;
     // Micro-scene plan (fast niches): its frame-exact boundaries are the cuts; else word-snapped pacing.
     const micro = opts.micro?.filter((m) => m.sceneId === sc.id);
-    const cuts = micro?.length ? micro.slice(1).map((m) => m.startFrame / FPS).filter((c) => c > start && c < end) : cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
+    // The hook's teaser montage overrides the micro-scene plan (its pieces are 2.5-4 s).
+    const teaserHere = cfg.hookEnd !== undefined && !!cfg.teaserChoices?.length && start < cfg.hookEnd - 0.3 && !t.backdrop;
+    const cuts = micro?.length && !teaserHere ? micro.slice(1).map((m) => m.startFrame / FPS).filter((c) => c > start && c < end) : cutTimes(start, end, words, cfg, start < cfg.openingSec ? undefined : carry);
     const bounds = [start, ...cuts, end];
     const frames = bounds.slice(1).map((b, k) => Math.round(b * FPS) - Math.round(bounds[k] * FPS));
     const subs: SubShot[] = [];
@@ -500,6 +556,11 @@ export function applyPacing(
       const prevKey = subs.length ? subs[subs.length - 1].key : lastKey;
       prevKeyNow = prevKey;
       let s: SubShot | undefined;
+      // Hook teaser: the best verified shot of a different product each cut, else other B-roll.
+      if (teaserHere && bounds[k] < cfg.hookEnd! - 0.05) {
+        s = teaserPick(need, sc.id, prevKey);
+        if (s) teaserShots++;
+      }
       // Price / product-intro lines open on an unused product photo.
       if (!s && k === 0 && product && (st === "price" || st === "product_intro")) s = photoPick(product, sc.id, undefined);
       if (!s && product) s = poolPick(product, need, sc.id, prevKey);
@@ -611,6 +672,7 @@ export function applyPacing(
     const tu = typeUse.get(n);
     if (tu) log(`[pacing] ${n}: pool shot types used ${JSON.stringify(Object.fromEntries(tu))}`);
   }
+  if (cfg.hookEnd !== undefined) log(`[pacing] hook teaser: ${teaserShots} fast shot(s) in the first ${cfg.hookEnd.toFixed(1)} s${cfg.introEnd !== undefined ? `, intro paced ${cfg.introChoices?.join("/")} s until ${cfg.introEnd.toFixed(1)} s` : ""}`);
   log(`[pacing] sentence types (product scenes): ${JSON.stringify(sentenceStats)}`);
   log(`[pacing] generic scenes: ${genericProductShots} shot(s) filled with verified product b-roll instead of a repeat`);
   log(`[pacing] reuse: ${reusedCount} reused verified moment(s), ${reusedSec.toFixed(1)} s (gap >= ${REUSE_GAP} s preferred, mirror/punch-in variants)`);

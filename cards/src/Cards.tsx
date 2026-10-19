@@ -400,3 +400,50 @@ export const PhotoParallax: React.FC<{photo: string; aspect: number}> = ({photo,
     </AbsoluteFill>
   );
 };
+
+/**
+ * Hook title: the opening line as big kinetic words, a few at a time, each popping in when it is
+ * spoken (times from aligned.json); keywords sit on an accent block. A soft dark vignette keeps
+ * the text readable over the teaser montage without hiding it.
+ */
+export const HookTitle: React.FC<{chunks: {from: number; to: number; words: {w: string; at: number; hi: boolean}[]}[]; theme?: Theme}> = ({chunks, theme}) => {
+  useTheme(theme);
+  const f = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const t = f / fps;
+  const o = useOut();
+  const shade = interpolate(f, [0, 8], [0, 1], {extrapolateRight: 'clamp'});
+  const chunk = chunks.find((c) => t >= c.from && t < c.to) ?? null;
+  return (
+    <AbsoluteFill style={{opacity: o}}>
+      <AbsoluteFill style={{background: 'radial-gradient(ellipse at center, rgba(0,0,0,.55) 0%, rgba(0,0,0,.25) 55%, rgba(0,0,0,0) 80%)', opacity: shade}} />
+      {chunk ? (
+        <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center'}}>
+          <div style={{display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', maxWidth: 1650, gap: '10px 34px'}}>
+            {chunk.words.map((w, i) => {
+              const p = spring({frame: f - Math.round(w.at * fps), fps, config: {damping: 12, stiffness: 220, mass: 0.6}});
+              // Exit: the whole chunk shrinks away over the 4 frames before the next one.
+              const out = interpolate(t, [chunk.to - 4 / fps, chunk.to], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+              const size = fit(chunk.words.map((x) => x.w).join(' '), 150, 18);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    opacity: Math.min(p * 1.4, 1) * out,
+                    transform: `translateY(${(1 - p) * 60}px) scale(${(0.55 + 0.45 * p) * (0.9 + 0.1 * out)}) rotate(${w.hi ? (1 - p) * -8 - 2 : 0}deg)`,
+                    background: w.hi ? Y : 'transparent',
+                    borderRadius: 14,
+                    padding: w.hi ? '0 22px' : 0,
+                    boxShadow: w.hi ? '0 18px 50px rgba(0,0,0,.45)' : 'none',
+                  }}
+                >
+                  <T s={{fontSize: size, lineHeight: 1.12, color: w.hi ? '#111' : TXT, textShadow: w.hi ? 'none' : '0 8px 30px rgba(0,0,0,.85), 0 2px 6px rgba(0,0,0,.9)'}}>{w.w}</T>
+                </div>
+              );
+            })}
+          </div>
+        </AbsoluteFill>
+      ) : null}
+    </AbsoluteFill>
+  );
+};

@@ -32,10 +32,11 @@ function sourceHash(): string {
   return h.digest("hex").slice(0, 8);
 }
 
-/** Card length: until the layer's own fade-out, else to the end of the scene (2-6 s). */
-function cardFrames(l: Layer, sceneDur: number): number {
+/** Card length: until the layer's own fade-out, else to the end of the scene (1-6 s; a hook title up to 16 s). */
+export function cardFrames(l: Pick<Layer, "card" | "out" | "delay">, sceneDur: number): number {
   const secs = l.card?.seconds ?? (l.out !== undefined ? l.out - l.delay + 0.3 : sceneDur - l.delay);
-  return Math.max(30, Math.min(6 * FPS, Math.round(secs * FPS)));
+  const max = l.card?.comp === "HookTitle" ? 16 : 6;
+  return Math.max(30, Math.min(max * FPS, Math.round(secs * FPS)));
 }
 
 export async function applyRemotionCards(tl: TimelineScene[], log: (m: string) => void): Promise<void> {

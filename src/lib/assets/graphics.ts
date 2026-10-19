@@ -201,7 +201,7 @@ export interface Layer {
   /** path is a video with alpha (Remotion card, ProRes 4444) that animates itself. */
   video?: boolean;
   /** Remotion card to render instead of this PNG (cards/); the PNG stays as the fallback. */
-  card?: { comp: "RankCard" | "PriceCard" | "SpecCard" | "LowerThird" | "SpecBars" | "ProsCons" | "PriceTag" | "CompareTable" | "GaugeCard" | "PartCallout"; props: Record<string, unknown>; seconds?: number };
+  card?: { comp: "HookTitle" | "RankCard" | "PriceCard" | "SpecCard" | "LowerThird" | "SpecBars" | "ProsCons" | "PriceTag" | "CompareTable" | "GaugeCard" | "PartCallout"; props: Record<string, unknown>; seconds?: number };
 }
 
 /** The same card as an empty background plus one transparent layer per text group. */
@@ -281,6 +281,15 @@ export async function renderSidePanel(kicker: string, title: string, big: string
   ];
   if (big) texts.push({ text: big, size: 96, font: bold, color: color(style.secondary), x: String(x + 56), y: String(y + 250), box: color(style.primary) });
   return renderCard(texts, style.secondary, style.primary, outDir, { transparent: true, panel });
+}
+
+/** Transparent layer with the hook line: the drawtext fallback of the Remotion HookTitle card. */
+export async function renderHookText(text: string, style: CardStyle, outDir: string): Promise<string> {
+  const bold = font(style.titleFont, true);
+  return renderCard(
+    [{ text: wrap(text.toUpperCase(), 110, 1600, 3), size: 110, font: bold, color: color(style.text), x: "(w-text_w)/2", y: "(h-text_h)/2" }],
+    style.secondary, style.primary, outDir, { transparent: true },
+  );
 }
 
 /** Fallback card when no footage exists: the product name or the scene's key phrase. */

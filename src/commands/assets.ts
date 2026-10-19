@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { fetchRetailImages } from "../lib/assets/retailImages.js";
 import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
@@ -264,6 +265,18 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     const narrationFor = (product: string, spec: string) =>
       (micro?.scenes ?? []).filter((m) => m.productName === product && m.subject.spec?.spec === spec).map((m) => m.text).join(" ");
     await ensureFootage(dir, { products: research, specsByProduct, narrationFor, category: harvestCategory, log });
+  }
+  // Exact-only products with few or no YouTube clips: photos of that product from Amazon (direct, then
+  // via Bing site:amazon.com), else Google / Bing / DuckDuckGo images (python/product_web.py). They go
+  // to the product's own press-kit folder, never another product's, and the timeline shows only the
+  // ones the exact-model vision check confirms (verifyProductPhotos). RETAIL_IMAGES=off skips it.
+  if (exactOnly) {
+    const minClips = Number(env("AUTO_FETCH_MIN_CLIPS", "6")) || 6;
+    for (const r of research) {
+      const clips = findVaultFor(r.name)?.manifest.items.filter((i) => i.kind === "video").length ?? 0;
+      if (clips >= minClips) continue;
+      await fetchRetailImages(channel, r.name, harvestCategory, Number(env("RETAIL_IMAGES_WANT", "16")), log).catch((err) => log(`[retail] ${r.name}: skipped (${String(err).slice(0, 100)})`));
+    }
   }
   if (exactOnly) log(`[assets] exact-model footage only (own uploads, press kit, model vault); generic stock is off (GENERIC_STOCK=on to allow it)`);
   const vaultCache = new Map<string, ReturnType<typeof findVaultFor>>();

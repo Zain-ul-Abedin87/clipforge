@@ -29,6 +29,8 @@ export interface QwenSettings {
   /** USD per 1M input / output tokens (0 for a local model). */
   priceIn: number;
   priceOut: number;
+  /** Local only: auto = GPU, switching to the CPU when the GPU returns garbage; gpu / cpu = always. */
+  device: "auto" | "gpu" | "cpu";
 }
 
 export interface Budget {
@@ -45,7 +47,7 @@ export interface LlmSettings {
   budget: Record<ProviderName, Budget>;
 }
 
-export const QWEN_PRESETS: Record<QwenSettings["mode"], Omit<QwenSettings, "mode">> = {
+export const QWEN_PRESETS: Record<QwenSettings["mode"], Omit<QwenSettings, "mode" | "device">> = {
   // Alibaba Cloud Model Studio, OpenAI-compatible endpoint (international region).
   cloud: { baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", visionModel: "qwen-vl-plus", priceIn: 0, priceOut: 0 },
   // Ollama on this PC (http://localhost:11434), OpenAI-compatible endpoint; free.
@@ -59,7 +61,7 @@ export const usageFile = () => env("LLM_USAGE_FILE", "") || path.join(paths.root
 const defaults = (): LlmSettings => ({
   primary: "claude",
   fallback: "qwen",
-  qwen: { mode: "cloud", ...QWEN_PRESETS.cloud },
+  qwen: { mode: "cloud", ...QWEN_PRESETS.cloud, device: "auto" },
   budget: { claude: { creditUsd: null, stopBelowUsd: 0.5 }, qwen: { creditUsd: null, stopBelowUsd: 0.1 } },
 });
 
@@ -94,8 +96,9 @@ export function saveLlmSettings(patch: Record<string, unknown>, file = settingsF
   const q = (patch.qwen ?? {}) as Record<string, unknown>;
   if (q.mode === "cloud" || q.mode === "local") {
     // Switching mode loads that mode's preset (the user can still edit the fields).
-    if (q.mode !== next.qwen.mode) next.qwen = { mode: q.mode, ...QWEN_PRESETS[q.mode] };
+    if (q.mode !== next.qwen.mode) next.qwen = { mode: q.mode, ...QWEN_PRESETS[q.mode], device: next.qwen.device };
   }
+  if (q.device === "auto" || q.device === "gpu" || q.device === "cpu") next.qwen.device = q.device;
   if (text(q.baseUrl) && /^https?:\/\//.test(String(q.baseUrl))) next.qwen.baseUrl = text(q.baseUrl)!.replace(/\/+$/, "");
   if (text(q.model, 80)) next.qwen.model = text(q.model, 80)!;
   if (text(q.visionModel, 80)) next.qwen.visionModel = text(q.visionModel, 80)!;

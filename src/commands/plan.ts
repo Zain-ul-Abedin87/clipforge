@@ -204,8 +204,10 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
       // Match by prefix so dated ids like "claude-haiku-4-5-20251001" still price correctly.
       const modelId = env("LLM_MODEL", "claude-opus-5-5");
       const [pin, pout] = Object.entries(price).find(([k]) => modelId.startsWith(k))?.[1] ?? [4, 20];
-      cost = (res.inputTokens * pin + res.outputTokens * pout) / 1e6;
-      log(`[plan] LLM tokens in=${res.inputTokens} out=${res.outputTokens} est. cost $${cost.toFixed(3)}`);
+      // Qwen calls are priced from the Settings page (0 for a local model), not as a Claude model.
+      const qwen = activeProvider() === "qwen";
+      cost = qwen ? 0 : (res.inputTokens * pin + res.outputTokens * pout) / 1e6;
+      log(`[plan] LLM tokens in=${res.inputTokens} out=${res.outputTokens} ${qwen ? "on Qwen (spend counted in Settings -> AI model)" : `est. cost $${cost.toFixed(3)}`}`);
     }
   } else {
     log(`[plan] no ANTHROPIC_API_KEY (or --no-llm): using heuristic labels`);

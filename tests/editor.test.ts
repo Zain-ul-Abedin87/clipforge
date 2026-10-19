@@ -7,7 +7,7 @@ import * as R from "../src/domain/rational.math.js";
 import { clipEnd, fromLegacyTimeline, LegacyTimeline } from "../src/domain/timeline.types.js";
 import { SPEC_LEXICON } from "../src/lib/planner/activeSubject.js";
 import { compileTimeline, writeTimelineV3, V3_FILE } from "../src/lib/compiler/timelineCompiler.js";
-import { remapWords } from "../src/commands/render.js";
+import { remapWords } from "../src/lib/render/captions.js";
 import { EditError, ProjectStore } from "../src/server/state/projectStore.js";
 import { createEditorAPI, RPC, RpcResponse } from "../src/server/routes/editorAPI.js";
 

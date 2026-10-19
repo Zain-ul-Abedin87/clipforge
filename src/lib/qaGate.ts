@@ -149,6 +149,18 @@ export function checkProductMatches(
   };
 }
 
+/** Every music track in the video needs a licence note (written at upload, music/sources.json). Null = no music. */
+export function checkMusicLicenses(tracks: { name: string; license: string }[]): GateCheck | null {
+  if (!tracks.length) return null;
+  const missing = tracks.filter((t) => !t.license.trim());
+  return {
+    group: "Licences",
+    name: "Background music licence",
+    status: missing.length ? "warn" : "pass",
+    detail: missing.length ? `no licence note for ${missing.map((t) => t.name).join(", ")} - upload it again in Library > Music with its source` : `${tracks.length} track(s), licence noted for each`,
+  };
+}
+
 /** Every external asset must have a record in licenses.json. */
 export function checkLicenseRecords(scenes: Pick<Scene, "id">[], assets: Assets, ledger: Ledger | null): GateCheck {
   if (!ledger) return { group: "Licences", name: "Licence ledger (licenses.json)", status: "fail", detail: "licenses.json missing - run the assets step" };

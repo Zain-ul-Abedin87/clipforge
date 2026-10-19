@@ -12,7 +12,8 @@ import { z } from "zod";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "clipforge-llm-"));
 process.env.LLM_SETTINGS_FILE = path.join(tmp, "llm_settings.json");
 process.env.LLM_USAGE_FILE = path.join(tmp, "llm_usage.json");
-const { claudeCost, llm, llmAvailable, needsOf, setQwenFetch, toChatMessages } = await import("../src/lib/agents/llm/llm.js");
+const { claudeCost, llm, llmAvailable, looksLikeGpuFault, needsOf, setQwenFetch, toChatMessages } = await import("../src/lib/agents/llm/llm.js");
+const { normalizeLabel } = await import("../src/lib/planner/label.js");
 const S = await import("../src/lib/agents/llm/settings.js");
 
 const savedEnv = { key: process.env.ANTHROPIC_API_KEY, base: process.env.ANTHROPIC_BASE_URL, qwen: process.env.QWEN_API_KEY };
@@ -176,5 +177,96 @@ describe("Claude out of credit -> auto-disable -> same request finishes on Qwen"
     fakeQwen([{ text: '{"scenes":[]}' }]);
     await llm().messages.parse(req());
     assert.equal(hits, 1);
+  });
+});
+
+describe("local Qwen (Ollama native API) on a faulting GPU", () => {
+  /** Fake Ollama /api/chat: the GPU answers garbage, the CPU (num_gpu 0) answers properly. */
+  function fakeOllama(gpu: { text?: string; error?: string }) {
+    const seen: { url: string; body: Record<string, any> }[] = [];
+    setQwenFetch((async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      seen.push({ url, body });
+      const cpu = body.options?.num_gpu === 0;
+      if (!cpu && gpu.error) return new Response(JSON.stringify({ error: gpu.error }), { status: 500 });
+      const text = cpu ? '{"scenes":[{"id":0,"type":"product"}]}' : gpu.text;
+      return new Response(JSON.stringify({ message: { role: "assistant", content: text }, done: true, done_reason: "stop", prompt_eval_count: 50, eval_count: 9 }), { status: 200 });
+    }) as unknown as typeof fetch);
+    return seen;
+  }
+
+  test("garbage (@@@@ / repeat limit) on the GPU -> same request on the CPU; GPU retried until it faults twice", async () => {
+    S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local" } });
+    const seen = fakeOllama({ text: "@@@@@@@@@@@@@@@@" });
+    const res = await llm().messages.parse(req());
+    assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "product" }] });
+    assert.deepEqual(seen.map((r) => [r.url, r.body.options.num_gpu ?? "gpu", r.body.format]), [["http://localhost:11434/api/chat", "gpu", "json"], ["http://localhost:11434/api/chat", 0, "json"]]);
+    // The GPU is tried again after one fault; after the second it is given up for this process.
+    const second = fakeOllama({ error: "prediction aborted, token repeat limit reached" });
+    await llm().messages.parse(req());
+    assert.deepEqual(second.map((r) => r.body.options.num_gpu ?? "gpu"), ["gpu", 0]);
+    const later = fakeOllama({ text: "@@@@@@@@" });
+    await llm().messages.parse(req());
+    assert.deepEqual(later.map((r) => r.body.options.num_gpu), [0], "no GPU attempt after two faults");
+  });
+
+  test("Ollama down for a moment (restarting after a GPU fault): wait for it, then retry the request", async () => {
+    process.env.QWEN_RESTART_POLL_MS = "5";
+    process.env.QWEN_RESTART_WAIT_MS = "2000";
+    try {
+      S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "gpu" } });
+      let chats = 0;
+      let versionCalls = 0;
+      setQwenFetch((async (url: string) => {
+        if (String(url).endsWith("/api/version")) return ++versionCalls < 3 ? Promise.reject(new TypeError("fetch failed")) : new Response("{}", { status: 200 });
+        if (++chats === 1) throw new TypeError("fetch failed");
+        return new Response(JSON.stringify({ message: { role: "assistant", content: '{"scenes":[{"id":0,"type":"stock"}]}' }, done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 5 }), { status: 200 });
+      }) as unknown as typeof fetch);
+      const res = await llm().messages.parse(req());
+      assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "stock" }] });
+      assert.deepEqual([chats, versionCalls], [2, 3], "one failed request, three polls, one retry");
+      // Still down after the wait: the error reaches the caller (the agent falls back to its rules).
+      process.env.QWEN_RESTART_WAIT_MS = "30";
+      setQwenFetch((async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch);
+      await assert.rejects(llm().messages.parse(req()), (e) => e instanceof Anthropic.APIError && e.status === 503);
+    } finally {
+      delete process.env.QWEN_RESTART_POLL_MS;
+      delete process.env.QWEN_RESTART_WAIT_MS;
+    }
+  });
+
+  test("pictures never fall back to the CPU (30+ minutes per request): the request fails fast", async () => {
+    S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "auto" } });
+    const seen = fakeOllama({ error: "prediction aborted, token repeat limit reached" });
+    const withImage = req({ messages: [{ role: "user", content: [{ type: "text", text: "?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } }] }] });
+    await assert.rejects(llm().messages.parse(withImage), /too slow on the CPU/);
+    assert.ok(seen.every((r) => r.body.options.num_gpu !== 0), "no request ran on the CPU");
+  });
+
+  test("images go to Ollama as base64; device cpu is honoured", async () => {
+    process.env.VISION_CPU = "on"; // the CPU path is only taken when allowed
+    S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", device: "cpu" } });
+    const seen = fakeOllama({ text: "unused" });
+    await llm().messages.parse(req({ messages: [{ role: "user", content: [{ type: "text", text: "which?" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "QUJD" } }] }] }));
+    assert.equal(seen[0].body.model, "qwen2.5vl:7b");
+    assert.deepEqual(seen[0].body.messages.at(-1), { role: "user", content: "which?", images: ["QUJD"] });
+    assert.equal(seen[0].body.options.num_gpu, 0);
+    assert.equal(looksLikeGpuFault("got exception: Unexpected empty grammar stack after accepting piece: @ (31)"), true);
+    assert.equal(looksLikeGpuFault('{"scenes":[]}'), false);
+    delete process.env.VISION_CPU;
+  });
+});
+
+describe("scene labels from a small model are normalized, not thrown away", () => {
+  test("unknown types / kinds map to the closest valid label", () => {
+    const n = (l: Record<string, unknown>) => normalizeLabel({ id: 1, ...l } as never);
+    assert.equal(n({ type: "none" }).type, "stock");
+    assert.equal(n({ type: "none", product_name: "Ruger LCR" }).type, "product");
+    assert.deepEqual([n({ type: "intro_card" }).type, n({ type: "intro_card" }).graphic_kind], ["graphic", "intro_card"]);
+    assert.deepEqual([n({ type: "graphic", graphic_kind: "bogus" }).type, n({ type: "graphic", graphic_kind: "bogus" }).graphic_kind], ["stock", "none"]);
+    assert.equal(n({ type: "stock", graphic_kind: "spec_card", price: 289 }).graphic_kind, "none");
+    assert.equal(n({ type: "product", price: 289 }).price, "289");
   });
 });

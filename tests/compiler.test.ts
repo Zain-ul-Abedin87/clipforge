@@ -55,7 +55,7 @@ describe("v3 -> render jobs (compiler)", () => {
     assert.deepEqual(b.asset.shots?.map((s) => [s.path, s.in, s.frames, s.variant ?? null, s.verified ?? false]), [["p1.mp4", 1.25, 40, null, true], ["p2.mp4", 0.5, 35, "mirror", false]]);
     assert.equal(b.backdrop, "blur");
     assert.equal(b.transition, "fade");
-    assert.deepEqual(c.audio, { voice: "voice.wav", music: { files: ["bed.mp3"], volumeDb: -20 }, sfx: { enabled: true, gainDb: -12, events: [{ kind: "whoosh", at: 0 }] } });
+    assert.deepEqual(c.audio, { voice: "voice.wav", voiceFilter: "", music: { files: ["bed.mp3"], volumeDb: -20, duck: true, fadeInSec: 2, fadeOutSec: 3 }, sfx: { enabled: true, gainDb: -12, events: [{ kind: "whoosh", at: 0 }] } });
     assert.equal(c.captions.enabled, true);
     assert.deepEqual(c.logo, { path: "logo.png", position: "top-right", opacity: 0.8 });
   });

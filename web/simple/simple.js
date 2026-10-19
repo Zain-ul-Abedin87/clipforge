@@ -20,6 +20,23 @@ let audioFile = null;
 let niche = "guns";
 let poll = null;
 
+/**
+ * POST a file with progress. Header values are URI-encoded (the server decodes them). Resolves with
+ * the parsed JSON reply ({} when there is none).
+ */
+function uploadFile(url, file, headers = {}, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, encodeURIComponent(v));
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    const reply = () => { try { return JSON.parse(x.responseText); } catch { return {}; } };
+    x.onload = () => (x.status < 300 ? resolve(reply()) : reject(new Error(reply().error || x.statusText)));
+    x.onerror = () => reject(new Error("upload failed"));
+    x.send(file);
+  });
+}
+
 function setToggle(el, v) { el.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === v)); }
 function onToggle(el, fn) { el.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { setToggle(el, b.dataset.v); fn(b.dataset.v); } }); }
 const fmtDur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : m ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`; };
@@ -27,12 +44,16 @@ const fmtDur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); const m =
 // ---------- router ----------
 function route() {
   clearInterval(poll);
+  document.querySelector("main").classList.remove("wide");
+  if (window.Studio?.project) Studio.close();
+  studio.name = null;
   const [, page, arg] = (location.hash || "#/create").split("/");
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   document.querySelectorAll("nav a[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (page === "project" ? "videos" : page || "create")));
   if (page === "project" && arg) return showProject(decodeURIComponent(arg));
   if (page === "videos") return showVideos();
   if (page === "settings") return showSettings();
+  if (page === "library") return window.showLibrary?.();
   $("#page-create").hidden = false;
 }
 window.addEventListener("hashchange", route);
@@ -73,6 +94,45 @@ async function loadChannels() {
   return ordered;
 }
 
+// ---------- background music (Create page) ----------
+// "default" follows the channel, "off" = none, "track:<file>" = one track of the channel's library.
+async function refreshMusicOptions(select) {
+  const channel = $("#channel").value || "default";
+  const tracks = await api(`/api/channels/${encodeURIComponent(channel)}/music`).catch(() => []);
+  const want = select ?? $("#music").value;
+  $("#music").innerHTML = '<option value="default">Channel default</option><option value="off">No music</option>'
+    + tracks.map((t) => `<option value="track:${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  $("#music").value = [...$("#music").options].some((o) => o.value === want) ? want : "default";
+}
+function musicChoice() {
+  const v = $("#music").value;
+  return v.startsWith("track:") ? { mode: "track", track: v.slice(6) } : { mode: v };
+}
+$("#channel").addEventListener("change", () => refreshMusicOptions());
+$("#music-add").addEventListener("click", () => { $("#music-upload").hidden = !$("#music-upload").hidden; });
+$("#music-send").addEventListener("click", async () => {
+  const file = $("#music-file").files[0];
+  const note = $("#music-note").value.trim();
+  const msg = $("#music-msg");
+  msg.textContent = "";
+  if (!file) return (msg.textContent = "Choose an audio file first.");
+  if (!note) return (msg.textContent = "Enter where the track comes from (source or licence).");
+  const btn = $("#music-send");
+  btn.disabled = true;
+  try {
+    const r = await uploadFile(`/api/channels/${encodeURIComponent($("#channel").value || "default")}/music`, file, { "x-filename": file.name, "x-note": note }, (p) => (msg.textContent = `Uploading ${Math.round(p * 100)}%`));
+    await refreshMusicOptions(`track:${r.name}`);
+    $("#music-file").value = "";
+    $("#music-note").value = "";
+    $("#music-upload").hidden = true;
+    msg.textContent = "";
+  } catch (e) {
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("#go").addEventListener("click", async () => {
   const err = $("#create-error");
   err.textContent = "";
@@ -80,7 +140,7 @@ $("#go").addEventListener("click", async () => {
   const d = new Date();
   const stamp = `${d.getMonth() + 1}${String(d.getDate()).padStart(2, "0")}-${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}`;
   const name = `${slugify(title || ($("#script").value.trim().split(/\s+/).slice(0, 5).join(" ")) || "video") || "video"}-${stamp}`;
-  if (!mode()) return (err.textContent = "Script paste karein ya voiceover upload karein (ya dono).");
+  if (!mode()) return (err.textContent = "Paste a script or upload a voiceover (or both).");
   const btn = $("#go");
   btn.disabled = true;
   try {
@@ -89,7 +149,7 @@ $("#go").addEventListener("click", async () => {
       await api(`/api/projects/${name}/audio`, { method: "POST", headers: { "x-filename": audioFile.name }, body: audioFile });
     }
     btn.textContent = "Starting...";
-    await api(`/api/projects/${name}/go`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ script: $("#script").value, title, channel: $("#channel").value, review: $("#review").checked }) });
+    await api(`/api/projects/${name}/go`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ script: $("#script").value, title, channel: $("#channel").value, review: $("#review").checked, music: musicChoice() }) });
     location.hash = `#/project/${name}`;
   } catch (e) {
     err.textContent = e.message;
@@ -136,19 +196,120 @@ function stepFraction(logText) {
   return 0.1;
 }
 
-async function showProject(name) {
+const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+// ---------- studio: one page from "cooking" to the finished video ----------
+// cooking  : pipeline before the timeline exists -> storyboard fills in, live footage feed, cooking stage
+// editing  : timeline exists -> CapCut-style editor (studio.js) with live preview, Render button
+// rendering: render / QA running -> editor stays visible, edits wait
+// done     : final MP4 in "Final video" tab, QA + publish pack below
+const COOK_TEXT = {
+  voice: ["Generating the voiceover", "Reading the script aloud"],
+  transcribe: ["Transcribing the voiceover", "Timing every word"],
+  plan: ["Planning the scenes", "Splitting the script into scenes"],
+  assets: ["Finding footage", "Exact-model footage for each product from YouTube and official sites"],
+  timeline: ["Building the timeline", "Syncing clips, cards and sound effects to the voiceover"],
+  render: ["Rendering the video", "Encoding the MP4"],
+  qa: ["Running quality checks", "Checking sync, black frames and repeated shots"],
+};
+const studio = { name: null, mode: null, story: null, storyAt: 0, sel: null, view: "edit" };
+
+function setStudioMode(mode) {
+  if (studio.mode === mode) return;
+  studio.mode = mode;
+  const editing = mode === "editing" || mode === "rendering" || mode === "done";
+  $("#st-editor").hidden = !editing;
+  $("#st-transport").hidden = !editing;
+  $("#st-editside").hidden = !editing;
+  $("#st-feed").hidden = editing;
+  $("#st-story").hidden = editing;
+  $("#st-cook").hidden = editing;
+  $("#edRender").disabled = mode !== "editing" && mode !== "done";
+  $("#st-viewtabs").hidden = mode !== "done";
+  if (mode !== "done") setView("edit");
+}
+
+function setView(v) {
+  studio.view = v;
+  setToggle($("#st-viewtabs"), v);
+  const fin = v === "final";
+  $("#edStage").hidden = fin;
+  $("#player").hidden = !fin;
+  $("#st-transport").hidden = fin || !["editing", "rendering", "done"].includes(studio.mode);
+  if (fin) window.Studio?.pause();
+  else $("#player").pause();
+}
+onToggle($("#st-viewtabs"), setView);
+
+/** Cooking stage: the newest footage behind a "what is happening" card. */
+function cookStage(stepKey) {
+  const [title, sub] = COOK_TEXT[stepKey] || ["Starting", ""];
+  $("#st-cook-title").textContent = title;
+  $("#st-cook-sub").textContent = sub;
+  const sb = studio.story;
+  const pic = sb?.feed?.[0]?.url || [...(sb?.scenes || [])].reverse().find((s) => s.thumb)?.thumb;
+  let bg = $("#st-cook").querySelector(".st-cookbg");
+  if (pic) {
+    if (!bg) { bg = document.createElement("img"); bg.className = "st-cookbg"; $("#st-cook").prepend(bg); }
+    if (bg.dataset.src !== pic) { bg.src = pic; bg.dataset.src = pic; }
+  }
+}
+
+async function refreshStory(name, force = false) {
+  if (!force && Date.now() - studio.storyAt < 4000) return;
+  studio.storyAt = Date.now();
+  const sb = await api(`/api/projects/${encodeURIComponent(name)}/storyboard`).catch(() => null);
+  if (!sb || studio.name !== name) return;
+  studio.story = sb;
+  const ready = sb.scenes.filter((s) => s.thumb).length;
+  $("#st-story-note").textContent = sb.scenes.length ? `${sb.scenes.length} scenes · footage ready for ${ready}` : "Scenes appear here once the plan is ready.";
+  $("#st-strip").innerHTML = sb.scenes.map((s) => `<div class="st-sc${studio.sel === s.id ? " on" : ""}" data-sc="${s.id}">
+      ${s.thumb ? `<img loading="lazy" src="${esc(s.thumb)}" alt="">` : `<div class="ph">${s.type === "graphic" ? "card" : "footage..."}</div>`}
+      <div class="tx"><span class="tg">#${s.id} · ${fmtT(s.start)}</span>${s.product ? `<span class="tg">${esc(s.product)}</span>` : ""}${esc(s.text)}</div></div>`).join("");
+  $("#st-feed-grid").innerHTML = sb.feed.slice(0, 12).map((f) => `<figure><img src="${esc(f.url)}" alt=""><figcaption>${esc(f.product)}</figcaption></figure>`).join("");
+  $("#st-feed-note").innerHTML = sb.products.length
+    ? sb.products.map((p) => `<div class="st-prod"><span>${esc(p.name)}</span><b>${p.clips} clips</b></div>`).join("")
+    : "Footage appears here as soon as it is found.";
+}
+$("#st-strip").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-sc]");
+  if (!c || !studio.story) return;
+  studio.sel = Number(c.dataset.sc);
+  const s = studio.story.scenes.find((x) => x.id === studio.sel);
+  document.querySelectorAll(".st-sc").forEach((el) => el.classList.toggle("on", el === c));
+  if (s?.thumb) {
+    let bg = $("#st-cook").querySelector(".st-cookbg");
+    if (!bg) { bg = document.createElement("img"); bg.className = "st-cookbg"; $("#st-cook").prepend(bg); }
+    bg.src = s.thumb; bg.dataset.src = s.thumb;
+  }
+  $("#edSceneText").textContent = s ? `#${s.id}: ${s.text}` : "";
+});
+
+window.onStudioRender = () => { if (studio.name) showProject(studio.name, true); };
+
+async function showProject(name, keep = false) {
+  clearInterval(poll);
   $("#page-project").hidden = false;
-  $("#p-title").textContent = name;
-  $("#result").hidden = true;
-  $("#review-box").hidden = true;
+  document.querySelector("main").classList.add("wide");
+  if (!keep || studio.name !== name) {
+    studio.name = name; studio.mode = null; studio.story = null; studio.storyAt = 0; studio.sel = null;
+    $("#p-title").textContent = name;
+    $("#result").hidden = true;
+    $("#download").hidden = true;
+    $("#st-strip").innerHTML = "";
+    $("#st-feed-grid").innerHTML = "";
+    $("#st-cook").querySelector(".st-cookbg")?.remove();
+    $("#log").textContent = "";
+    setStudioMode("cooking");
+  }
   let since = 0;
   let firstSeen = null;
+  let opened = false;
   const logEl = $("#log");
   logEl.textContent = "";
   const proj = await api(`/api/projects/${name}`).catch(() => null);
   const tick = async () => {
     const j = await api(`/api/projects/${name}/log?since=${since}`).catch(() => null);
-    if (!j) return;
+    if (!j || studio.name !== name) return;
     since = j.total;
     if (j.lines.length) { logEl.textContent += j.lines.join("\n") + "\n"; logEl.scrollTop = logEl.scrollHeight; }
     const tts = proj?.voiceMode === "tts" || /=== voice ===/.test(logEl.textContent);
@@ -156,99 +317,51 @@ async function showProject(name) {
     $("#steps").innerHTML = STEPS.map(([k, label], i) => {
       const s = state[k];
       const ic = s === "done" ? "&#10003;" : s === "failed" ? "!" : s === "skip" ? "&ndash;" : String(i + 1);
-      return `<li class="${s}"><span class="ic">${ic}</span>${label}<small>${STATE_TXT[s]}</small></li>`;
+      return `<li class="${s}"><span class="ic">${ic}</span>${label}</li>`;
     }).join("");
 
-    // percent: weights of finished steps + partial of the running one
     const active = STEPS.filter(([k]) => state[k] !== "skip");
     const total = active.reduce((a, [, , w]) => a + w, 0);
     let got = 0;
     for (const [k, , w] of active) { if (state[k] === "done") got += w; else if (state[k] === "running") got += w * Math.min(0.95, stepFraction(logEl.textContent)); }
-    let pct = Math.round((got / total) * 100);
-    const allDone = !j.running && state.qa === "done";
-    if (allDone) pct = 100;
-    const fill = $("#p-fill");
-    fill.style.width = pct + "%";
-    fill.className = "fill" + (allDone ? " done" : !j.running && j.failedStep ? " failed" : "");
+    const allDone = !j.running && state.qa === "done" && state.render === "done";
+    const pct = allDone ? 100 : Math.round((got / total) * 100);
+    $("#p-fill").style.width = pct + "%";
+    $("#p-fill").className = "fill" + (allDone ? " done" : !j.running && j.failedStep ? " failed" : "");
     $("#p-pct").textContent = pct + "%";
+    $("#st-progress").hidden = allDone;
 
     const cur = STEPS.find(([k]) => state[k] === "running");
     if (j.running) {
       firstSeen ??= { t: Date.now(), pct };
       const el = Date.now() - firstSeen.t, dp = pct - firstSeen.pct;
       const eta = el > 20000 && dp > 2 ? (el / dp) * (100 - pct) : null;
-      $("#p-eta").textContent = `Step ${STEPS.indexOf(cur) + 1} of ${STEPS.length}: ${cur ? cur[1] : "starting"}` + (eta ? ` \u00b7 about ${fmtDur(eta)} left` : " \u00b7 footage step can take 20-30 min");
+      $("#p-eta").textContent = `Step ${STEPS.indexOf(cur) + 1} of ${STEPS.length}: ${cur ? cur[1] : "starting"}` + (eta ? ` · about ${fmtDur(eta)} left` : "");
     } else $("#p-eta").textContent = "";
-    $("#p-status").textContent = j.running ? `Video ban rahi hai: ${cur ? cur[1] : "starting"}...`
-      : j.failedStep ? `Stopped at ${j.failedStep}. Log neeche dekhein.`
-      : allDone ? "Done! Video tayyar hai." : j.awaitingApproval ? "Plan ready, waiting for approval (Classic editor)." : "Not started yet.";
-    if (j.awaitingReview) $("#p-status").textContent = "Scenes ready: review karein, phir Render dabayein.";
+
+    const hasTimeline = state.timeline === "done";
+    const rendering = j.running && (cur?.[0] === "render" || cur?.[0] === "qa");
+    const mode = !hasTimeline || (j.running && !rendering) ? "cooking" : rendering ? "rendering" : state.render === "done" && !j.awaitingReview ? "done" : "editing";
+    setStudioMode(mode);
+    if (mode === "cooking") {
+      cookStage(cur?.[0]);
+      await refreshStory(name);
+    } else if (!opened) {
+      opened = await Studio.open(name);
+    }
+    $("#p-status").textContent = j.failedStep ? `Stopped at ${j.failedStep}. See "Technical log" below.`
+      : mode === "cooking" ? `Making your video: ${cur ? cur[1] : "starting"}... scenes appear below as they are ready.`
+      : mode === "rendering" ? "Rendering... you can keep reviewing; new edits apply after this render."
+      : mode === "editing" ? "Scenes are ready. Play the preview, make any changes, then press Render video."
+      : "Your video is ready. Watch it in the Final video tab, or edit and render again.";
     if (!j.running) {
       clearInterval(poll);
-      if (j.awaitingReview) showReview(name);
-      else if (j.steps.render === "done") showResult(name);
+      if (mode === "done") showResult(name);
     }
   };
   await tick();
   poll = setInterval(tick, 2500);
 }
-
-// ---------- scene review ----------
-let rvSel = {};
-const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-function rvRow(name, sc) {
-  const sel = rvSel[sc.id] ?? 0;
-  const shots = sc.shots.map((x) => `<div class="tile ${x.index === sel ? "sel" : ""} ${x.reused ? "reused" : ""}" data-shot="${x.index}" data-scene="${sc.id}" title="${esc(x.file)}"><img loading="lazy" src="/api/projects/${name}/review/thumb?scene=${sc.id}&shot=${x.index}"><span>${x.seconds}s \u00b7 ${x.verified ? "\u2713 " : x.product ? "stock \u00b7 " : ""}${esc(x.shotType || x.source)}</span></div>`).join("");
-  const alts = sc.card ? "<span class='help'>Card scene (graphic)</span>" : sc.alternatives.length ? sc.alternatives.map((a) => `<div class="tile alt" data-alt="${esc(a.id)}" data-scene="${sc.id}" title="${esc(a.author || "")}"><img loading="lazy" src="/api/projects/${name}/review/thumb?alt=${encodeURIComponent(a.id)}"><span>${esc(a.shotType || "")} \u00b7 ${a.match}</span></div>`).join("") : "<span class='help'>No unused alternatives in the pool.</span>";
-  return `<div class="rv-row" id="rv-${sc.id}"><div class="rv-meta"><b>#${sc.id}</b>${fmtT(sc.start)}-${fmtT(sc.end)}${sc.product ? `<br>${esc(sc.product)}` : ""}</div>
-    <div><div class="rv-text">${esc(sc.text)}</div><div class="rv-shots">${shots}</div><div class="rv-alts">${alts}</div></div></div>`;
-}
-// Exact-model footage per product chapter; insufficient footage is a clear warning, never hidden.
-function footageBanner(list) {
-  if (!list || !list.length) return "";
-  const rows = list.map((c) => {
-    const v = Math.round(c.verifiedShare * 100), st = Math.round(c.stockShare * 100);
-    const warn = c.insufficient
-      ? `<b style="color:#c0392b">\u26a0 Insufficient footage:</b> sirf ${c.poolVerified} verified clip(s) mile${c.poolTarget ? ` (target ${c.poolTarget})` : ""}. Apni clips ya press-kit media add karein.`
-      : `${c.poolVerified} verified clip(s)${c.poolTarget ? ` / target ${c.poolTarget}` : ""}`;
-    return `<div style="padding:6px 0;border-bottom:1px solid rgba(127,127,127,.2)"><b>${esc(c.product)}</b>: ${v}% verified exact model, ${st}% stock \u00b7 ${warn}</div>`;
-  }).join("");
-  const bad = list.some((c) => c.insufficient);
-  return `<div class="rv-footage" style="margin:0 0 14px;padding:10px 14px;border-radius:10px;border:1px solid ${bad ? "#c0392b" : "rgba(127,127,127,.35)"}"><div style="font-weight:600;margin-bottom:4px">Product footage check</div>${rows}</div>`;
-}
-async function showReview(name) {
-  const box = $("#review-box");
-  box.hidden = false;
-  const r = await api(`/api/projects/${name}/review`).catch((e) => ({ scenes: [], error: e.message }));
-  $("#rv").innerHTML = footageBanner(r.footage) + (r.scenes.map((sc) => rvRow(name, sc)).join("") || `<p class="help">${esc(r.error || "No scenes.")}</p>`);
-  box.dataset.name = name;
-  box._scenes = r.scenes;
-}
-$("#rv").addEventListener("click", async (e) => {
-  const box = $("#review-box");
-  const name = box.dataset.name;
-  const t = e.target.closest(".tile");
-  if (!t) return;
-  const id = Number(t.dataset.scene);
-  const row = () => box._scenes.find((s) => s.id === id);
-  if (t.dataset.shot !== undefined) { rvSel[id] = Number(t.dataset.shot); $(`#rv-${id}`).outerHTML = rvRow(name, row()); return; }
-  if (t.dataset.alt) {
-    t.style.opacity = 0.4;
-    try {
-      const r = await api(`/api/projects/${name}/review/swap`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scene: id, shot: rvSel[id] ?? 0, alt: t.dataset.alt }) });
-      box._scenes = box._scenes.map((s) => (s.id === id ? r.scene : s));
-      $(`#rv-${id}`).outerHTML = rvRow(name, r.scene);
-    } catch (err) { t.style.opacity = 1; alert(err.message); }
-  }
-});
-$("#render-btn").addEventListener("click", async () => {
-  const name = $("#review-box").dataset.name;
-  $("#render-btn").disabled = true;
-  try {
-    await api(`/api/projects/${name}/review/render`, { method: "POST" });
-    showProject(name);
-  } catch (err) { alert(err.message); } finally { $("#render-btn").disabled = false; }
-});
 
 async function showPublish(name) {
   const p = await api(`/api/projects/${name}/publish`).catch(() => null);
@@ -262,6 +375,7 @@ async function showPublish(name) {
 
 async function showResult(name) {
   $("#result").hidden = false;
+  $("#download").hidden = false;
   showPublish(name);
   $("#player").src = `/api/projects/${name}/video?t=${Date.now()}`;
   $("#download").href = `/api/projects/${name}/video?download=1`;
@@ -271,39 +385,7 @@ async function showResult(name) {
     $("#qa-sum").innerHTML = `<span class="pill p">${qa.summary.pass} pass</span><span class="pill w">${qa.summary.warn} warnings</span><span class="pill f">${qa.summary.fail} fail</span>`;
     $("#qa-list").innerHTML = qa.checks.filter((c) => c.status !== "pass").map((c) => `<li><span class="st ${c.status}">${c.status.toUpperCase()}</span><b>${esc(c.group)}: ${esc(c.name)}</b><br><small>${esc(String(c.detail).slice(0, 400))}</small></li>`).join("") || "<li>All checks passed.</li>";
   } else $("#qa-sum").textContent = "QA has not run yet.";
-  const [scenes, assets] = await Promise.all([api(`/api/projects/${name}/file/scenes.json`), api(`/api/projects/${name}/file/assets.json`)]).catch(() => [[], {}]);
-  $("#scene-note").textContent = "Replace clip: pick another option for a scene; only that scene re-renders (about a minute).";
-  $("#scenes").innerHTML = scenes.map((s) => {
-    const a = assets[s.id] || {};
-    const t = `${Math.floor(s.start / 60)}:${String(Math.floor(s.start % 60)).padStart(2, "0")}`;
-    return `<div class="scene" data-id="${s.id}"><img loading="lazy" src="/api/projects/${name}/media/${s.id}?thumb=1" onerror="this.style.visibility='hidden'">
-      <div class="b"><div><b>#${s.id}</b> \u00b7 ${t} <span class="src">${esc(a.source || "?")}</span>${s.product_name ? ` <span class="src">${esc(s.product_name)}</span>` : ""}</div>
-      <div class="t">${esc(s.text)}</div>
-      ${a.source === "graphic" ? "<span class='help'>Card (graphic)</span>" : `<button class="btn small ghost" data-replace="${s.id}">Replace clip</button>`}
-      <div class="cands"></div></div></div>`;
-  }).join("");
 }
-
-$("#scenes").addEventListener("click", async (e) => {
-  const name = decodeURIComponent(location.hash.split("/")[2]);
-  const rb = e.target.closest("[data-replace]");
-  const ub = e.target.closest("[data-use]");
-  if (rb) {
-    const box = rb.parentElement.querySelector(".cands");
-    box.innerHTML = "<span class='help'>Loading options...</span>";
-    const list = await api(`/api/projects/${name}/candidates/${rb.dataset.replace}`).catch(() => []);
-    box.innerHTML = list.length
-      ? list.slice(0, 8).map((c) => `<button class="btn small ghost" data-use="${esc(c.id)}" data-scene="${rb.dataset.replace}">${esc(c.source)} \u00b7 ${esc((c.author || c.tags || c.id).slice(0, 34))}</button>`).join("")
-      : "<span class='help'>No other options saved for this scene. Use the Classic editor to search.</span>";
-  }
-  if (ub) {
-    ub.textContent = "Replacing...";
-    try {
-      await api(`/api/projects/${name}/swap/${ub.dataset.scene}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ candId: ub.dataset.use }) });
-      showProject(name);
-    } catch (err) { ub.textContent = err.message; }
-  }
-});
 
 // ---------- videos ----------
 async function showVideos() {
@@ -350,6 +432,8 @@ async function showAi(state) {
   setToggle($("#ai-primary"), s.primary);
   setToggle($("#ai-fallback"), s.fallback);
   setToggle($("#ai-qmode"), s.qwen.mode);
+  setToggle($("#ai-qdevice"), s.qwen.device || "auto");
+  $("#ai-qdevice-wrap").hidden = s.qwen.mode !== "local";
   $("#ai-qurl").value = s.qwen.baseUrl;
   $("#ai-qmodel").value = s.qwen.model;
   $("#ai-qvision").value = s.qwen.visionModel;
@@ -361,16 +445,19 @@ async function showAi(state) {
   $("#ai-qstop").value = s.budget.qwen.stopBelowUsd;
   const row = (p, label) => {
     const st = ai.status[p];
-    const using = ai.active === p ? " · <b>abhi yahi chal raha hai</b>" : "";
-    const spend = `kharcha ${money(st.spentUsd)}${st.remainingUsd !== null ? ` · bacha ~${money(st.remainingUsd)}` : ""} · ${st.calls} calls`;
+    const using = ai.active === p ? " · <b>in use</b>" : "";
+    const spend = `spent ${money(st.spentUsd)}${st.remainingUsd !== null ? ` · ~${money(st.remainingUsd)} left` : ""} · ${st.calls} calls`;
     return `<li><span class="dot ${st.blocked ? "n" : "y"}"></span><b>${label}</b><span class="help">${st.blocked ? esc(st.blocked) : "ready"}${using} · ${spend}</span>
       <span class="ai-actions">${st.disabled ? `<button class="btn small" data-enable="${p}">Re-enable</button>` : ""}<button class="btn small ghost" data-test="${p}">Test</button></span></li>`;
   };
   $("#ai-status").innerHTML = row("claude", "Claude") + row("qwen", `Qwen (${s.qwen.mode === "local" ? "local" : "cloud"})`) +
-    (ai.order.length ? "" : `<li><span class="help">Koi model available nahi: pipeline free rules se chalegi.</span></li>`);
+    (ai.order.length ? "" : `<li><span class="help">No model available: the pipeline will use the free built-in rules.</span></li>`);
 }
 onToggle($("#ai-primary"), (v) => (ai.settings.primary = v));
 onToggle($("#ai-fallback"), (v) => (ai.settings.fallback = v));
+onToggle($("#ai-qdevice"), async (v) => {
+  showAi(await api("/api/llm", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ qwen: { device: v } }) }));
+});
 onToggle($("#ai-qmode"), async (v) => {
   // Switching cloud / local loads that mode's preset (endpoint + model names).
   showAi(await api("/api/llm", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ qwen: { mode: v } }) }));
@@ -433,6 +520,7 @@ async function showChannelStyle() {
   sel.innerHTML = chList.map((c) => `<option>${esc(c.name)}</option>`).join("");
   if (cur) sel.value = cur;
   $("#cs-font").innerHTML = styleMeta.fonts.map((f) => `<option>${esc(f)}</option>`).join("");
+  $("#cs-capstyle").innerHTML = (styleMeta.captionStyles || []).map((c) => `<option value="${esc(c.id)}" title="${esc(c.description)}">${esc(c.label)}</option>`).join("");
   fillChannelStyle();
 }
 function fillChannelStyle() {
@@ -444,6 +532,7 @@ function fillChannelStyle() {
   $("#cs-text").value = cards.text || "#ffffff";
   $("#cs-every").value = cards.graphicsEverySec || 25;
   $("#cs-pace").value = (st.pacing && st.pacing.targetShotSec) || "";
+  $("#cs-capstyle").value = (st.captions && st.captions.preset) || "classic";
   const set = new Set(cards.set || styleMeta.cards);
   $("#cs-set").innerHTML = styleMeta.cards.map((k) => `<label><input type="checkbox" value="${k}" ${set.has(k) ? "checked" : ""}>${k}</label>`).join("");
   $("#cs-msg").textContent = "";
@@ -453,6 +542,7 @@ $("#cs-save").addEventListener("click", async () => {
   const ch = $("#cs-channel").value;
   const body = { cards: { font: $("#cs-font").value, primary: $("#cs-primary").value, text: $("#cs-text").value, graphicsEverySec: Number($("#cs-every").value), set: [...document.querySelectorAll("#cs-set input:checked")].map((i) => i.value) } };
   if ($("#cs-pace").value) body.pacing = { targetShotSec: Number($("#cs-pace").value) };
+  body.captions = { preset: $("#cs-capstyle").value };
   try {
     await api(`/api/channels/${encodeURIComponent(ch)}/style`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     $("#cs-msg").textContent = "Saved. Next render of this channel uses it.";
@@ -462,6 +552,6 @@ $("#cs-save").addEventListener("click", async () => {
 
 // ---------- start ----------
 loadSettings().then(() => { niche = settings.defaultNiche; }).catch(() => {});
-loadChannels();
+loadChannels().then(() => refreshMusicOptions());
 refreshModes();
 route();

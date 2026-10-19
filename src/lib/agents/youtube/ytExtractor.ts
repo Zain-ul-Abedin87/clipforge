@@ -13,6 +13,7 @@ import { ensureLandscape } from "../../engine/filters/lavfiBuilder.js";
 import { fuzzyTitleHasModel, fuzzyTokenMatch, suggestSpelling } from "./fuzzyMatcher.js";
 import { clipAvailable, judge, promptSet, ScoringProfile, scoreShots, ShotScore, ShotThresholds, thresholdsFor } from "../vision/clipScorer.js";
 import { acquire, limitKeyFor } from "../../rateLimit.js";
+import { blackSpans, longestClean } from "../../blackFrames.js";
 
 /**
  * Visual-first exact-model extractor. For one brand + exact model it:
@@ -526,6 +527,25 @@ async function processWindows(ctx: HarvestContext, v: SearchHit, windows: Window
     const clip = path.join(ctx.clipsDir, `${x.key}.mp4`);
     const c = await run(ff, ["-hide_banner", "-loglevel", "error", "-y", "-ss", x.start.toFixed(2), "-i", x.windowFile, "-t", (x.end - x.start).toFixed(2), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", clip], { timeoutMs: 120_000 });
     if (c.code !== 0 || !fs.existsSync(clip)) continue;
+    const blacks = await blackSpans(ff, clip);
+    if (blacks.length) {
+      const clean = longestClean(blacks, x.end - x.start);
+      if (clean.end - clean.start < 1) {
+        fs.rmSync(clip, { force: true });
+        fs.rmSync(x.frame, { force: true });
+        manifest.stats.offTopic++;
+        continue;
+      }
+      const trimmed = `${clip}.trim.mp4`;
+      const t = await run(ff, ["-hide_banner", "-loglevel", "error", "-y", "-ss", clean.start.toFixed(2), "-i", clip, "-t", (clean.end - clean.start).toFixed(2), "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", trimmed], { timeoutMs: 120_000 });
+      if (t.code !== 0) {
+        fs.rmSync(clip, { force: true });
+        continue;
+      }
+      fs.renameSync(trimmed, clip);
+      x.end = x.start + clean.end;
+      x.start += clean.start;
+    }
     const dims = (await run(ffprobePath() ?? "ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", clip])).stdout.trim().split(",").map(Number);
     const [width, height] = [dims[0] || 0, dims[1] || 0];
     const at = round(x.srcOffset + x.start);
@@ -736,6 +756,85 @@ export interface KeywordHarvestOpts {
   log?: (m: string) => void;
 }
 
+/**
+ * youtube-transcript-api lines ({text, start, duration}) -> words spread evenly over each line.
+ * Line timing only (a mention can be off by a second or two); good for screening and as a fallback.
+ */
+export function segmentsToWords(segs: { text: string; start: number; duration: number }[]): CaptionWord[] {
+  const out: CaptionWord[] = [];
+  for (const sg of segs) {
+    // Auto transcripts mark profanity / music as "[ __ ]" / "[Music]": not words.
+    const toks = String(sg.text).replace(/\[[^\]]*\]/g, " ").split(/\s+/).filter(Boolean);
+    toks.forEach((text, k) => out.push({ text, t: Math.round((sg.start + (k / toks.length) * Math.max(0.1, sg.duration)) * 100) / 100 }));
+  }
+  return out;
+}
+
+/** Step 1 of the transcript chain: one quick youtube-transcript-api request (line timing). */
+export async function quickTranscript(url: string): Promise<{ words: CaptionWord[]; kind: string } | null> {
+  const r = await py("transcript", { url }, 45_000);
+  if (!r.ok || !Array.isArray(r.segments)) return null;
+  const words = segmentsToWords(r.segments as { text: string; start: number; duration: number }[]);
+  return words.length ? { words, kind: String(r.kind) } : null;
+}
+
+/** Step 3: a video with no captions -> its audio -> faster-whisper words (local, free, slower). */
+export async function whisperWords(url: string, prompt: string): Promise<{ words: CaptionWord[]; duration: number; device: string } | null> {
+  const name = env("KEYWORD_WHISPER_MODEL", env("WHISPER_MODEL", "large-v3-turbo"));
+  const local = path.join(paths.root, "models", name);
+  const r = await py(
+    "whisper_words",
+    {
+      url,
+      model: fs.existsSync(path.join(local, "model.bin")) ? local : name,
+      models_dir: path.join(paths.root, "models"),
+      device: env("WHISPER_DEVICE", "cuda"),
+      prompt,
+      max_seconds: num("KEYWORD_WHISPER_MAX_SECONDS", 1500),
+      ffmpeg: ffmpegPath() ? path.dirname(ffmpegPath()!) : undefined,
+    },
+    20 * 60_000,
+  );
+  if (!r.ok || !Array.isArray(r.words)) return null;
+  const words = (r.words as CaptionWord[]).filter((w) => w.text);
+  return words.length ? { words, duration: Number(r.duration) || 0, device: String(r.device) } : null;
+}
+
+export interface VideoWords {
+  words: CaptionWord[];
+  /** Where the words came from (log / manifest): "auto captions", "manual transcript (line timing)", "whisper (cpu)". */
+  kind: string;
+  duration: number;
+}
+
+/**
+ * The three-step transcript chain for one video (keyword harvest):
+ *   1. youtube-transcript-api: one fast request. If the transcript exists and the keyword is never
+ *      spoken, the video is skipped before anything else is fetched.
+ *   2. yt-dlp captions (json3): exact per-word times for the clip windows.
+ *   3. Whisper on the audio, only when the video has no captions at all (budgeted: it is slow).
+ * When yt-dlp cannot read captions the transcript of step 1 is used (line timing).
+ * Returns null for "skip this video", with the reason.
+ */
+export async function wordsForVideo(
+  v: { url: string; title: string; duration: number },
+  spoken: (words: CaptionWord[]) => boolean,
+  o: { whisper: () => boolean; prompt: string; deps?: { quick?: typeof quickTranscript; captions?: typeof fetchCaptions; whisper?: typeof whisperWords } },
+): Promise<{ words: VideoWords | null; reason: string }> {
+  const quickFn = o.deps?.quick ?? quickTranscript;
+  const capFn = o.deps?.captions ?? fetchCaptions;
+  const whisperFn = o.deps?.whisper ?? whisperWords;
+  const quick = await quickFn(v.url);
+  if (quick && !spoken(quick.words)) return { words: null, reason: `keyword not spoken (${quick.kind} transcript), skipped without downloading` };
+  const cap = await capFn(v.url);
+  if (cap) return { words: { words: cap.words, kind: `${cap.kind} captions`, duration: cap.duration || v.duration }, reason: "" };
+  if (quick) return { words: { words: quick.words, kind: `${quick.kind} transcript (line timing)`, duration: v.duration }, reason: "" };
+  if (!o.whisper()) return { words: null, reason: "no captions (Whisper budget used up / off), skipped" };
+  const w = await whisperFn(v.url, o.prompt);
+  if (!w) return { words: null, reason: "no captions and Whisper could not transcribe it, skipped" };
+  return { words: { words: w.words, kind: `whisper (${w.device})`, duration: w.duration || v.duration }, reason: "" };
+}
+
 export async function fetchCaptions(url: string): Promise<{ words: CaptionWord[]; kind: string; duration: number } | null> {
   const r = await py("captions", { url }, 2 * 60_000);
   if (!r.ok || typeof r.data !== "string") return null;
@@ -764,20 +863,28 @@ export async function harvestKeyword(o: KeywordHarvestOpts): Promise<HarvestResu
   const phrases = [keyword, ...(o.aliases ?? []).map((a) => a.trim().toLowerCase()).filter(Boolean)];
   let added = 0;
   let videosUsed = 0;
+  const matcher = o.matcher ?? fuzzyTokenMatch;
+  const mentions = (words: CaptionWord[]) => phrases.flatMap((p) => findKeywordMoments(words, p, { matcher })).sort((a, b) => a.t - b.t);
+  // Whisper is slow: only a few caption-less videos per keyword (KEYWORD_WHISPER=off disables it).
+  let whisperLeft = env("KEYWORD_WHISPER", "on").toLowerCase() === "off" ? 0 : num("KEYWORD_WHISPER_MAX", 2);
   for (const v of videos) {
-    const cap = await fetchCaptions(v.url);
-    if (!cap) {
-      log(`[harvest] "${v.title}": no captions, skipped`);
+    const got = await wordsForVideo(v, (w) => mentions(w).length > 0, {
+      whisper: () => whisperLeft-- > 0,
+      prompt: `A review of the ${brand} ${model}. ${[keyword, ...phrases].join(", ")}.`,
+    });
+    if (!got.words) {
+      log(`[harvest] "${v.title}": ${got.reason}`);
       continue;
     }
-    const moments = phrases.flatMap((p) => findKeywordMoments(cap.words, p, { matcher: o.matcher ?? fuzzyTokenMatch })).sort((a, b) => a.t - b.t);
+    const cap = got.words;
+    const moments = mentions(cap.words);
     const windows: Window[] = [];
     for (const m of moments) {
       const w = { ...keywordWindow(m, cap.duration || v.duration), keyword };
       if (!windows.some((x) => w.start < x.end && w.end > x.start)) windows.push(w);
       if (windows.length >= (o.maxPerVideo ?? 3)) break;
     }
-    log(`[harvest] "${v.title}" (${cap.kind} captions): "${keyword}" spoken ${moments.length}x -> ${windows.length} clip window(s)${windows.length ? ` at ${windows.map((w) => `${Math.round(w.start)}s`).join(", ")}` : ""}`);
+    log(`[harvest] "${v.title}" (${cap.kind}): "${keyword}" spoken ${moments.length}x -> ${windows.length} clip window(s)${windows.length ? ` at ${windows.map((w) => `${Math.round(w.start)}s`).join(", ")}` : ""}`);
     if (!windows.length) continue;
     const n = await processWindows(ctx, v, windows);
     added += n;

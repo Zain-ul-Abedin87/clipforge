@@ -8,6 +8,14 @@ import { findVaultFor, harvestKeyword, harvestModel, HarvestOpts, KeywordHarvest
 import { run } from "../../lib/exec.js";
 import { ffmpegPath } from "../../lib/tools.js";
 import { EditError, EditOp, findClip, ProjectStore } from "../state/projectStore.js";
+import { isFlowAngle } from "../../lib/flowPrompt.js";
+import { buildPreviewModel } from "../../lib/preview/previewModel.js";
+import { findPauses, transcriptWords, wordsCutRange } from "../../lib/transcriptEdit.js";
+import { CAPTION_PRESETS, captionPreset } from "../../lib/render/captionPresets.js";
+import { DEFAULT_CAPTION_STYLE } from "../../lib/render/captions.js";
+import { parseVoiceCleanup } from "../../audio/voiceCleanup.js";
+import { sampleFile, voiceSample } from "./voiceSample.js";
+import { downloadsDir, flowAngles, flowFile, flowRequest, generatedReplaceOp, recentDownloads, saveFlowUpload, takeFromDownloads } from "./flowBridge.js";
 
 /**
  * Editor backend: JSON-RPC 2.0 on POST /api/editor for the block-based multi-track timeline UI
@@ -33,6 +41,8 @@ export interface EditorDeps {
   isBusy: (project: string) => boolean;
   /** Machine category for CLIP prompts ("lawn mower", "drill"...). */
   categoryOf: (project: string) => string;
+  /** The channel's music library for this project (paths are resolved here, never taken from the client). */
+  musicLibrary: (project: string) => { name: string; path: string; license: string; bytes: number }[];
   harvestModel?: (o: HarvestOpts) => Promise<{ added: number }>;
   harvestKeyword?: (o: KeywordHarvestOpts) => Promise<{ added: number }>;
   vaultRoot?: string;
@@ -67,6 +77,18 @@ const str = (p: Record<string, unknown>, k: string) => {
   if (typeof v !== "string" || !v) throw new RpcError(RPC.INVALID_PARAMS, `"${k}" must be a non-empty string`);
   return v;
 };
+const int = (p: Record<string, unknown>, k: string) => {
+  const v = p[k];
+  if (typeof v !== "number" || !Number.isInteger(v)) throw new RpcError(RPC.INVALID_PARAMS, `"${k}" must be an integer`);
+  return v;
+};
+/** An optional number within [min, max]; `dflt` when absent. */
+const optNum = (p: Record<string, unknown>, k: string, dflt: number, min: number, max: number) => {
+  const v = p[k];
+  if (v === undefined || v === null) return dflt;
+  if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max) throw new RpcError(RPC.INVALID_PARAMS, `"${k}" must be a number between ${min} and ${max}`);
+  return v;
+};
 const rev = (p: Record<string, unknown>) => {
   const v = p.baseRevision;
   if (v === undefined || v === null) return null;
@@ -95,11 +117,16 @@ export interface Block {
   sourceIn?: number;
   /** Pictures: transition into this block. */
   transition?: string;
-  /** Pictures: the file, streamed for the live preview. */
+  /** Pictures and the music bed: the file, streamed for the live preview. */
   media?: string;
+  /** Music bed: level (dB), ducking under the voice, fades (s). */
+  gainDb?: number;
+  duck?: boolean;
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
-export function blockView(project: string, tl: MultiTrackTimeline, meta: { revision: number; canUndo: boolean; canRedo: boolean; dirty: number[] }) {
+export function blockView(project: string, tl: MultiTrackTimeline, meta: { revision: number; canUndo: boolean; canRedo: boolean; dirty: number[]; audioDirty: boolean }) {
   const fr = (t: Parameters<typeof secondsToFrame>[0]) => Number(secondsToFrame(t, tl.fps));
   const q = encodeURIComponent(project);
   return {
@@ -107,6 +134,11 @@ export function blockView(project: string, tl: MultiTrackTimeline, meta: { revis
     ...meta,
     fps: toNumber(tl.fps),
     totalFrames: fr(tl.duration),
+    /** What the studio's Captions / Voice panels show and change. */
+    settings: {
+      captions: { styles: CAPTION_PRESETS.map(({ id, label, description }) => ({ id, label, description })), enabled: !!tl.settings?.captions?.enabled, preset: captionPreset((tl.settings?.captions as { preset?: string } | undefined)?.preset).id, fontSize: Number((tl.settings?.captions as { fontSize?: number } | undefined)?.fontSize ?? DEFAULT_CAPTION_STYLE.fontSize) },
+      voice: parseVoiceCleanup(tl.settings?.voice),
+    },
     scenes: tl.scenes.map((s) => ({
       id: s.id,
       startFrame: fr(s.start),
@@ -126,6 +158,8 @@ export function blockView(project: string, tl: MultiTrackTimeline, meta: { revis
         if (c.kind === "overlay") return { ...base, label: c.overlay.card?.comp ?? (c.overlay.video ? "card" : path.basename(c.overlay.path ?? "overlay")) };
         if (c.kind === "sfx") return { ...base, label: c.sfx };
         if (c.kind === "caption") return { ...base, label: c.text };
+        if (t.kind === "music")
+          return { ...base, label: path.basename(c.media.path), media: `/api/editor/media?project=${q}&clip=${encodeURIComponent(c.id)}`, gainDb: c.gainDb, duck: c.duck ?? true, ...(c.fadeInSec !== undefined ? { fadeInSec: c.fadeInSec } : {}), ...(c.fadeOutSec !== undefined ? { fadeOutSec: c.fadeOutSec } : {}) };
         return { ...base, label: path.basename(c.media.path), sourceIn: toNumber(c.media.sourceIn) };
       }),
     })),
@@ -192,7 +226,7 @@ const replaceOp = (clipId: string, c: Candidate): EditOp => ({
 });
 
 /** Edits a client may send to editor.edit (replaceMedia is server-only, via editor.replace). */
-const EDIT_OPS = new Set(["moveClip", "trimEnd", "splitClip", "deleteClip", "setLocked", "setTransition", "cutRange"]);
+const EDIT_OPS = new Set(["moveClip", "trimEnd", "splitClip", "deleteClip", "setLocked", "setTransition", "cutRange", "setAudio", "setCaptions", "setVoice"]);
 
 // ---------------------------------------------------------------------------------------------
 // Jobs (Fetch New Clip)
@@ -207,6 +241,16 @@ export interface Job {
   error?: string;
 }
 
+/** Words of aligned.json (voice-file time), null when the project has none. */
+function readAlignedWords(dir: string): { word: string; start: number; end: number }[] | null {
+  try {
+    const f = path.join(dir, "aligned.json");
+    return fs.existsSync(f) ? (JSON.parse(fs.readFileSync(f, "utf8")) as { words: { word: string; start: number; end: number }[] }).words : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createEditorAPI(deps: EditorDeps) {
   const jobs = new Map<string, Job>();
   const root = deps.vaultRoot ?? VAULT_ROOT;
@@ -214,7 +258,7 @@ export function createEditorAPI(deps: EditorDeps) {
   const hk = deps.harvestKeyword ?? harvestKeyword;
   const view = (project: string) => {
     const g = deps.store.get(project);
-    return blockView(project, g.tl, { revision: g.revision, canUndo: g.canUndo, canRedo: g.canRedo, dirty: g.dirty });
+    return blockView(project, g.tl, { revision: g.revision, canUndo: g.canUndo, canRedo: g.canRedo, dirty: g.dirty, audioDirty: g.audioDirty });
   };
 
   async function fetchNewClip(job: Job, keyword?: string): Promise<void> {
@@ -256,9 +300,79 @@ export function createEditorAPI(deps: EditorDeps) {
     }
     const project = str(p, "project");
     if (!deps.validProject(project)) throw new RpcError(RPC.INVALID_PARAMS, "project name: letters, digits, - and _ only");
-    const editing = ["editor.edit", "editor.undo", "editor.redo", "editor.replace", "editor.fetchNewClip", "editor.render"];
+    const editing = ["editor.edit", "editor.undo", "editor.redo", "editor.replace", "editor.fetchNewClip", "editor.render", "editor.flowImport", "editor.musicSet", "editor.deleteWords", "editor.tightenPauses"];
     if (editing.includes(method) && deps.isBusy(project)) throw new RpcError(RPC.BUSY, "the pipeline is running for this project - wait until it finishes");
     switch (method) {
+      // ----- Google Flow round trip (see flowBridge.ts) -----
+      case "editor.flowPrompt": {
+        const angle = isFlowAngle(p.angle) ? p.angle : "animate";
+        const at = typeof p.atFrame === "number" ? p.atFrame : undefined;
+        const req = await flowRequest(deps.store.get(project).tl, deps.dirOf(project), str(p, "clipId"), angle, deps.categoryOf(project), at);
+        return { ...req, frameUrl: `/api/editor/flow-file?project=${encodeURIComponent(project)}&name=${encodeURIComponent(req.frame)}`, angles: flowAngles() };
+      }
+      // ----- background music: the channel library, and the bed on the timeline -----
+      case "editor.musicList":
+        return { tracks: deps.musicLibrary(project).map(({ name, license, bytes }) => ({ name, license, bytes })) };
+      case "editor.musicSet": {
+        const name = p.track === null ? null : str(p, "track");
+        const file = name === null ? null : deps.musicLibrary(project).find((t) => t.name === name)?.path;
+        if (name !== null && !file) throw new RpcError(RPC.NOT_FOUND, `"${name}" is not in this channel's music library`);
+        const r = deps.store.apply(project, rev(p), [{ op: "setMusic", path: file ?? null }]);
+        return { ...r, view: view(project) };
+      }
+      case "editor.preview": {
+        const dir = deps.dirOf(project);
+        const q = encodeURIComponent(project);
+        return buildPreviewModel(deps.store.get(project).tl, {
+          mediaUrl: (id) => `/api/editor/media?project=${q}&clip=${encodeURIComponent(id)}`,
+          voiceUrl: `/api/projects/${q}/audio`,
+          words: readAlignedWords(dir),
+        });
+      }
+      // ----- transcript editing (see lib/transcriptEdit.ts) -----
+      case "editor.transcript": {
+        const g = deps.store.get(project);
+        const fps = toNumber(g.tl.fps);
+        const words = transcriptWords(g.tl, readAlignedWords(deps.dirOf(project)) ?? []);
+        const pauses = findPauses(words, fps, optNum(p, "minGapSec", 0.5, 0.1, 10), optNum(p, "keepSec", 0.2, 0, 5));
+        return { revision: g.revision, fps, words, pauses, savedFrames: pauses.reduce((n, x) => n + x.cutTo - x.cutFrom, 0) };
+      }
+      case "editor.deleteWords": {
+        const g = deps.store.get(project);
+        const words = transcriptWords(g.tl, readAlignedWords(deps.dirOf(project)) ?? []);
+        let range: ReturnType<typeof wordsCutRange>;
+        try {
+          range = wordsCutRange(words, int(p, "from"), int(p, "to"));
+        } catch (err) {
+          if (err instanceof RangeError) throw new RpcError(RPC.INVALID_PARAMS, err.message);
+          throw err;
+        }
+        const r = deps.store.apply(project, rev(p), [{ op: "cutRange", ...range }]);
+        return { ...r, removedFrames: range.toFrame - range.fromFrame, view: view(project) };
+      }
+      case "editor.tightenPauses": {
+        const g = deps.store.get(project);
+        const words = transcriptWords(g.tl, readAlignedWords(deps.dirOf(project)) ?? []);
+        const pauses = findPauses(words, toNumber(g.tl.fps), optNum(p, "minGapSec", 0.5, 0.1, 10), optNum(p, "keepSec", 0.2, 0, 5));
+        if (!pauses.length) throw new RpcError(RPC.EDIT_REJECTED, "no pause is long enough to tighten");
+        // From the end backwards, so the frames of the earlier pauses are still right after each cut; one undo step.
+        const r = deps.store.apply(project, rev(p), [...pauses].reverse().map((x) => ({ op: "cutRange" as const, fromFrame: x.cutFrom, toFrame: x.cutTo })));
+        return { ...r, pauses: pauses.length, removedFrames: pauses.reduce((n, x) => n + x.cutTo - x.cutFrom, 0), view: view(project) };
+      }
+      case "editor.voiceSample": {
+        const frame = typeof p.frame === "number" && Number.isFinite(p.frame) ? Math.max(0, Math.round(p.frame)) : 0;
+        const r = await voiceSample(deps.store.get(project).tl, deps.dirOf(project), { frame, seconds: optNum(p, "seconds", 8, 1, 20), cleaned: p.cleaned === true });
+        return { ...r, url: `/api/editor/voice-sample?project=${encodeURIComponent(project)}&name=${encodeURIComponent(r.name)}` };
+      }
+      case "editor.flowDownloads":
+        return { folder: downloadsDir(), items: recentDownloads() };
+      case "editor.flowImport": {
+        const clipId = str(p, "clipId");
+        const file = p.from === "downloads" ? takeFromDownloads(deps.dirOf(project), str(p, "name")) : str(p, "name");
+        const { op, note } = await generatedReplaceOp(deps.store.get(project).tl, deps.dirOf(project), clipId, file, typeof p.prompt === "string" ? p.prompt : undefined);
+        const r = deps.store.apply(project, rev(p), [op]);
+        return { ...r, file, note, view: view(project) };
+      }
       case "editor.open":
         return view(project);
       case "editor.edit": {
@@ -356,12 +470,36 @@ export function createEditorAPI(deps: EditorDeps) {
     return r.code === 0 && fs.existsSync(out) ? out : null;
   }
 
-  /** A B-roll clip's media file (live preview in the editor). */
+  /** A file the live preview streams: a B-roll clip, the music bed, a still overlay or the logo ("@logo"). */
   function media(project: string, clipId: string): string | null {
     if (!deps.validProject(project)) return null;
-    const { clip } = findClip(deps.store.get(project).tl, clipId);
-    return clip.kind === "video" && fs.existsSync(clip.media.path) ? clip.media.path : null;
+    const tl = deps.store.get(project).tl;
+    let file: string | null = null;
+    if (clipId === "@logo") file = tl.settings?.logo?.path ?? null;
+    else {
+      const { track, clip } = findClip(tl, clipId);
+      if (clip.kind === "video") file = clip.media.path;
+      else if (clip.kind === "audio" && track.kind === "music") file = clip.media.path;
+      else if (clip.kind === "overlay" && !clip.overlay.video) file = clip.overlay.path ?? null;
+    }
+    return file && fs.existsSync(file) ? file : null;
   }
 
-  return { handle, thumb, media, jobs };
+  /** A voice-cleanup sample (WAV) made by editor.voiceSample. */
+  function voiceSampleFile(project: string, name: string): string | null {
+    return deps.validProject(project) ? sampleFile(deps.dirOf(project), name) : null;
+  }
+
+  /** A file of the project's flow/ folder (reference frames, imported videos). */
+  function flowAsset(project: string, name: string): string | null {
+    return deps.validProject(project) ? flowFile(deps.dirOf(project), name) : null;
+  }
+
+  /** Stores a dragged-in Flow video (POST /api/editor/flow-upload); returns its flow/ name. */
+  async function flowUpload(project: string, req: import("node:http").IncomingMessage, filename: string): Promise<string> {
+    if (!deps.validProject(project)) throw new EditError("invalid project");
+    return saveFlowUpload(req, deps.dirOf(project), filename);
+  }
+
+  return { handle, thumb, media, flowAsset, flowUpload, voiceSampleFile, jobs };
 }

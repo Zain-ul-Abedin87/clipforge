@@ -1,4 +1,5 @@
 import type { AlignedWord } from "../../commands/align.js";
+import { captionPreset, CaptionPreset } from "./captionPresets.js";
 
 export interface CaptionStyle {
   enabled: boolean;
@@ -9,7 +10,12 @@ export interface CaptionStyle {
   background: string;
   textColor: string;
   marginV: number;
+  /** Named style (captionPresets.ts); missing = "classic". */
+  preset?: string;
 }
+
+/** The look of a channel without caption settings (the values timeline.ts falls back to). */
+export const DEFAULT_CAPTION_STYLE: Omit<CaptionStyle, "enabled"> = { font: "Arial", fontSize: 54, maxWordsPerLine: 7, background: "rgba(0,0,0,0.55)", textColor: "#FFFFFF", marginV: 70 };
 
 /** ASS colours are &HAABBGGRR with inverted alpha (00 = opaque). */
 function assColor(css: string, fallbackAlpha = 0): string {
@@ -40,14 +46,23 @@ export interface CaptionLine {
   start: number;
   end: number;
   text: string;
+  /** Per-word timing, only when the style needs it (karaoke / word). */
+  words?: { text: string; start: number; end: number }[];
 }
 
 /** Clean, minimal lines: at most N words, never across a sentence end, shown until the next line. */
-export function captionLines(words: AlignedWord[], maxWords: number): CaptionLine[] {
+export function captionLines(words: AlignedWord[], maxWords: number, opts: { withWords?: boolean } = {}): CaptionLine[] {
   const lines: CaptionLine[] = [];
   let cur: AlignedWord[] = [];
   const flush = () => {
-    if (cur.length) lines.push({ start: cur[0].start, end: cur[cur.length - 1].end, text: cur.map((w) => w.word).join(" ") });
+    if (cur.length) {
+      lines.push({
+        start: cur[0].start,
+        end: cur[cur.length - 1].end,
+        text: cur.map((w) => w.word).join(" "),
+        ...(opts.withWords ? { words: cur.map((w) => ({ text: w.word, start: w.start, end: w.end })) } : {}),
+      });
+    }
     cur = [];
   };
   for (const w of words) {
@@ -64,7 +79,36 @@ export function captionLines(words: AlignedWord[], maxWords: number): CaptionLin
   return lines;
 }
 
+const cs = (seconds: number) => Math.max(1, Math.round(seconds * 100));
+const casing = (p: CaptionPreset, text: string) => (p.uppercase ? text.toUpperCase() : text);
+
+/** The one ASS style of a preset. Classic keeps the channel's box exactly as it always was. */
+function styleLine(st: CaptionStyle, p: CaptionPreset): string {
+  const size = Math.round(st.fontSize * p.sizeScale);
+  const text = assColor(p.textColor ?? st.textColor);
+  const fields = (primary: string, secondary: string, outline: string, back: string, borderStyle: number, outlineWidth: number, shadow: number) =>
+    `Style: Default,${st.font},${size},${primary},${secondary},${outline},${back},-1,0,0,0,100,100,0,0,${borderStyle},${outlineWidth},${shadow},2,160,160,${st.marginV},1`;
+  if (p.box) return fields(text, text, assColor(st.background), assColor(st.background), 3, 12, 0);
+  // Karaoke sweeps from the secondary to the primary colour; Pop draws every word in the accent colour.
+  const primary = p.mode === "line" ? text : assColor(p.accent);
+  return fields(primary, text, assColor(p.outlineColor), "&H80000000", 1, p.outline, p.shadow);
+}
+
+function assEvents(lines: CaptionLine[], p: CaptionPreset): string[] {
+  const dialogue = (start: number, end: number, text: string) => `Dialogue: 0,${ts(start)},${ts(end)},Default,,0,0,0,,${text}`;
+  return lines.map((l) => {
+    if (p.mode === "karaoke" && l.words?.length) {
+      // \kf = a fill sweep of that many centiseconds; each word lasts until the next one starts.
+      const text = l.words.map((w, i) => `{\\kf${cs((l.words![i + 1]?.start ?? w.end) - w.start)}}${assText(casing(p, w.text))}`).join(" ");
+      return dialogue(l.start, l.end, text);
+    }
+    if (p.mode === "word") return dialogue(l.start, l.end, `{\\fscx75\\fscy75\\t(0,120,\\fscx100\\fscy100)}${assText(casing(p, l.text))}`);
+    return dialogue(l.start, l.end, assText(casing(p, l.text)));
+  });
+}
+
 export function buildAss(lines: CaptionLine[], st: CaptionStyle): string {
+  const p = captionPreset(st.preset);
   const header = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
@@ -74,11 +118,28 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,${st.font},${st.fontSize},${assColor(st.textColor)},${assColor(st.textColor)},${assColor(st.background)},${assColor(st.background)},-1,0,0,0,100,100,0,0,3,12,0,2,160,160,${st.marginV},1
+${styleLine(st, p)}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
-  const events = lines.map((l) => `Dialogue: 0,${ts(l.start)},${ts(l.end)},Default,,0,0,0,,${assText(l.text)}`);
-  return header + events.join("\n") + "\n";
+  return header + assEvents(lines, p).join("\n") + "\n";
+}
+
+/** Aligned words (voice-file time) -> timeline time after editor cuts; words in a cut part are dropped. */
+export function remapWords<W extends { start: number; end: number }>(words: W[], parts?: { in: number; dur: number }[]): W[] {
+  if (!parts?.length) return words;
+  const out: W[] = [];
+  for (const w of words) {
+    let at = 0;
+    for (const p of parts) {
+      if (w.start >= p.in - 1e-6 && w.start < p.in + p.dur) {
+        const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+        out.push({ ...w, start: r6(at + (w.start - p.in)), end: r6(at + Math.min(w.end, p.in + p.dur) - p.in) });
+        break;
+      }
+      at += p.dur;
+    }
+  }
+  return out;
 }

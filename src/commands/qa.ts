@@ -17,9 +17,12 @@ import { sourceKey } from "../lib/pacing.js";
 import { readFacts } from "../lib/facts.js";
 import { readChapters, youtubeChapters } from "../lib/chapters.js";
 import { buildPublishPack } from "../lib/publish.js";
-import { preflightChecks } from "../lib/qaGate.js";
+import { checkMusicLicenses, preflightChecks } from "../lib/qaGate.js";
+import { trackLicense } from "../lib/music.js";
 import { readLedger } from "../lib/assets/licenseLedger.js";
 import { musicEnabled } from "./timeline.js";
+import { compileTimeline, loadTimeline } from "../lib/compiler/timelineCompiler.js";
+import { GENERATED_SOURCE } from "../lib/flowPrompt.js";
 
 export type Status = "pass" | "warn" | "fail";
 export interface Check {
@@ -123,9 +126,13 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     silences.length ? `${silences.map((s) => `${fmt(s.start)} (${s.dur.toFixed(1)} s)`).join(", ")}${deadAir.length ? " - gaps of 5 s+ are dead air" : ""}` : "no gap of 2.5 s+");
   add("Sound", "Loudness (YouTube ~ -14 LUFS)", Math.abs(lufs + 14) <= 2 ? "pass" : "warn", `${lufs.toFixed(1)} LUFS`);
   add("Sound", "Clipping", peak <= -0.5 ? "pass" : "warn", `true peak ${peak.toFixed(1)} dBFS`);
+  // The music of the video as rendered: the studio edits the v3 timeline, timeline.json is only the first draft.
+  const musicFiles = effectiveMusicFiles(dir, tl.music.files);
   const musicOn = musicEnabled(style, niche);
-  add("Sound", "Background music", tl.music.files.length || !musicOn ? "pass" : "warn",
-    tl.music.files.length ? tl.music.files.map((f) => path.basename(f)).join(", ") : musicOn ? "none - add tracks to channels/<channel>/music" : "off (default; style.json music.enabled)");
+  add("Sound", "Background music", musicFiles.length || !musicOn ? "pass" : "warn",
+    musicFiles.length ? musicFiles.map((f) => path.basename(f)).join(", ") : musicOn ? "none - add tracks in Library > Music" : "off (choose a track when creating the video, or set style.json music.enabled)");
+  const musicLicence = checkMusicLicenses(musicFiles.map((f) => ({ name: path.basename(f), license: trackLicense(path.dirname(f), path.basename(f)) })));
+  if (musicLicence) add(musicLicence.group, musicLicence.name, musicLicence.status, musicLicence.detail);
 
   // ---- 4. captions ----
   if (tl.captions.enabled) {
@@ -304,12 +311,14 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
 
   // AI disclosure: YouTube asks for it for realistic altered/synthetic media (AI voices, AI-made
   // realistic visuals). Stock footage, own voice and code-made cards do not need it.
-  const aiVisuals = false; // no AI image/video generation is wired in yet
+  // Clips regenerated in Google Flow (Veo) from the studio are realistic AI video.
+  const generated = (loadTimeline(dir)?.tl.tracks ?? []).flatMap((t) => t.clips).filter((c) => c.kind === "video" && c.provenance.source === GENERATED_SOURCE);
+  const aiVisuals = generated.length > 0;
   const aiVoice = false; // the voiceover is the creator's own
   const forced = style.aiDisclosure === "always";
   const aiDisclosure = {
     required: aiVisuals || aiVoice || forced,
-    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals || aiVoice ? "AI-generated realistic voice or visuals are used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
+    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals ? `${generated.length} AI-generated clip(s) (Google Flow / Veo) are used` : aiVoice ? "AI-generated realistic voice is used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
   };
   add("Publish", "YouTube \"altered or synthetic content\" label", "pass", aiDisclosure.required ? "TURN ON when uploading" : aiDisclosure.reason);
   add("Publish", "Human review", "warn", "watch the video and press Approve in the QA tab before uploading");
@@ -382,4 +391,14 @@ export async function qaPreflight(opts: { project: string }, log: (m: string) =>
   for (const c of checks) log(`[qa] ${c.status.toUpperCase()} ${c.group}: ${c.name} - ${c.detail}`);
   log(`[qa] preflight: ${summary.pass} pass, ${summary.warn} warn, ${summary.fail} fail`);
   return summary.fail ? 1 : 0;
+}
+
+/** Music files of the timeline that is rendered (v3 when present), else the files of the v2 draft. */
+function effectiveMusicFiles(dir: string, draft: string[]): string[] {
+  try {
+    const loaded = loadTimeline(dir);
+    return loaded ? compileTimeline(loaded.tl).audio.music.files : draft;
+  } catch {
+    return draft;
+  }
 }

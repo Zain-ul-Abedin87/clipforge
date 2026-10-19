@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { findKeywordMoments, keywordWindow, parseJson3, parseVtt } from "../src/lib/agents/youtube/ytExtractor.js";
+import { findKeywordMoments, keywordWindow, parseJson3, parseVtt, segmentsToWords, wordsForVideo, type CaptionWord } from "../src/lib/agents/youtube/ytExtractor.js";
 
 // Synthetic captions in YouTube's real json3 shape (auto captions: per-word tOffsetMs; "\n" events).
 const JSON3 = JSON.stringify({
@@ -68,5 +68,47 @@ describe("keyword moments -> 3-5 s windows", () => {
     assert.deepEqual([keywordWindow({ ...m, t: 0.2 }, 466).start, keywordWindow({ ...m, t: 0.2 }, 466).end], [0, 4]);
     const nearEnd = keywordWindow({ ...m, t: 465.5 }, 466);
     assert.deepEqual([nearEnd.start, nearEnd.end], [462, 466]);
+  });
+});
+
+describe("transcript chain: youtube-transcript-api screen -> yt-dlp word captions -> Whisper", () => {
+  const v = { url: "https://www.youtube.com/watch?v=abcdefghijk", title: "Ruger Security-9 review", duration: 600 };
+  const says = (word: string) => (w: CaptionWord[]) => findKeywordMoments(w, word).length > 0;
+  const words = (text: string, t0 = 10): CaptionWord[] => text.split(" ").map((x, i) => ({ text: x, t: t0 + i * 0.3 }));
+
+  test("transcript lines become evenly spread words; [Music] / [ __ ] are dropped", () => {
+    const w = segmentsToWords([{ text: "check the [Music] trigger pull", start: 10, duration: 2 }, { text: "[ __ ]", start: 12, duration: 1 }]);
+    assert.deepEqual(w, [{ text: "check", t: 10 }, { text: "the", t: 10.5 }, { text: "trigger", t: 11 }, { text: "pull", t: 11.5 }]);
+  });
+
+  test("keyword never spoken in the quick transcript: skipped, nothing else fetched", async () => {
+    const calls: string[] = [];
+    const r = await wordsForVideo(v, says("trigger"), {
+      whisper: () => true, prompt: "",
+      deps: { quick: async () => (calls.push("quick"), { words: words("nice slide and grip"), kind: "auto" }), captions: async () => (calls.push("captions"), null), whisper: async () => (calls.push("whisper"), null) },
+    });
+    assert.equal(r.words, null);
+    assert.match(r.reason, /not spoken/);
+    assert.deepEqual(calls, ["quick"]);
+  });
+
+  test("spoken -> exact word captions win; if yt-dlp fails the line-timed transcript is used", async () => {
+    const cap = { words: words("the trigger is light", 42), kind: "auto", duration: 600 };
+    const a = await wordsForVideo(v, says("trigger"), { whisper: () => true, prompt: "", deps: { quick: async () => ({ words: words("the trigger is light"), kind: "auto" }), captions: async () => cap } });
+    assert.equal(a.words?.kind, "auto captions");
+    assert.equal(a.words?.words[1].t, 42.3);
+    const b = await wordsForVideo(v, says("trigger"), { whisper: () => true, prompt: "", deps: { quick: async () => ({ words: words("the trigger is light"), kind: "manual" }), captions: async () => null } });
+    assert.equal(b.words?.kind, "manual transcript (line timing)");
+  });
+
+  test("no captions anywhere -> Whisper, only while the budget lasts", async () => {
+    let budget = 1;
+    const deps = { quick: async () => null, captions: async () => null, whisper: async () => ({ words: words("trigger"), duration: 500, device: "cpu" }) };
+    const a = await wordsForVideo(v, says("trigger"), { whisper: () => budget-- > 0, prompt: "Ruger Security-9", deps });
+    assert.equal(a.words?.kind, "whisper (cpu)");
+    assert.equal(a.words?.duration, 500);
+    const b = await wordsForVideo(v, says("trigger"), { whisper: () => budget-- > 0, prompt: "", deps });
+    assert.equal(b.words, null);
+    assert.match(b.reason, /budget/);
   });
 });

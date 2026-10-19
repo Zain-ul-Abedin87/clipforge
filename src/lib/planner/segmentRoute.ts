@@ -71,7 +71,7 @@ export async function routeSegments(scenes: Scene[], niche: Niche, topic: string
           cinematic = c.slice(0, 10);
           cache?.set(cineKey, { cinematic });
         }
-        log(`[plan] segment routing by ${model} (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
+        log(`[plan] segment routing by ${(res as { model?: string }).model ?? model} (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
       }
     } catch (err) {
       log(`[plan] segment routing LLM failed (${String((err as Error).message ?? err).slice(0, 120)}); heuristic used`);

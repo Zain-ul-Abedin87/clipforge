@@ -6,6 +6,9 @@ import {
   AudioClip, clipEnd, clipFrames, fromLegacyTimeline, LegacyTimeline, MultiTrackTimeline, OverlayClip, SfxClip, timelineFromJson, timelineToJson, validateTimeline, VideoClip,
 } from "../../domain/timeline.types.js";
 import { readJson } from "../project.js";
+import { DEFAULT_FADE } from "../../audio/duck.js";
+import { voiceCleanupFilter } from "../../audio/voiceCleanup.js";
+import { DEFAULT_MUSIC_DB } from "../music.js";
 
 /**
  * v3 multi-track timeline -> what the renderer executes:
@@ -67,7 +70,10 @@ export interface AudioPlan {
    * back to back (seconds into the file). Absent = the whole file from 0.
    */
   voiceParts?: { in: number; dur: number }[];
-  music: { files: string[]; volumeDb: number };
+  /** FFmpeg filter chain for the voice (denoise, rumble, level, loudness); empty = untouched. */
+  voiceFilter: string;
+  /** The bed: tracks are concatenated and looped; level, ducking and fades come from the first music clip. */
+  music: { files: string[]; volumeDb: number; duck: boolean; fadeInSec: number; fadeOutSec: number };
   sfx: { enabled: boolean; gainDb: number; events: { kind: string; at: number }[] };
 }
 
@@ -195,8 +201,15 @@ export function compileTimeline(tl: MultiTrackTimeline): CompiledTimeline {
     scenes,
     audio: {
       voice: voice.media.path,
+      voiceFilter: voiceCleanupFilter(tl.settings?.voice),
       ...(cut ? { voiceParts: voices.map((v) => ({ in: sec(v.media.sourceIn), dur: sec(v.duration) })) } : {}),
-      music: { files: music.map((m) => m.media.path), volumeDb: music[0]?.gainDb ?? -18 },
+      music: {
+        files: music.map((m) => m.media.path),
+        volumeDb: music[0]?.gainDb ?? DEFAULT_MUSIC_DB,
+        duck: music[0]?.duck ?? true,
+        fadeInSec: music[0]?.fadeInSec ?? DEFAULT_FADE.inSec,
+        fadeOutSec: music[0]?.fadeOutSec ?? DEFAULT_FADE.outSec,
+      },
       sfx: { enabled: sfxSettings.enabled, gainDb: sfxSettings.gainDb, events: sfxClips.map((c) => ({ kind: c.sfx, at: sec(c.start) })) },
     },
     captions: tl.settings?.captions ?? { enabled: false },

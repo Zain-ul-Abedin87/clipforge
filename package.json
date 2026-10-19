@@ -12,9 +12,11 @@
     "doctor": "tsx src/cli.ts doctor",
     "test:nvenc": "tsx src/cli.ts test-nvenc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts tests/pacing.test.ts tests/introOutro.test.ts tests/hook.test.ts tests/mentions.test.ts tests/ttsChunks.test.ts tests/planCache.test.ts tests/queue.test.ts tests/portability.test.ts",
+    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts tests/flow.test.ts tests/music.test.ts tests/preview.test.ts tests/transcript.test.ts tests/captions.test.ts tests/pacing.test.ts tests/introOutro.test.ts tests/hook.test.ts tests/mentions.test.ts tests/ttsChunks.test.ts tests/planCache.test.ts tests/queue.test.ts tests/portability.test.ts",
     "test:py": "python -m unittest discover -s tests -p \"test_*.py\"",
-    "serve": "tsx src/cli.ts serve --port 4173"
+    "serve": "npm run build:preview && tsx src/cli.ts serve --port 4173",
+    "build:preview": "npm --prefix cards run build:preview",
+    "typecheck:cards": "npm --prefix cards run typecheck"
   },
   "engines": {
     "node": ">=20"

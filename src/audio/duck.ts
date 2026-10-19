@@ -9,6 +9,9 @@ import { run } from "../lib/exec.js";
  */
 export const DUCK = { threshold: 0.02, ratio: 10, attack: 20, release: 400 } as const;
 
+/** Fade at the start / end of the music bed (seconds). */
+export const DEFAULT_FADE = { inSec: 2, outSec: 3 } as const;
+
 export interface DuckGraphOpts {
   /** Filter chain that yields the voice (no output label), e.g. "[1:a]aresample=48000,...". */
   voiceChain: string;
@@ -19,14 +22,33 @@ export interface DuckGraphOpts {
   volumeDb: number;
   /** Output label (without brackets). */
   out: string;
+  /** Dip the music under the voice (default true); false = plain mix at `volumeDb`. */
+  duck?: boolean;
+  fadeInSec?: number;
+  fadeOutSec?: number;
 }
 
-/** filter_complex fragment: voice + ducked music -> [out]. */
+/** The music chain: level, loop-trim to the video length and fades. A fade of 0 is left out. */
+function musicChain(o: DuckGraphOpts): string {
+  const fadeIn = o.fadeInSec ?? DEFAULT_FADE.inSec;
+  const fadeOut = Math.min(o.fadeOutSec ?? DEFAULT_FADE.outSec, o.duration);
+  return [
+    `${o.musicIn}aresample=48000`,
+    "aformat=channel_layouts=stereo",
+    `volume=${o.volumeDb}dB`,
+    `atrim=0:${o.duration.toFixed(3)}`,
+    "asetpts=PTS-STARTPTS",
+    ...(fadeIn > 0 ? [`afade=t=in:d=${fadeIn}`] : []),
+    ...(fadeOut > 0 ? [`afade=t=out:st=${Math.max(0, o.duration - fadeOut).toFixed(3)}:d=${fadeOut}`] : []),
+  ].join(",");
+}
+
+/** filter_complex fragment: voice + music (ducked under the voice unless `duck` is false) -> [out]. */
 export function duckGraph(o: DuckGraphOpts): string {
-  const D = o.duration.toFixed(3);
+  if (o.duck === false) return [`${o.voiceChain}[dvo]`, `${musicChain(o)}[dmb]`, `[dvo][dmb]amix=inputs=2:duration=first:normalize=0[${o.out}]`].join(";");
   return [
     `${o.voiceChain},asplit=2[dvo][dkey]`,
-    `${o.musicIn}aresample=48000,aformat=channel_layouts=stereo,volume=${o.volumeDb}dB,atrim=0:${D},asetpts=PTS-STARTPTS,afade=t=in:d=2,afade=t=out:st=${Math.max(0, o.duration - 3).toFixed(3)}:d=3[dmb]`,
+    `${musicChain(o)}[dmb]`,
     `[dmb][dkey]sidechaincompress=threshold=${DUCK.threshold}:ratio=${DUCK.ratio}:attack=${DUCK.attack}:release=${DUCK.release}:makeup=1[dduck]`,
     `[dvo][dduck]amix=inputs=2:duration=first:normalize=0[${o.out}]`,
   ].join(";");

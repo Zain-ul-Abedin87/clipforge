@@ -7,6 +7,8 @@ nvidia-cudnn-cu12==9.27.0.42
 numpy
 # YouTube Creative Commons footage (stock provider "youtube_cc"): search + 15 s pieces only.
 yt-dlp>=2025.1.1
+# Fast transcript screen for keyword harvest (line timing; word timing comes from captions / Whisper).
+youtube-transcript-api>=1.2
 # Open-web Creative Commons fallback (stock source "web_cc", python/web_crawler.py).
 # `ddgs` is the renamed `duckduckgo_search`; the crawler imports either.
 ddgs>=9.0

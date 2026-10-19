@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { add, frameToSeconds, rat, Rational, secondsToFrame, sub, toNumber } from "../../domain/rational.math.js";
-import { Clip, clipEnd, MultiTrackTimeline, OverlayClip, Provenance, timelineFromJson, timelineToJson, Track, Transition, validateTimeline, VideoClip, MediaRef } from "../../domain/timeline.types.js";
+import { AudioClip, Clip, clipEnd, MultiTrackTimeline, OverlayClip, Provenance, timelineFromJson, timelineToJson, Track, Transition, validateTimeline, VideoClip, MediaRef } from "../../domain/timeline.types.js";
 import { loadTimeline, V3_FILE, writeTimelineV3 } from "../../lib/compiler/timelineCompiler.js";
+import { DEFAULT_MUSIC_DB, FADE_RANGE_SEC, MUSIC_DB_RANGE } from "../../lib/music.js";
+import { CAPTION_PRESETS, isCaptionPreset } from "../../lib/render/captionPresets.js";
+import { DEFAULT_CAPTION_STYLE } from "../../lib/render/captions.js";
+import { Denoise, DENOISE_LEVELS, parseVoiceCleanup } from "../../audio/voiceCleanup.js";
 
 /**
  * Pre-render editing state of a project: the active v3 timeline, a revision number, undo / redo.
@@ -35,7 +39,16 @@ export type EditOp =
   | { op: "replaceMedia"; clipId: string; media: { path: string; kind: "video" | "image"; sourceIn?: number }; provenance: Provenance }
   | { op: "setLocked"; clipId: string; locked: boolean }
   | { op: "setTransition"; clipId: string; transition: Transition }
-  | { op: "cutRange"; fromFrame: number; toFrame: number };
+  | { op: "cutRange"; fromFrame: number; toFrame: number }
+  | { op: "setAudio"; clipId: string; gainDb?: number; duck?: boolean; fadeInSec?: number; fadeOutSec?: number }
+  /** Burned-in captions: on / off, named style, font size (every scene carries them, so every scene re-renders). */
+  | { op: "setCaptions"; enabled?: boolean; preset?: string; fontSize?: number }
+  /** Voice cleanup (denoise, rumble filter, level, loudness): a mix change, no scene re-renders. */
+  | { op: "setVoice"; denoise?: string; rumble?: boolean; even?: boolean; loudness?: boolean }
+  /** Server-side only (the path comes from the channel's music library): replaces the music bed, null removes it. */
+  | { op: "setMusic"; path: string | null };
+
+const AUDIO_OPS = new Set<EditOp["op"]>(["setAudio", "setMusic", "setVoice"]);
 
 const TRANSITIONS: Transition[] = ["cut", "fade", "flash"];
 
@@ -49,6 +62,8 @@ interface Session {
   redo: string[];
   /** Scenes edited since the last render request. */
   dirty: Set<number>;
+  /** Music / audio edited since the last render request (no scene's picture changes). */
+  audioDirty: boolean;
 }
 
 const fps = (tl: MultiTrackTimeline) => tl.fps;
@@ -94,6 +109,10 @@ export function coverageErrors(tl: MultiTrackTimeline): string[] {
 /** Applies one operation to `tl` in place (callers pass a copy). Returns the scene ids it touched. */
 export function applyOp(tl: MultiTrackTimeline, o: EditOp): number[] {
   if (o.op === "cutRange") return cutRange(tl, o.fromFrame, o.toFrame);
+  if (o.op === "setMusic") return setMusic(tl, o.path);
+  if (o.op === "setCaptions") return setCaptions(tl, o);
+  if (o.op === "setVoice") return setVoice(tl, o);
+  if (o.op === "setAudio") return setAudio(tl, o);
   const { track, clip, index } = findClip(tl, o.clipId);
   const total = s2f(tl, tl.duration);
   const start = s2f(tl, clip.start);
@@ -168,26 +187,7 @@ export function applyOp(tl: MultiTrackTimeline, o: EditOp): number[] {
 
     case "deleteClip": {
       if (track.kind === "voiceover") throw new EditError("the voiceover cannot be deleted");
-      if (track.kind === "broll") {
-        // The neighbour in the same scene takes over the time (previous one extends, else the next one starts earlier).
-        const list = sceneBroll(tl, clip.sceneId!);
-        if (list.length === 1) throw new EditError("a scene needs a picture: replace it instead of deleting it");
-        const k = list.findIndex((c) => c.id === clip.id);
-        const prev = list[k - 1];
-        const next = list[k + 1];
-        if (prev) {
-          if (prev.locked) throw new EditError(`clip ${prev.id} is locked`);
-          prev.duration = f2s(tl, end - s2f(tl, prev.start));
-        } else {
-          if (next.locked) throw new EditError(`clip ${next.id} is locked`);
-          const nextEnd = s2f(tl, clipEnd(next));
-          if (next.media.kind === "video") next.media.sourceIn = sub(next.media.sourceIn, f2s(tl, s2f(tl, next.start) - start));
-          if (toNumber(next.media.sourceIn) < 0) next.media.sourceIn = rat(0);
-          next.start = f2s(tl, start);
-          next.duration = f2s(tl, nextEnd - start);
-          next.transitionIn = (clip as VideoClip).transitionIn;
-        }
-      }
+      if (track.kind === "broll") handOverTime(tl, clip as VideoClip);
       track.clips.splice(index, 1);
       break;
     }
@@ -219,6 +219,124 @@ export function applyOp(tl: MultiTrackTimeline, o: EditOp): number[] {
       throw new EditError(`unknown edit "${(o as { op?: unknown }).op}"`);
   }
   return [...touched];
+}
+
+const bounded = (v: number, r: { min: number; max: number }, what: string): number => {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < r.min || v > r.max) throw new EditError(`${what} must be between ${r.min} and ${r.max}`);
+  return v;
+};
+
+const musicTrack = (tl: MultiTrackTimeline): Track => {
+  const t = tl.tracks.find((x) => x.kind === "music");
+  if (!t) throw new EditError("this timeline has no music track", "not_found");
+  return t;
+};
+
+/** Level, ducking and fades of a music clip. They apply to the whole bed (see compileTimeline). */
+function setAudio(tl: MultiTrackTimeline, o: Extract<EditOp, { op: "setAudio" }>): number[] {
+  const { track, clip } = findClip(tl, o.clipId);
+  if (track.kind !== "music" || clip.kind !== "audio") throw new EditError("only music clips have a level, ducking and fades");
+  if (clip.locked) throw new EditError(`clip ${clip.id} is locked`);
+  if (o.gainDb !== undefined) clip.gainDb = bounded(o.gainDb, MUSIC_DB_RANGE, "level (dB)");
+  if (o.duck !== undefined) clip.duck = !!o.duck;
+  if (o.fadeInSec !== undefined) clip.fadeInSec = bounded(o.fadeInSec, FADE_RANGE_SEC, "fade in (s)");
+  if (o.fadeOutSec !== undefined) clip.fadeOutSec = bounded(o.fadeOutSec, FADE_RANGE_SEC, "fade out (s)");
+  return [];
+}
+
+/**
+ * Before a picture is removed: its neighbour in the same scene takes over its time (the previous one
+ * extends, else the next one starts earlier). Throws when it is the scene's only picture or the
+ * neighbour is locked.
+ */
+function handOverTime(tl: MultiTrackTimeline, clip: VideoClip): void {
+  const list = sceneBroll(tl, clip.sceneId!);
+  if (list.length === 1) throw new EditError("a scene needs a picture: replace it instead of deleting it");
+  const k = list.findIndex((c) => c.id === clip.id);
+  const prev = list[k - 1];
+  const next = list[k + 1];
+  const start = s2f(tl, clip.start);
+  const end = s2f(tl, clipEnd(clip));
+  if (prev) {
+    if (prev.locked) throw new EditError(`clip ${prev.id} is locked`);
+    prev.duration = f2s(tl, end - s2f(tl, prev.start));
+    return;
+  }
+  if (next.locked) throw new EditError(`clip ${next.id} is locked`);
+  const nextEnd = s2f(tl, clipEnd(next));
+  if (next.media.kind === "video") next.media.sourceIn = sub(next.media.sourceIn, f2s(tl, s2f(tl, next.start) - start));
+  if (toNumber(next.media.sourceIn) < 0) next.media.sourceIn = rat(0);
+  next.start = f2s(tl, start);
+  next.duration = f2s(tl, nextEnd - start);
+  next.transitionIn = clip.transitionIn;
+}
+
+/** A cut can leave a picture a few frames long at a scene's edge; its neighbour absorbs it (locked ones stay). */
+function absorbSlivers(tl: MultiTrackTimeline): void {
+  const broll = tl.tracks.find((t) => t.kind === "broll");
+  if (!broll) return;
+  for (const sc of tl.scenes) {
+    for (const c of sceneBroll(tl, sc.id)) {
+      if (s2f(tl, clipEnd(c)) - s2f(tl, c.start) >= MIN_BROLL_FRAMES) continue;
+      try {
+        handOverTime(tl, c);
+        broll.clips = broll.clips.filter((x) => x.id !== c.id);
+      } catch (err) {
+        if (!(err instanceof EditError)) throw err; // the scene's only picture, or a locked neighbour: keep it
+      }
+    }
+  }
+}
+
+const CAPTION_SIZE_RANGE = { min: 30, max: 90 } as const;
+
+function setCaptions(tl: MultiTrackTimeline, o: Extract<EditOp, { op: "setCaptions" }>): number[] {
+  if (o.preset !== undefined && !isCaptionPreset(o.preset)) throw new EditError(`caption style must be one of ${CAPTION_PRESETS.map((p) => p.id).join(", ")}`);
+  if (o.enabled !== undefined && typeof o.enabled !== "boolean") throw new EditError("enabled must be true or false");
+  const size = o.fontSize === undefined ? undefined : bounded(o.fontSize, CAPTION_SIZE_RANGE, "caption size");
+  tl.settings ??= {};
+  // A timeline made without captions has no style yet: start from the defaults so the render has every field.
+  const cur = (tl.settings.captions ?? { enabled: false }) as Record<string, unknown>;
+  tl.settings.captions = {
+    ...DEFAULT_CAPTION_STYLE,
+    ...cur,
+    ...(o.enabled !== undefined ? { enabled: o.enabled } : {}),
+    ...(o.preset !== undefined ? { preset: o.preset } : {}),
+    ...(size !== undefined ? { fontSize: size } : {}),
+  } as NonNullable<MultiTrackTimeline["settings"]>["captions"] & { enabled: boolean };
+  return tl.scenes.map((s) => s.id);
+}
+
+function setVoice(tl: MultiTrackTimeline, o: Extract<EditOp, { op: "setVoice" }>): number[] {
+  if (o.denoise !== undefined && !DENOISE_LEVELS.includes(o.denoise as Denoise)) throw new EditError(`denoise must be one of ${DENOISE_LEVELS.join(", ")}`);
+  for (const k of ["rumble", "even", "loudness"] as const) if (o[k] !== undefined && typeof o[k] !== "boolean") throw new EditError(`${k} must be true or false`);
+  tl.settings ??= {};
+  tl.settings.voice = parseVoiceCleanup(o, parseVoiceCleanup(tl.settings.voice));
+  return [];
+}
+
+/** One music bed over the whole video, keeping the level / ducking / fades of the bed it replaces. */
+function setMusic(tl: MultiTrackTimeline, file: string | null): number[] {
+  const track = musicTrack(tl);
+  const prev = track.clips.find((c): c is AudioClip => c.kind === "audio");
+  track.clips = [];
+  if (file === null) return [];
+  const ids = new Set(tl.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+  let id = "music_0";
+  for (let n = 1; ids.has(id); n++) id = `music_${n}`;
+  track.clips.push({
+    id,
+    trackId: track.id,
+    kind: "audio",
+    start: rat(0),
+    duration: tl.duration,
+    media: { path: file, kind: "audio", sourceIn: rat(0) },
+    gainDb: prev?.gainDb ?? DEFAULT_MUSIC_DB,
+    duck: prev?.duck ?? true,
+    ...(prev?.fadeInSec !== undefined ? { fadeInSec: prev.fadeInSec } : {}),
+    ...(prev?.fadeOutSec !== undefined ? { fadeOutSec: prev.fadeOutSec } : {}),
+  });
+  return [];
 }
 
 /**
@@ -314,8 +432,13 @@ export function cutRange(tl: MultiTrackTimeline, fromFrame: number, toFrame: num
     }
   }
   tl.duration = f2s(tl, total - len);
+  absorbSlivers(tl);
   return [...touched];
 }
+
+/** The clips of one scene, serialized: two timelines render that scene alike when these are equal. */
+const sceneJson = (tl: MultiTrackTimeline, sceneId: number) => timelineToJson({ ...tl, tracks: tl.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.sceneId === sceneId) })) }, 0);
+const musicJson = (tl: MultiTrackTimeline) => timelineToJson({ ...tl, tracks: tl.tracks.filter((t) => t.kind === "music") }, 0);
 
 export class ProjectStore {
   private sessions = new Map<string, Session>();
@@ -333,14 +456,14 @@ export class ProjectStore {
     if (!loaded) throw new EditError(`project ${project} has no timeline yet - run the pipeline through the timeline step`, "not_found");
     // Older projects: create the v3 file so edits have a home.
     if (loaded.source === "v2") writeTimelineV3(dir, loaded.tl);
-    const s: Session = { dir, tl: loaded.tl, revision: (cur?.revision ?? 0) + 1, mtime: fs.statSync(file).mtimeMs, undo: [], redo: [], dirty: cur?.dirty ?? new Set() };
+    const s: Session = { dir, tl: loaded.tl, revision: (cur?.revision ?? 0) + 1, mtime: fs.statSync(file).mtimeMs, undo: [], redo: [], dirty: cur?.dirty ?? new Set(), audioDirty: cur?.audioDirty ?? false };
     this.sessions.set(project, s);
     return s;
   }
 
-  get(project: string): { revision: number; tl: MultiTrackTimeline; canUndo: boolean; canRedo: boolean; dirty: number[] } {
+  get(project: string): { revision: number; tl: MultiTrackTimeline; canUndo: boolean; canRedo: boolean; dirty: number[]; audioDirty: boolean } {
     const s = this.open(project);
-    return { revision: s.revision, tl: s.tl, canUndo: s.undo.length > 0, canRedo: s.redo.length > 0, dirty: [...s.dirty].sort((a, b) => a - b) };
+    return { revision: s.revision, tl: s.tl, canUndo: s.undo.length > 0, canRedo: s.redo.length > 0, dirty: [...s.dirty].sort((a, b) => a - b), audioDirty: s.audioDirty };
   }
 
   /** Applies edits atomically (all or nothing) on `baseRevision`; returns the new revision. */
@@ -355,6 +478,7 @@ export class ProjectStore {
     if (errors.length) throw new EditError(`edit rejected: ${errors.slice(0, 3).join("; ")}`);
     this.commit(s, next);
     for (const id of touched) s.dirty.add(id);
+    if (ops.some((o) => AUDIO_OPS.has(o.op))) s.audioDirty = true;
     return { revision: s.revision, touched: [...touched] };
   }
 
@@ -371,6 +495,7 @@ export class ProjectStore {
     const s = this.open(project);
     const out = [...s.dirty].sort((a, b) => a - b);
     s.dirty.clear();
+    s.audioDirty = false;
     return out;
   }
 
@@ -383,8 +508,9 @@ export class ProjectStore {
     if (!snap) throw new EditError(`nothing to ${dir}`);
     to.push(timelineToJson(s.tl, 0));
     const tl = timelineFromJson(snap);
-    // Undo / redo can touch any scene: mark the scenes whose pictures differ.
-    for (const sc of tl.scenes) if (timelineToJson({ ...tl, tracks: tl.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.sceneId === sc.id) })) }, 0) !== timelineToJson({ ...s.tl, tracks: s.tl.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.sceneId === sc.id) })) }, 0)) s.dirty.add(sc.id);
+    // Undo / redo can touch any scene or the music: mark what differs from the current state.
+    for (const sc of tl.scenes) if (sceneJson(tl, sc.id) !== sceneJson(s.tl, sc.id)) s.dirty.add(sc.id);
+    if (musicJson(tl) !== musicJson(s.tl)) s.audioDirty = true;
     this.write(s, tl);
     return s.revision;
   }

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { nameTrusted, photoNameTrustEnabled, readRetailSources } from "../lib/assets/photoTrust.js";
 import path from "node:path";
 import type { Asset, Assets } from "../lib/assets/types.js";
 import { paths } from "../lib/paths.js";
@@ -519,8 +520,12 @@ async function verifyProductPhotos(dir: string, channel: string, scenes: Scene[]
   const out = new Map<string, Set<string>>();
   const names = [...productRegions(scenes).keys()];
   if (!visionVerifyEnabled()) {
-    log("[photos] exact-model check unavailable (no ANTHROPIC_API_KEY / VISION_VERIFY=off): product photos are not used");
-    for (const n of names) out.set(n, new Set());
+    for (const n of names) {
+      const files = photoNameTrustEnabled() ? allProductPhotos(channel, n) : [];
+      const sources = files.length ? readRetailSources(path.dirname(files[0])) : {};
+      out.set(n, new Set(files.filter((f) => nameTrusted(f, n, sources))));
+    }
+    log(`[photos] exact-model check unavailable (no vision model / VISION_VERIFY=off): ${photoNameTrustEnabled() ? "using only photos whose Amazon / official listing names the model" : "product photos are not used"}`);
     return out;
   }
   for (const [k, n] of names.entries()) {
@@ -531,10 +536,15 @@ async function verifyProductPhotos(dir: string, channel: string, scenes: Scene[]
     const items = [];
     for (let i = 0; i < files.length; i += 4) items.push({ sceneId: 8000 + k * 100 + i, text: exactModelPrompt(n, category), before: "", cands: files.slice(i, i + 4).map((f) => ({ id: path.basename(f), frames: [f] })) });
     const v = await verifyCandidates(items, `${n} review`, path.join(dir, "vision_photos.json"), log);
+    const sources = readRetailSources(path.dirname(files[0]));
+    let byName = 0;
     files.forEach((f, i) => {
-      if (v.get(`${8000 + k * 100 + Math.floor(i / 4) * 4}|${path.basename(f)}`) === true) set.add(f);
+      const verdict = v.get(`${8000 + k * 100 + Math.floor(i / 4) * 4}|${path.basename(f)}`);
+      if (verdict === true) set.add(f);
+      // Never judged (vision crashed / too slow / off): the listing title must name the model.
+      else if (verdict === undefined && photoNameTrustEnabled() && nameTrusted(f, n, sources)) (set.add(f), byName++);
     });
-    log(`[photos] ${n}: ${set.size}/${files.length} product photo(s) confirmed as the exact model`);
+    log(`[photos] ${n}: ${set.size - byName}/${files.length} product photo(s) confirmed as the exact model${byName ? `, ${byName} more not checked by vision but named in their Amazon / official listing` : ""}`);
   }
   return out;
 }

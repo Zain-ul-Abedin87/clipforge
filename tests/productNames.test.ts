@@ -44,3 +44,22 @@ describe("one bad product does not break the others", () => {
     assert.deepEqual(needs.map((n) => n.product), ["Pelican R40"]);
   });
 });
+
+import { nameTrusted } from "../src/lib/assets/photoTrust.js";
+
+describe("product photos the vision check never judged", () => {
+  const src = {
+    "retail_a.jpg": { title: "Pelican R40 Personal Utility Ruck Case - Black", url: "https://m.media-amazon.com/images/I/x.jpg", source: "amazon.com" },
+    "retail_b.jpg": { title: "Pelican 1535 Air carry-on case", url: "https://m.media-amazon.com/images/I/y.jpg", source: "amazon.com" },
+    "retail_c.jpg": { title: "Best rucksack cases 2026", url: "https://example.com/z.jpg", source: "example.com" },
+  };
+  test("kept only when the listing names the brand and the model", () => {
+    assert.equal(nameTrusted("/p/retail_a.jpg", "Pelican R40 Personal Utility Ruck Case", src), true);
+    assert.equal(nameTrusted("/p/retail_b.jpg", "Pelican R40 Personal Utility Ruck Case", src), false, "another Pelican model");
+    assert.equal(nameTrusted("/p/retail_c.jpg", "Pelican R40 Personal Utility Ruck Case", src), false);
+    assert.equal(nameTrusted("/p/retail_unknown.jpg", "Pelican R40", src), false, "no source record");
+  });
+  test("official press-kit photos (brand's own page) count as they are", () => {
+    assert.equal(nameTrusted("/p/official_1.jpg", "Pelican R40", {}), true);
+  });
+});

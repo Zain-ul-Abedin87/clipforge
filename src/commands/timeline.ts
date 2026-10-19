@@ -29,6 +29,7 @@ import { cardPreset, pacingTarget, themeOf } from "../lib/stylePreset.js";
 import { placeChapterGraphics } from "../lib/render/productGraphics.js";
 import { parallaxStills, prepareSpecVisuals } from "../lib/render/specVisuals.js";
 import { reapplySwaps } from "../lib/sceneReview.js";
+import { captionFamily } from "../lib/fonts.js";
 
 export const FPS = 30;
 
@@ -227,7 +228,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     logo: logoOf(style),
     captions: {
       enabled: cap.enabled !== false,
-      font: "Arial",
+      // A family the bundled caption folder has (default Inter, the style's caption font).
+      font: captionFamily((style.fonts as { caption?: string } | undefined)?.caption),
       fontSize: Number(cap.fontSize ?? 54),
       maxWordsPerLine: Number(cap.maxWordsPerLine ?? 7),
       background: String(cap.background ?? "rgba(0,0,0,0.55)"),

@@ -28,6 +28,33 @@ Open http://localhost:4173, drop a voiceover, paste the script, pick the video t
 Claude cost so far and an estimated time. Change any scene's searches (✎ Edit searches in the Scenes list), then
 press **Approve plan & make video**. Untick "Show me the plan..." to run all 7 steps without stopping.
 
+## Linux, VPS and Docker
+
+The same code runs on Windows and Linux: FFmpeg / Python are found on PATH (or `FFMPEG_PATH`,
+`VENV_PYTHON`), captions and cards use the bundled fonts (`assets/fonts`: Inter; `cards/public/fonts`:
+Anton), and nothing needs a GPU:
+
+- `VIDEO_ENCODER=auto`: one tiny NVENC test encode decides; no usable NVENC -> libx264. NVENC that
+  starts failing mid-render is dropped for the rest of that render after 3 failures.
+- `WHISPER_DEVICE=auto`: CUDA when ctranslate2 sees a GPU, else CPU (int8).
+- `TTS_PROVIDER` empty: ElevenLabs, else OpenAI, else Piper (`PIPER_MODEL`), else the Windows voice
+  (Windows only).
+
+Docker (pinned static FFmpeg 7.1.1, Python 3.11, Node 22):
+
+```
+docker compose up -d --build        # Redis + web app (http://localhost:4173) + a render worker
+docker build -t clipforge .         # just the image
+docker run --rm -p 127.0.0.1:4173:4173 -v clipforge-data:/app/workspace clipforge
+docker run --rm -e REDIS_URL=redis://host:6379 clipforge worker --stages render
+docker run --rm clipforge doctor
+```
+Build args: `WITH_REMOTION=1` (animated cards; needs apt for Chromium's libraries), `WITH_CUDA=0`,
+`WITH_MANIM=0`, `WITH_PIPER=1`, `FFMPEG_IMAGE` (use an NVENC-capable FFmpeg image together with
+`WITH_CUDA=1` and `--gpus all` on a GPU host). Behind a TLS-inspecting proxy:
+`docker build --secret id=ca_bundle,src=/path/ca.pem .`. The web app has no login: keep the port
+on localhost or behind a reverse proxy that adds one.
+
 ## Input modes (A / B / C)
 
 - **Mode A - voiceover only:** Whisper's transcript (with glossary fixes) is the text; the audio is the timing.

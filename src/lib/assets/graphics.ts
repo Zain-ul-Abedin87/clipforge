@@ -5,6 +5,7 @@ import { run } from "../exec.js";
 import { paths } from "../paths.js";
 import type { Graphic } from "../scenes.js";
 import { ffmpegPath } from "../tools.js";
+import { findFont } from "../fonts.js";
 
 export interface CardStyle {
   primary: string;
@@ -18,21 +19,8 @@ export interface CardStyle {
 const W = 1920;
 const H = 1080;
 
-/** Font lookup: project assets/fonts first (e.g. Oswald-Bold.ttf), then Windows fallbacks. */
-function font(name: string | undefined, bold: boolean): string {
-  const dir = path.join(paths.root, "assets", "fonts");
-  if (name && fs.existsSync(dir)) {
-    const want = name.toLowerCase().replace(/\s+/g, "");
-    const files = fs.readdirSync(dir).filter((f) => /\.(ttf|otf)$/i.test(f) && f.toLowerCase().replace(/[\s-_]/g, "").startsWith(want));
-    const pick = files.find((f) => /bold|black|heavy/i.test(f) === bold) ?? files[0];
-    if (pick) return path.join(dir, pick);
-  }
-  const win = "C:/Windows/Fonts";
-  for (const f of bold ? ["arialbd.ttf", "segoeuib.ttf"] : ["arial.ttf", "segoeui.ttf"]) {
-    if (fs.existsSync(path.join(win, f))) return `${win}/${f}`;
-  }
-  return `${win}/arial.ttf`;
-}
+/** Font file for drawtext: bundled fonts only (lib/fonts.ts), so cards look the same on every OS. */
+const font = (name: string | undefined, bold: boolean): string => findFont(name, bold);
 
 /** FFmpeg filter-arg escaping for a path: forward slashes, escaped drive colon. */
 const fpath = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");

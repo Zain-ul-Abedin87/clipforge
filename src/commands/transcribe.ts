@@ -79,7 +79,8 @@ export async function transcribe(opts: TranscribeOpts): Promise<number> {
     "--out-dir", dir,
     "--glossary", glossary,
     "--model", model,
-    "--device", env("WHISPER_DEVICE", "cuda"),
+    // auto: CUDA when ctranslate2 sees a GPU, else CPU (python/transcribe.py).
+    "--device", env("WHISPER_DEVICE", "auto"),
     "--compute-type", env("WHISPER_COMPUTE_TYPE", "int8_float16"),
     "--models-dir", path.join(paths.root, "models"),
   ];

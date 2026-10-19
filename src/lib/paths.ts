@@ -10,6 +10,7 @@ export const paths = {
   workspace: path.join(ROOT, "workspace"),
   output: path.join(ROOT, "output"),
   python: path.join(ROOT, "python"),
-  venvPython: path.join(ROOT, ".venv", "Scripts", "python.exe"),
+  // Windows venvs keep the interpreter in Scripts\python.exe, POSIX ones in bin/python.
+  venvPython: process.platform === "win32" ? path.join(ROOT, ".venv", "Scripts", "python.exe") : path.join(ROOT, ".venv", "bin", "python"),
   envFile: path.join(ROOT, ".env"),
 };

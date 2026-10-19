@@ -15,6 +15,8 @@ import { CachedSegment, relativeCaptions, sceneContentHash, SegmentCache } from 
 import { concatInput, muxDuration, writeConcatList } from "../lib/compiler/concatDemuxer.js";
 import { compileTimeline, CompiledLayer, CompiledScene, CompiledTimeline, limitFrames, loadTimeline } from "../lib/compiler/timelineCompiler.js";
 import { toNumber } from "../domain/rational.math.js";
+import { captionFontsDir } from "../lib/fonts.js";
+import { EncoderPicker, resolveEncoder, type Encoder } from "../lib/encoder.js";
 
 export interface RenderOpts {
   project: string;
@@ -219,7 +221,8 @@ export function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[
     // Shift to absolute time so the subtitles filter picks this segment's lines, then shift back.
     tail.push(
       `setpts=PTS+${job.startSec.toFixed(4)}/TB`,
-      `subtitles='${fpath(job.assFile)}':fontsdir='${fpath("C:/Windows/Fonts")}'`,
+      // Bundled caption fonts (lib/fonts.ts): same look on Windows, Linux and in Docker.
+      `subtitles='${fpath(job.assFile)}':fontsdir='${fpath(captionFontsDir())}'`,
       "setpts=PTS-STARTPTS",
     );
   }
@@ -374,18 +377,19 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   if (cache.previous && changed.length && changed.length < jobs.length) log(`[render] scenes changed since the last render: ${changed.join(", ")}`);
   log(`[render] ${jobs.length} segments (${jobs.length - todo.length} reused from cache), ${(duration / 60).toFixed(1)} min`);
 
-  // The GPU on this laptop throws sporadic CUDA errors: retry NVENC once, then fall back to x264.
-  const encoders = new Map<string, "nvenc" | "x264">();
+  // NVENC only where it works (lib/encoder.ts: one probe encode; no GPU -> libx264 for everything).
+  // Sporadic CUDA errors: retry NVENC once per segment, after 3 failures the rest goes to x264.
+  const encoders = new Map<string, Encoder>();
   let done = 0;
   let fallbacks = 0;
-  const preferred = env("VIDEO_ENCODER", "h264_nvenc") === "libx264" ? "x264" : "nvenc";
+  const preferred: Encoder = todo.length ? await resolveEncoder(ff, log) : "x264";
+  const picker = new EncoderPicker(preferred, log);
   // RAM-careful: two parallel segments only when there is headroom (a 25-min test dipped to 0.3 GB
   // free with 2 at a time and ~3 GB free at start). RENDER_CONCURRENCY in .env overrides.
   const parallel = Number(env("RENDER_CONCURRENCY", "")) || (os.freemem() > 4.5 * 1024 ** 3 ? 2 : 1);
   log(`[render] ${parallel} segment(s) at a time (${gb(os.freemem())} GB RAM free)`);
   await pool(todo, parallel, async (job) => {
-    const tries: ("nvenc" | "x264")[] = preferred === "nvenc" ? ["nvenc", "nvenc", "x264"] : ["x264"];
-    for (const enc of tries) {
+    for (const enc of picker.tries()) {
       const tmp = job.out.replace(/\.mp4$/, ".part.mp4");
       const r = await run(ff, segmentArgs({ ...job, out: tmp }, enc));
       if (r.code === 0 && fs.existsSync(tmp)) {
@@ -396,6 +400,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
         break;
       }
       fs.rmSync(tmp, { force: true });
+      picker.failed(enc);
       log(`[render] scene ${job.scene.id} ${enc} failed: ${r.stderr.trim().split("\n").pop()?.slice(0, 160)}`);
     }
     done++;
@@ -415,7 +420,8 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   const list = writeConcatList(path.join(segDir, "concat.txt"), jobs.map((j) => ({ file: j.out, frames: j.frames })));
   const encOf = (out: string) => encoders.get(out) ?? (fs.existsSync(`${out}.enc`) ? fs.readFileSync(`${out}.enc`, "utf8").trim() : "nvenc");
   const segEncoders = new Set(jobs.map((j) => encOf(j.out)));
-  const mixed = fallbacks > 0 || segEncoders.size > 1;
+  // Stream copy needs one encoder for every segment; all-x264 (no GPU) copies like all-NVENC.
+  const mixed = segEncoders.size > 1;
 
   // Music bed: concatenate the channel's tracks once, then loop it under the voice.
   let bed: string | null = null;

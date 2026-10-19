@@ -11,6 +11,7 @@ import { env, hasKey } from "../../env.js";
 import { run } from "../../exec.js";
 import { ffmpegPath, venvPythonPath } from "../../tools.js";
 import { llm, llmAvailable } from "../llm/llm.js";
+import { filterPath, findFont } from "../../fonts.js";
 
 /**
  * Fallback technical diagrams for specs nobody films (battery chemistry, voltage, cooling, ANC).
@@ -176,10 +177,7 @@ export const FLOWS: Record<string, string[]> = {
 };
 
 const ffEscape = (s: string) => s.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\u2019").replace(/%/g, "\\%").replace(/,/g, "\\,");
-const fontFile = () => {
-  const win = "C:/Windows/Fonts/arialbd.ttf";
-  return fs.existsSync(win) ? win.replace(/:/g, "\\:") : "";
-};
+const fontFile = () => filterPath(findFont(undefined, true));
 
 /** lavfi graph for the template diagram: title, product tag, and steps that appear one by one with connecting bars. */
 export function templateGraph(req: Pick<DiagramRequest, "spec" | "product" | "seconds">): string {

@@ -54,8 +54,9 @@ describe("Phase 2: TTS (Mode B) and glossary pronunciations", () => {
     assert.equal(applyPronunciations("P3650 is not a match", o), "P3650 is not a match");
   });
 
-  test("no provider -> the computer's own voice; bad settings -> clear configuration error", () => {
+  test("no provider -> auto (Windows voice only on Windows); bad settings -> clear configuration error", () => {
     if (process.platform === "win32") assert.equal(resolveTtsConfig(envOf({})).provider, "windows");
+    else assert.throws(() => resolveTtsConfig(envOf({})), /No TTS voice is set up/);
     assert.throws(() => resolveTtsConfig(envOf({ TTS_PROVIDER: "robot" })), TtsConfigError);
     assert.throws(() => resolveTtsConfig(envOf({ TTS_PROVIDER: "elevenlabs" })), /ELEVENLABS_API_KEY/);
     assert.throws(() => resolveTtsConfig(envOf({ TTS_PROVIDER: "elevenlabs", ELEVENLABS_API_KEY: "k" })), /ELEVENLABS_VOICE_ID/);

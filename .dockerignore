@@ -1,0 +1,14 @@
+# Built inside the image or mounted as volumes; never copied from the host.
+.git
+.env
+.venv
+node_modules
+cards/node_modules
+cards/out
+workspace
+output
+cache
+models
+tools/bgutil/server/node_modules
+**/__pycache__
+*.log

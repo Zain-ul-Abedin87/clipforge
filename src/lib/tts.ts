@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { env } from "./env.js";
 import { run } from "./exec.js";
 import { applyPronunciations, loadPronunciations } from "./glossary.js";
-import { ffmpegPath } from "./tools.js";
+import { ffmpegPath, findOnPath } from "./tools.js";
 
 /**
  * Mode B (script only): the approved script is read by a real TTS engine. The script text is never
@@ -13,7 +13,11 @@ import { ffmpegPath } from "./tools.js";
  * the engine. Without a configured provider this throws TtsConfigError instead of faking a voice.
  */
 
-/** "windows" = the computer's built-in voice (System.Speech): the default when TTS_PROVIDER is empty. */
+/**
+ * TTS_PROVIDER empty = auto: ElevenLabs (key + voice set), else OpenAI (key set), else Piper (a
+ * PIPER_MODEL voice and the piper program), else the Windows built-in voice on Windows only.
+ * "windows" = System.Speech via PowerShell (robotic, for drafts; not available on Linux/Docker).
+ */
 export const TTS_PROVIDERS = ["elevenlabs", "openai", "piper", "windows"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
 
@@ -34,10 +38,9 @@ type EnvGet = (name: string, fallback?: string) => string;
 
 /** Reads TTS_PROVIDER and that provider's settings; throws TtsConfigError when anything is missing. */
 export function resolveTtsConfig(get: EnvGet = env): TtsConfig {
-  // Nothing set: the computer's own voice, as before (robotic, fine for tests and drafts).
-  const provider = get("TTS_PROVIDER").toLowerCase() || "windows";
+  const provider = get("TTS_PROVIDER").toLowerCase() || autoProvider(get);
   if (provider === "windows") {
-    if (process.platform !== "win32") throw new TtsConfigError("The default computer voice needs Windows; set TTS_PROVIDER to elevenlabs, openai or piper.");
+    if (process.platform !== "win32") throw new TtsConfigError("The Windows voice (TTS_PROVIDER=windows) needs Windows; set TTS_PROVIDER to elevenlabs, openai or piper.");
     const rate = Number(get("WINDOWS_TTS_RATE", "1"));
     return { provider, rate: Number.isFinite(rate) ? Math.max(-10, Math.min(10, Math.round(rate))) : 1 };
   }
@@ -66,11 +69,23 @@ export function resolveTtsConfig(get: EnvGet = env): TtsConfig {
       instructions: get("OPENAI_TTS_INSTRUCTIONS") || undefined,
     };
   }
-  const binary = need("PIPER_PATH", "path to the piper executable");
+  // PIPER_PATH, else `piper` on PATH (the Docker image installs it).
+  const binary = get("PIPER_PATH") || findOnPath("piper") || need("PIPER_PATH", "path to the piper executable");
   const model = need("PIPER_MODEL", "path to a piper .onnx voice");
   if (!fs.existsSync(binary)) throw new TtsConfigError(`PIPER_PATH does not exist: ${binary}`);
   if (!fs.existsSync(model)) throw new TtsConfigError(`PIPER_MODEL does not exist: ${model}`);
   return { provider: "piper", binary, model };
+}
+
+/** Cross-platform default when TTS_PROVIDER is empty: the first provider that is set up. */
+export function autoProvider(get: EnvGet = env, platform: NodeJS.Platform = process.platform): TtsProvider {
+  if (get("ELEVENLABS_API_KEY") && get("ELEVENLABS_VOICE_ID")) return "elevenlabs";
+  if (get("OPENAI_API_KEY")) return "openai";
+  if (get("PIPER_MODEL") && (get("PIPER_PATH") || findOnPath("piper"))) return "piper";
+  if (platform === "win32") return "windows";
+  throw new TtsConfigError(
+    "No TTS voice is set up. Add ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID, or OPENAI_API_KEY, or a free local Piper voice (PIPER_MODEL=/path/voice.onnx; the piper program on PATH or PIPER_PATH). Or upload a voiceover.",
+  );
 }
 
 /** Status for the UI / doctor, without throwing. */

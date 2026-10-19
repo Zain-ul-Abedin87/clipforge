@@ -1237,7 +1237,10 @@ export async function serve(port: number): Promise<void> {
       if (!res.headersSent) send(res, 500, { error: String(err?.message ?? err) });
     });
   });
-  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
-  console.log(`ClipForge web app: http://localhost:${port}  (Ctrl+C to stop)`);
+  // HOST=0.0.0.0 inside a container (the published port is the boundary). The app has no login:
+  // never expose it to the internet without a reverse proxy that adds one.
+  const host = env("HOST", "127.0.0.1");
+  await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  console.log(`ClipForge web app: http://localhost:${port}${host !== "127.0.0.1" ? ` (listening on ${host})` : ""}  (Ctrl+C to stop)`);
   await new Promise(() => {});
 }

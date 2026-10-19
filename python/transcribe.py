@@ -206,7 +206,7 @@ def main() -> int:
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--glossary")
     ap.add_argument("--model", default="large-v3-turbo")
-    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--device", default="auto", help="cuda | cpu | auto (CUDA when a GPU is visible)")
     ap.add_argument("--compute-type", default="int8_float16")
     ap.add_argument("--models-dir", required=True)
     ap.add_argument("--language", default="en")
@@ -220,6 +220,15 @@ def main() -> int:
     os.environ.setdefault("CT2_CUDA_ALLOCATOR", "cub_caching")
     add_cuda_dll_dirs()
     from faster_whisper import WhisperModel, decode_audio
+
+    if args.device == "auto":
+        # A Linux VPS / Docker container without a GPU: CPU (int8) instead of failing every chunk on CUDA.
+        try:
+            import ctranslate2
+            args.device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        except Exception:
+            args.device = "cpu"
+        emit("device", device=args.device)
 
     terms = load_glossary(args.glossary)
     # Whisper's prompt window is ~224 tokens; keep the glossary hint well under that.

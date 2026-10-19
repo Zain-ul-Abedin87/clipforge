@@ -3,6 +3,7 @@ import path from "node:path";
 import { run } from "../lib/exec.js";
 import { paths } from "../lib/paths.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
+import { filterPath, findFont } from "../lib/fonts.js";
 
 /** M0 gate: renders a 5-second 1920x1080 clip with h264_nvenc and verifies it with ffprobe. */
 export async function testNvenc(): Promise<number> {
@@ -20,8 +21,8 @@ export async function testNvenc(): Promise<number> {
     "-hide_banner", "-y",
     "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=5",
     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=5",
-    // Windows FFmpeg has no fontconfig default, so the font file must be explicit (colon escaped for the filter parser).
-    "-vf", "drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='ClipForge NVENC test':fontcolor=white:fontsize=72:x=(w-tw)/2:y=h-160:box=1:boxcolor=black@0.5",
+    // Windows FFmpeg has no fontconfig default, so the font file must be explicit (bundled, any OS).
+    "-vf", `drawtext=fontfile='${filterPath(findFont(undefined, false))}':text='ClipForge NVENC test':fontcolor=white:fontsize=72:x=(w-tw)/2:y=h-160:box=1:boxcolor=black@0.5`,
     "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "21", "-b:v", "0",
     "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "192k",

@@ -1,7 +1,32 @@
-# Local Redis for ClipForge's persistent queues (BullMQ), job state and per-host rate limits.
-#   docker compose up -d redis
-#   then in .env:  REDIS_URL=redis://localhost:6379
-# Without REDIS_URL the app keeps using workspace/queue.json and needs no Docker at all.
+# ClipForge on one Linux host: Redis + the web app (plan and sourcing workers inside) + one render
+# worker. All of them share the same data volumes (BullMQ moves jobs, not files).
+#   docker compose up -d --build            everything
+#   docker compose up -d redis              only Redis, for a local `npm run serve` with
+#                                           REDIS_URL=redis://localhost:6379 in .env
+#   docker compose up -d --scale render-worker=2   more renderers (CPU heavy: mind the cores)
+# Without REDIS_URL the app needs no Docker at all (workspace/queue.json).
+x-app: &app
+  build: .
+  image: clipforge:latest
+  init: true
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    REDIS_URL: redis://redis:6379
+  volumes:
+    - workspace:/app/workspace
+    - output:/app/output
+    - cache:/app/cache
+    - models:/app/models
+    # Your channel styles, logos and music (edit on the host):
+    - ./channels:/app/channels
+    - ./inputs:/app/inputs
+  depends_on:
+    redis:
+      condition: service_healthy
+
 services:
   redis:
     image: redis:7.4-alpine
@@ -19,5 +44,24 @@ services:
       timeout: 3s
       retries: 5
 
+  app:
+    <<: *app
+    # The web app has no login: publish it on localhost only (or behind a proxy that adds one).
+    ports:
+      - "127.0.0.1:4173:4173"
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_WORKERS: plan,sourcing
+
+  render-worker:
+    <<: *app
+    command: ["worker", "--stages", "render"]
+    healthcheck:
+      disable: true
+
 volumes:
   redis-data:
+  workspace:
+  output:
+  cache:
+  models:

@@ -4,6 +4,7 @@ import path from "node:path";
 import { run } from "../lib/exec.js";
 import { env } from "../lib/env.js";
 import { paths } from "../lib/paths.js";
+import { exeName } from "../lib/tools.js";
 
 // Official CTranslate2 conversions on Hugging Face. sha256 = the LFS object id of model.bin.
 const MODELS: Record<string, { repo: string; sha256: string }> = {
@@ -24,7 +25,7 @@ function sha256(file: string): Promise<string> {
 }
 
 /**
- * Downloads a Whisper model with curl.exe: resumable (-C -), retries on stalls, verifies sha256.
+ * Downloads a Whisper model with curl (curl.exe on Windows): resumable (-C -), retries on stalls, verifies sha256.
  * The huggingface_hub downloader hung repeatedly on this network; curl resumes where it stopped.
  */
 export async function fetchModel(name = env("WHISPER_MODEL", "large-v3-turbo")): Promise<number> {
@@ -43,7 +44,7 @@ export async function fetchModel(name = env("WHISPER_MODEL", "large-v3-turbo")):
 
   for (const f of SMALL_FILES) {
     if (fs.existsSync(path.join(dir, f))) continue;
-    const r = await run("curl.exe", [...curl, "-o", path.join(dir, f), `${base}/${f}`]);
+    const r = await run(exeName("curl"), [...curl, "-o", path.join(dir, f), `${base}/${f}`]);
     if (r.code !== 0) {
       console.error(`download failed: ${f}\n${r.stderr}`);
       return 1;
@@ -60,7 +61,7 @@ export async function fetchModel(name = env("WHISPER_MODEL", "large-v3-turbo")):
   for (let attempt = 1; attempt <= 200; attempt++) {
     const have = fs.existsSync(part) ? fs.statSync(part).size : 0;
     console.log(`[fetch-model] attempt ${attempt}: resuming at ${(have / 1024 / 1024).toFixed(0)} MB`);
-    const r = await run("curl.exe", [...curl, "-C", "-", "-o", part, `${base}/model.bin`]);
+    const r = await run(exeName("curl"), [...curl, "-C", "-", "-o", part, `${base}/model.bin`]);
     if (r.code === 0) break;
     // 33 = server refused the range, usually because the file is already complete.
     if (r.code === 33) break;

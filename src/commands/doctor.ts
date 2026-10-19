@@ -33,7 +33,7 @@ export async function doctor(): Promise<number> {
   checks.push(
     py
       ? { name: "Python", status: "ok", detail: `${await firstLine(py, ["--version"])}  (${py})` }
-      : { name: "Python", status: "fail", detail: "Python 3.11 not found (winget install Python.Python.3.11)" },
+      : { name: "Python", status: "fail", detail: `Python 3.11 not found (${process.platform === "win32" ? "winget install Python.Python.3.11" : "apt install python3 python3-venv"})` },
   );
 
   const venv = venvPythonPath();
@@ -55,7 +55,7 @@ export async function doctor(): Promise<number> {
         : { name: "NVENC encoders", status: "fail", detail: "ffmpeg build has no NVENC support" },
     );
   } else {
-    checks.push({ name: "FFmpeg", status: "fail", detail: "not found (winget install Gyan.FFmpeg)" });
+    checks.push({ name: "FFmpeg", status: "fail", detail: `not found (${process.platform === "win32" ? "winget install Gyan.FFmpeg" : "apt install ffmpeg, or set FFMPEG_PATH"})` });
   }
   checks.push(
     fp ? { name: "FFprobe", status: "ok", detail: fp } : { name: "FFprobe", status: "fail", detail: "not found" },

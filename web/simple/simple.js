@@ -330,6 +330,8 @@ async function showProject(name, keep = false) {
     $("#p-fill").className = "fill" + (allDone ? " done" : !j.running && j.failedStep ? " failed" : "");
     $("#p-pct").textContent = pct + "%";
     $("#st-progress").hidden = allDone;
+    $("#pStop").hidden = !j.running;
+    $("#pContinue").hidden = j.running || allDone || !!j.awaitingApproval || !!j.awaitingReview;
 
     const cur = STEPS.find(([k]) => state[k] === "running");
     if (j.running) {
@@ -387,6 +389,31 @@ async function showResult(name) {
   } else $("#qa-sum").textContent = "QA has not run yet.";
 }
 
+// ---------- stop / continue / delete (project page and My videos) ----------
+async function projectAction(name, what) {
+  if (what === "delete" && !confirm(`Delete "${name}"? Its folder and rendered video are removed for good.`)) return false;
+  const opts = what === "delete" ? { method: "DELETE" } : { method: "POST", body: "{}" };
+  try {
+    await api(`/api/projects/${encodeURIComponent(name)}${what === "delete" ? "" : "/" + what}`, opts);
+    return true;
+  } catch (err) {
+    alert(err.message);
+    return false;
+  }
+}
+$("#pStop").onclick = () => studio.name && projectAction(studio.name, "stop");
+$("#pContinue").onclick = async () => {
+  if (studio.name && (await projectAction(studio.name, "continue"))) showProject(studio.name, true);
+};
+$("#vlist").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  e.preventDefault();
+  b.disabled = true;
+  await projectAction(b.dataset.name, b.dataset.act);
+  showVideos();
+});
+
 // ---------- videos ----------
 async function showVideos() {
   $("#page-videos").hidden = false;
@@ -394,7 +421,12 @@ async function showVideos() {
   $("#vlist").innerHTML = list.map((p) => {
     const steps = p.steps || {};
     const [cls, txt] = p.running ? ["working", "Working"] : Object.values(steps).includes("failed") ? ["failed", "Failed"] : steps.qa === "done" ? ["ready", "Ready"] : ["", "Draft"];
-    return `<li><a href="#/project/${encodeURIComponent(p.name)}">${esc(p.name)}</a><span class="vmeta">${esc(p.niche || "")}<span class="badge ${cls}">${txt}</span></span></li>`;
+    const n = esc(p.name);
+    const acts = p.running
+      ? `<button class="btn ghost sm" data-act="stop" data-name="${n}">Stop</button>`
+      : `${p.continueFrom ? `<button class="btn ghost sm" data-act="continue" data-name="${n}" title="Continue from ${esc(p.continueFrom)}">Continue</button>` : ""}<button class="btn ghost sm danger" data-act="delete" data-name="${n}">Delete</button>`;
+    const label = !p.running && p.stoppedByUser ? ["", "Stopped"] : [cls, txt];
+    return `<li><a href="#/project/${encodeURIComponent(p.name)}">${n}</a><span class="vmeta" title="Niche: ${esc(p.niche || "default")}">${esc(p.niche || "")}<span class="badge ${label[0]}">${label[1]}</span>${acts}</span></li>`;
   }).join("") || "<li><span class='help'>No videos yet.</span></li>";
 }
 

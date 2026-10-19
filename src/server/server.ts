@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { env, hasKey, reloadEnv } from "../lib/env.js";
 import { paths } from "../lib/paths.js";
 import { listChannels, loadStyle } from "../lib/style.js";
@@ -69,8 +69,29 @@ interface Job {
   awaitingApproval?: boolean;
   /** Stopped after the timeline: waiting for the user to review scenes and press Render. */
   awaitingReview?: boolean;
+  /** The user pressed Stop: failedStep is where Continue picks up. */
+  stoppedByUser?: boolean;
 }
 const jobs = new Map<string, Job>();
+/** The step process each project is running here (Stop kills it); projects whose Stop was pressed. */
+const children = new Map<string, ChildProcess>();
+const stopAsked = new Set<string>();
+
+/** Ends a step process and everything it started (Python workers, FFmpeg). */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+  // Elsewhere: the step's Python workers read their requests from its pipes and exit with it.
+  else child.kill("SIGTERM");
+}
+
+/** Where Continue starts: the step that was stopped or failed, else the first step not done yet. */
+function continueFrom(name: string): Step | null {
+  const j = jobs.get(name);
+  if (j?.failedStep && (STEPS as readonly string[]).includes(j.failedStep)) return j.failedStep as Step;
+  const st = stepStatus(name);
+  return STEPS.find((x) => st[x] !== "done") ?? null;
+}
 
 // ---------- Job state persistence (Redis when REDIS_URL is set, else this process only) ----------
 let store: JobStore = new MemoryJobStore();
@@ -174,6 +195,8 @@ function summary(name: string) {
     inputMode: inputModeOf(name),
     steps: stepStatus(name),
     running: job?.running ?? false,
+    stoppedByUser: !job?.running && !!job?.stoppedByUser,
+    continueFrom: job?.running ? null : continueFrom(name),
   };
 }
 
@@ -248,6 +271,7 @@ async function runSteps(
   const prev = jobs.get(name);
   const job: Job = { running: true, step: null, failedStep: null, log: opts.continueLog && prev ? prev.log : [], startedAt: opts.continueLog && prev ? prev.startedAt : Date.now() };
   jobs.set(name, job);
+  if (!opts.continueLog) stopAsked.delete(name);
   hold(name);
   try {
     if (!opts.continueLog && dispatcher.kind === "local") persist(name, () => store.clearLog(name));
@@ -259,6 +283,10 @@ async function runSteps(
     };
 
     for (const step of steps) {
+      if (stopAsked.has(name)) {
+        Object.assign(job, { stoppedByUser: true, failedStep: step });
+        break;
+      }
       // Plan approval gate: footage is only fetched for a plan the user has approved.
       if (gate && step === "assets" && gateState(projDir(name), (readProject(name) ?? {}) as ProjectLike) === "waiting") {
         job.awaitingApproval = true;
@@ -276,6 +304,8 @@ async function runSteps(
           // Simple UI settings (web crawl on/off and mode) reach every step.
           env: { ...process.env, ...runEnv(loadAppSettings()) },
         });
+        children.set(name, child);
+        child.on("close", () => children.delete(name));
         let buf = "";
         const onData = (d: Buffer) => {
           buf += d.toString();
@@ -295,6 +325,10 @@ async function runSteps(
           resolve(1);
         });
       });
+      if (code !== 0 && stopAsked.has(name)) {
+        Object.assign(job, { stoppedByUser: true, failedStep: step });
+        break;
+      }
       if (code !== 0) {
         job.failedStep = step;
         push(step === "tts" && code === 2 ? "!!! tts: no TTS provider configured - see the message above (set TTS_PROVIDER in .env or upload a voiceover)" : `!!! ${step} failed (exit ${code})`);
@@ -314,7 +348,8 @@ async function runSteps(
     if (final || job.failedStep || stopped) {
       job.running = false;
       job.finishedAt = Date.now();
-      if (!stopped) push(job.failedStep ? "Stopped." : "All steps finished.");
+      if (job.stoppedByUser) push(`=== stopped by you during ${job.failedStep} === Press Continue to pick up from there.`);
+      else if (!stopped) push(job.failedStep ? "Stopped." : "All steps finished.");
     } else push("=== next stage queued ===");
     flushLog(name);
     saveJob(name, job);
@@ -896,6 +931,37 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!hasAudio) for (const f of Object.values(STEP_OUTPUT)) fs.rmSync(path.join(dir, f), { force: true });
     void runJob(name, hasAudio ? [...STEPS] : ["tts", ...STEPS], !!body.force, true, false);
     return send(res, 200, { ok: true, niche: nicheName, detectedCategory: detectMeta.category ?? null, nicheSource: detectMeta.source ?? null });
+  }
+
+  // Stop: ends the running step; finished steps keep their files, so Continue resumes from it.
+  if (action === "stop" && method === "POST") {
+    if (!jobs.get(name)?.running) return send(res, 400, { error: "nothing is running for this project" });
+    const child = children.get(name);
+    if (!child && dispatcher.kind === "bullmq") return send(res, 409, { error: "this project runs in a separate worker; stop that worker window instead" });
+    stopAsked.add(name);
+    if (child) killTree(child);
+    return send(res, 200, { ok: true });
+  }
+
+  if (action === "continue" && method === "POST") {
+    if (jobs.get(name)?.running) return send(res, 409, { error: "already running" });
+    if (!readProject(name)?.audio) return send(res, 400, { error: "upload audio first" });
+    const from = continueFrom(name);
+    if (!from) return send(res, 400, { error: "every step is already done" });
+    const steps = STEPS.slice(STEPS.indexOf(from));
+    void runJob(name, [...steps], false, true);
+    return send(res, 200, { ok: true, from, steps });
+  }
+
+  // Delete a project: its workspace folder and rendered video. Not while it runs.
+  if (!action && method === "DELETE") {
+    if (jobs.get(name)?.running) return send(res, 409, { error: "stop the project first" });
+    if (!fs.existsSync(projDir(name))) return send(res, 404, { error: "no such project" });
+    fs.rmSync(projDir(name), { recursive: true, force: true });
+    for (const f of [`${name}.mp4`]) fs.rmSync(path.join(paths.output, f), { force: true });
+    jobs.delete(name);
+    persist(name, () => store.clearLog(name));
+    return send(res, 200, { ok: true });
   }
 
   if (action === "run" && method === "POST") {

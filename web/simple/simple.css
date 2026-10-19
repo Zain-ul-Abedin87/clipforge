@@ -348,3 +348,5 @@ main.wide{max-width:1480px}
 .cc-style span{font-size:var(--fs-xs);color:var(--muted)}
 .cc-style:hover{border-color:var(--dim)}
 .cc-style.on{border-color:var(--accent);background:rgba(81,130,239,.1)}
+
+.btn.sm{padding:4px 10px;font-size:var(--fs-xs)} .btn.danger{color:var(--bad)}

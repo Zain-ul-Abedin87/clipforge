@@ -96,3 +96,26 @@ export async function productWebVideos(query: string, log: (m: string) => void):
     return [];
   }
 }
+
+/**
+ * Amazon listing videos (.mp4 / .m3u8 from the product page) whose listing title names the brand and
+ * model (`named`). Blocked / captcha / none: an empty list and one log line.
+ */
+export async function fetchListingVideoLinks(product: string, named: (title: string) => boolean, log: (m: string) => void): Promise<{ url: string; title: string }[]> {
+  if (env("AMAZON_VIDEOS", "on").toLowerCase() === "off") return [];
+  const py = venvPythonPath();
+  const script = path.join(paths.python, "product_web.py");
+  if (!py || !fs.existsSync(script)) return [];
+  await acquire("retail");
+  const r = await run(py, [script, "videos", product, "10"], { timeoutMs: 90_000 });
+  let j: { ok?: boolean; videos?: { url: string; title?: string; provider?: string }[]; errors?: string[] };
+  try {
+    j = JSON.parse(r.stdout.trim().split(/\r?\n/).pop() ?? "{}");
+  } catch {
+    j = {};
+  }
+  const vids = (j.videos ?? []).filter((v) => v.provider === "amazon" && /media-amazon/.test(v.url) && /\.(mp4|m3u8)(\?|$)/i.test(v.url));
+  const ok = vids.filter((v) => named(v.title ?? "")).map((v) => ({ url: v.url, title: v.title ?? "" }));
+  log(`[retail] ${product}: ${ok.length} Amazon listing video(s) name the model${vids.length > ok.length ? ` (${vids.length - ok.length} other listing(s) skipped)` : ""}${!vids.length && j.errors?.length ? ` - ${j.errors.join("; ").slice(0, 140)}` : ""}`);
+  return ok;
+}

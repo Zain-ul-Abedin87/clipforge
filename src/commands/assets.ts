@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { fetchRetailImages } from "../lib/assets/retailImages.js";
+import { fetchListingVideoLinks, fetchRetailImages } from "../lib/assets/retailImages.js";
+import { nameTrusted } from "../lib/assets/photoTrust.js";
+import { hasModelToken } from "../lib/productNames.js";
 import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
@@ -31,7 +33,7 @@ import { buildProductPools, exactModelPrompt, poolConfig, productRegions } from 
 import { INTENT_QUERIES, lineIntent, peopleCap } from "../lib/planner/lineIntent.js";
 import { readLedger, reusePenalty, writeLedger } from "../lib/assets/licenseLedger.js";
 import { ensureProductRecords, verifyModelMatch } from "../lib/productResearch.js";
-import { findVaultFor, listVaults, VaultItem, vaultCandidate, vaultPoolShots } from "../lib/agents/youtube/ytExtractor.js";
+import { findVaultFor, harvestListingVideos, listVaults, VaultItem, vaultCandidate, vaultPoolShots } from "../lib/agents/youtube/ytExtractor.js";
 import { autoFetchEnabled, diagramPoolShots, ensureFootage, readDiagrams } from "../lib/agents/autoFetch.js";
 import { readMicroPlan } from "../lib/planner/activeSubject.js";
 import type { SpecVisualTag } from "../domain/product.types.js";
@@ -276,6 +278,11 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const clips = findVaultFor(r.name)?.manifest.items.filter((i) => i.kind === "video").length ?? 0;
       if (clips >= minClips) continue;
       await fetchRetailImages(channel, r.name, harvestCategory, Number(env("RETAIL_IMAGES_WANT", "16")), log).catch((err) => log(`[retail] ${r.name}: skipped (${String(err).slice(0, 100)})`));
+      // Moving footage too: Amazon listing videos that name this model join its own vault.
+      if (!hasModelToken(r.model) || !r.manufacturer.trim()) continue;
+      const named = (title: string) => nameTrusted(`retail_v`, r.name, { retail_v: { title } });
+      const vids = await fetchListingVideoLinks(r.name, named, log).catch((err) => (log(`[retail] ${r.name}: Amazon videos skipped (${String(err).slice(0, 100)})`), []));
+      if (vids.length) await harvestListingVideos({ brand: r.manufacturer, model: r.model, category: harvestCategory, videos: vids, log }).catch((err) => log(`[harvest] ${r.name}: Amazon videos failed (${String(err).slice(0, 140)})`));
     }
   }
   if (exactOnly) log(`[assets] exact-model footage only (own uploads, press kit, model vault); generic stock is off (GENERIC_STOCK=on to allow it)`);

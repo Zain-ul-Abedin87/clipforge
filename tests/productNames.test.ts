@@ -63,3 +63,10 @@ describe("product photos the vision check never judged", () => {
     assert.equal(nameTrusted("/p/official_1.jpg", "Pelican R40", {}), true);
   });
 });
+
+import { AMAZON_CHANNEL, vaultLicense } from "../src/lib/agents/youtube/ytExtractor.js";
+
+test("Amazon listing clips carry their own licence text, not YouTube's", () => {
+  assert.match(vaultLicense({ channel: AMAZON_CHANNEL }, "Pelican"), /^Amazon product listing video/);
+  assert.match(vaultLicense({ channel: "Pelican Products" }, "Pelican"), /official brand channel/);
+});

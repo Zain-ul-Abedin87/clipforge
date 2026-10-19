@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { coreModel, hasModelToken } from "../../productNames.js";
 import fs from "node:fs";
@@ -323,6 +324,7 @@ export const vaultFile = (dir: string, item: VaultItem) => path.join(dir, item.f
 
 /** Licence text for the ledger: these are other people's videos (review / editorial use). */
 export function vaultLicense(item: Pick<VaultItem, "channel">, brand: string): string {
+  if (item.channel === AMAZON_CHANNEL) return "Amazon product listing video (seller / brand upload; editorial use, check rights before publishing)";
   const official = item.channel && normText(item.channel).includes(normText(brand)) ? "official brand channel" : "YouTube review / dealer video";
   return `YouTube - ${item.channel || "unknown channel"} (${official}; standard YouTube licence - editorial use, check rights before publishing)`;
 }
@@ -567,7 +569,7 @@ async function processWindows(ctx: HarvestContext, v: SearchHit, windows: Window
     const at = round(x.srcOffset + x.start);
     const base = {
       videoId: v.id, title: v.title, channel: v.channel, start: at, end: round(x.srcOffset + x.end),
-      url: `https://www.youtube.com/watch?v=${v.id}&t=${Math.floor(at)}s`, clipPositive: pos, clipNegative: neg, feature, width, height, profile: ctx.profile,
+      url: /youtu\.?be/.test(v.url) || !/^https?:/.test(v.url) ? `https://www.youtube.com/watch?v=${v.id}&t=${Math.floor(at)}s` : v.url, clipPositive: pos, clipNegative: neg, feature, width, height, profile: ctx.profile,
       ...(verticalWindows.has(x.windowFile) ? { vertical: true } : {}),
       ...(x.window.keyword ? { keyword: x.window.keyword } : {}), ...(x.window.caption ? { caption: x.window.caption } : {}),
       addedAt: new Date().toISOString(),
@@ -617,6 +619,44 @@ export async function harvestModel(o: HarvestOpts): Promise<HarvestResult> {
   }
   closeVault(ctx);
   log(`[harvest] ${brand} ${model}: +${added} shot(s) from ${videosUsed} video(s); ${ctx.manifest.stats.talkingHeads} talking-head and ${ctx.manifest.stats.offTopic} off-topic shot(s) rejected so far -> ${ctx.dir}`);
+  return { dir: ctx.dir, manifest: ctx.manifest, added, videosUsed };
+}
+
+/** Channel name stored on vault items cut from Amazon listing videos (licence text, review page). */
+export const AMAZON_CHANNEL = "Amazon listing";
+
+/**
+ * Amazon listing videos of this exact product (python/product_web.py: the .mp4 / .m3u8 on its
+ * product page) into the same vault as the YouTube clips: same windows, camera cuts, CLIP talking
+ * head / off-topic check and black-frame trim. The caller passes only videos whose listing title
+ * names the brand and model, so they count as this product's own footage.
+ */
+export async function harvestListingVideos(o: { brand: string; model: string; category?: string; videos: { url: string; title: string }[]; log?: (m: string) => void }): Promise<HarvestResult> {
+  const log = o.log ?? (() => {});
+  const brand = o.brand.trim();
+  const model = o.model.trim();
+  if (!brand || !model) throw new Error("brand and model are required");
+  const profile = (env("HARVEST_PROFILE", "machine") === "handson" ? "handson" : "machine") as ScoringProfile;
+  const ctx = openVault(brand, model, (o.category ?? "product").trim(), [], log, false, profile);
+  let added = 0;
+  let videosUsed = 0;
+  for (const v of o.videos.slice(0, num("AMAZON_VIDEOS_MAX", 3))) {
+    const id = `amz_${crypto.createHash("sha1").update(v.url).digest("hex").slice(0, 10)}`;
+    const meta = await py("info", { url: v.url }, 2 * 60_000);
+    const duration = Number(meta.duration) || 0;
+    if (!duration) {
+      log(`[harvest] Amazon video skipped (no length: ${String(meta.error ?? "unreadable").slice(0, 100)})`);
+      continue;
+    }
+    // Listing videos are short product promos: no intro to skip, windows cover most of the clip.
+    const windows = planWindows(duration, [], [], { count: Math.max(1, Math.min(4, Math.floor(duration / 15))), seconds: Math.min(20, duration) });
+    log(`[harvest] Amazon listing video "${v.title.slice(0, 70)}" (${Math.round(duration)} s): ${windows.length} window(s)`);
+    const n = await processWindows(ctx, { id, url: v.url, title: v.title, duration, channel: AMAZON_CHANNEL }, windows);
+    added += n;
+    if (n) videosUsed++;
+  }
+  closeVault(ctx);
+  log(`[harvest] ${brand} ${model}: +${added} shot(s) from ${videosUsed} Amazon video(s) -> ${ctx.dir}`);
   return { dir: ctx.dir, manifest: ctx.manifest, added, videosUsed };
 }
 

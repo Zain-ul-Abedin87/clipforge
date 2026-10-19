@@ -104,7 +104,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     // Spec chips come from web research saved in the press kit.
     specs: specFingerprint(channel, readJson<Scene[]>(files[0])),
     logo: JSON.stringify(logoOf(style)) + fingerprint(logoOf(style)?.path),
-    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-3-ledger",
+    pacing: JSON.stringify(pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off")) + "pace-4-random",
     pool: fingerprint(path.join(dir, "product_pool.json")) + fingerprint(path.join(dir, "product_pool_status.json")),
     aligned: fingerprint(path.join(dir, "aligned.json")),
   };
@@ -159,8 +159,9 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   // Channel preset overrides the niche shot length; every chapter start gets the opening pace.
   pace.targetShotSec = pacingTarget(style) ?? pace.targetShotSec;
   pace.chapterStarts = chapters.filter((c) => c.product).map((c) => c.start);
-  if (pace.enabled && fs.existsSync(path.join(dir, "aligned.json"))) {
-    const words = readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words;
+  if (pace.enabled) {
+    // Word timings only snap cuts to speech; without aligned.json the scenes are still cut.
+    const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words : [];
     const nicheCfg = loadProjectNiche(project, style) as unknown as { productPool?: { mix?: Record<string, number>; rankCardAtSec?: [number, number] } };
     const niche = loadProjectNiche(project, style);
     const pool = await filterPoolByShotQa(readProductPool(dir), poolConfig(niche).category, log);

@@ -15,7 +15,7 @@ import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from
 import type { Scene, Section } from "../lib/scenes.js";
 import { agentEnabled, agentModel, broadenFootage, planFootage, ScenePlan, webFallbackKeyword } from "../lib/agent/footage.js";
 import { planSubjects, vetCandidates, VetItem } from "../lib/agent/editor.js";
-import { fetchFromWeb, readWebMeta, webCrawlerReady, webCrawlsLeft, webLicense } from "../lib/assets/webCrawler.js";
+import { fetchFromWeb, readWebMeta, webClipSeconds, webCrawlerReady, webCrawlsLeft, webLicense } from "../lib/assets/webCrawler.js";
 import { researchProduct, webResearchEnabled } from "../lib/agent/webResearch.js";
 import { setStoryblocksIds, storyblocksExhausted, storyblocksReady } from "../lib/assets/storyblocks.js";
 import { importOfficial } from "../lib/assets/official.js";
@@ -215,7 +215,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     if (!q || isBlocked(niche, q)) return null;
     const len = scene.end - scene.start;
     log(`[web_cc] scene ${scene.id}: ${why}; searching the web for CC footage of "${q}"`);
-    const file = await fetchFromWeb(q, webDir, String(scene.id), { seconds: Math.min(12, Math.max(5, Math.ceil(len + 0.5))), log });
+    const file = await fetchFromWeb(q, webDir, String(scene.id), { seconds: webClipSeconds(len), log });
     const meta = file ? readWebMeta(file) : null;
     if (!file || !meta) return null;
     if (isBlocked(niche, meta.title)) {

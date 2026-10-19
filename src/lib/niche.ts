@@ -20,7 +20,7 @@ export interface Niche {
    * QA limits: share of running time that may be still images/cards before warn / fail; how an
    * unverified product model counts; how often one clip may appear in a video.
    */
-  qa?: { stillWarn?: number; stillFail?: number; unverifiedProduct?: "warn" | "fail"; maxClipUses?: number };
+  qa?: { stillWarn?: number; stillFail?: number; unverifiedProduct?: "warn" | "fail"; maxClipUses?: number; maxShotSec?: number };
   /** Exact-model rules for product media (src/lib/productResearch.ts). */
   productMatch?: { strict?: boolean; requireManufacturer?: boolean; requireModel?: boolean; requireVariant?: boolean; onConflict?: "reject" | "manual_review"; onUnverified?: "manual_review" | "accept"; variantWords?: string[] };
   /** Background music for this video type; false switches it off even when the channel enables it. */

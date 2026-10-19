@@ -23,6 +23,9 @@ export interface GateCheck {
 interface ShotLike {
   path: string;
   kind: string;
+  in?: number;
+  frames?: number;
+  variant?: string;
 }
 export interface GateScene {
   id: number;
@@ -65,6 +68,46 @@ export function checkClipReuse(scenes: GateScene[], maxUses = 4): GateCheck {
     name: `Clip reuse (max ${maxUses} scenes per clip)`,
     status: over.length ? "fail" : "pass",
     detail: over.length ? over.slice(0, 6).map(([p, ids]) => `${path.basename(p)} in ${ids.length} scenes (#${ids.join(", #")})`).join("; ") : `${uses.size} distinct clip(s)`,
+  };
+}
+
+/**
+ * The same frames shown twice (same file, same in-point, same mirror/crop) read as a loop even when
+ * the clip is in few scenes. Stills and cards do not count.
+ */
+export function checkExactRepeats(scenes: GateScene[]): GateCheck {
+  const seen = new Map<string, number>();
+  const dup: string[] = [];
+  for (const s of scenes) {
+    if (s.asset.source === "graphic") continue;
+    for (const x of shotsOf(s)) {
+      if (x.kind !== "video") continue;
+      const k = `${x.path}|${Math.round((x.in ?? 0) * 4) / 4}|${x.variant ?? ""}`;
+      const first = seen.get(k);
+      if (first === undefined) seen.set(k, s.id);
+      else dup.push(`${path.basename(x.path)} @${(x.in ?? 0).toFixed(2)}s in #${first} and #${s.id}`);
+    }
+  }
+  return {
+    group: "Assets",
+    name: "No clip moment shown twice",
+    status: dup.length ? "fail" : "pass",
+    detail: dup.length ? dup.slice(0, 6).join("; ") + (dup.length > 6 ? ` (+${dup.length - 6} more)` : "") : "every shown moment is unique",
+  };
+}
+
+/** Footage shots longer than `maxSec` (pacing sub-shots carry their frame count). */
+export function checkShotLength(scenes: GateScene[], maxSec = 4, fps = 30): GateCheck {
+  const long: string[] = [];
+  for (const s of scenes) {
+    if (s.asset.source === "graphic") continue;
+    for (const x of s.asset.shots ?? []) if (x.frames && x.frames > Math.round(maxSec * fps) + 1) long.push(`#${s.id} ${(x.frames / fps).toFixed(1)}s`);
+  }
+  return {
+    group: "Assets",
+    name: `Shot length (max ${maxSec} s)`,
+    status: long.length ? "warn" : "pass",
+    detail: long.length ? long.slice(0, 8).join(", ") + (long.length > 8 ? ` (+${long.length - 8} more)` : "") : "every cut-up shot is within the limit",
   };
 }
 
@@ -149,6 +192,8 @@ export async function preflightChecks(
   return [
     await checkAssetFiles(ctx.timelineScenes, probe),
     checkClipReuse(ctx.timelineScenes, ctx.niche.qa?.maxClipUses ?? 4),
+    checkExactRepeats(ctx.timelineScenes),
+    checkShotLength(ctx.timelineScenes, ctx.niche.qa?.maxShotSec ?? 4),
     checkProductMatches(ctx.scenes, ctx.assets, ctx.niche, readVerifications(dir)),
     checkLicenseRecords(ctx.scenes, ctx.assets, ctx.ledger),
     checkDiscrepancies(discrepancies),

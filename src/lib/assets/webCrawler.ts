@@ -25,6 +25,15 @@ export interface WebClipMeta {
   keyword: string;
 }
 
+/**
+ * Seconds to cut for a scene of `len` s: the whole scene plus a margin, so the pacing engine can
+ * show 2-4 s pieces from different moments and the renderer never runs past the end of the file
+ * (it would loop the clip). The crawler caps a piece at 30 s.
+ */
+export function webClipSeconds(len: number): number {
+  return Math.min(30, Math.max(5, Math.ceil(len + 1)));
+}
+
 /** Per-run budget: each crawl reads several pages and downloads video over a slow link. */
 const maxCrawls = () => Number(env("WEBCC_MAX_CRAWLS", "8")) || 8;
 const timeoutMs = () => Number(env("WEBCC_TIMEOUT_MS", "120000")) || 120_000;

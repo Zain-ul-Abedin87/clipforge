@@ -12,7 +12,8 @@
     "doctor": "tsx src/cli.ts doctor",
     "test:nvenc": "tsx src/cli.ts test-nvenc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts",
+    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts tests/pacing.test.ts",
+    "test:py": "python -m unittest discover -s tests -p \"test_*.py\"",
     "serve": "tsx src/cli.ts serve --port 4173"
   },
   "engines": {

@@ -60,6 +60,55 @@ export interface PacingConfig {
   laterFactor: number;
   /** Chapter (product) starts: the first few seconds after each get the opening pace too. */
   chapterStarts?: number[];
+  /**
+   * Random shot lengths (seconds) picked per sub-shot instead of the even target split, e.g.
+   * [2, 3, 4]. Seeded by the scene start, so a re-render cuts the same way. Empty = target mode.
+   */
+  shotChoices?: number[];
+}
+
+/** Small deterministic PRNG (mulberry32): same seed, same cuts, so the render cache stays valid. */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Splits `len` seconds into pieces drawn at random from `choices` (e.g. 2 / 3 / 4 s). Every piece
+ * stays within [min(choices), max(choices)]: a pick is only allowed when the rest can still be
+ * filled, and the last piece takes the remainder. Scenes shorter than the largest choice stay whole.
+ */
+export function randomPieces(len: number, choices: number[], rand: () => number): number[] {
+  const c = [...new Set(choices.filter((x) => x > 0))].sort((a, b) => a - b);
+  if (!c.length || len <= c[c.length - 1] + 1e-6) return [len];
+  const lo = c[0];
+  const hi = c[c.length - 1];
+  const out: number[] = [];
+  let left = len;
+  while (left > hi + 1e-6) {
+    // The remainder after this pick must be one valid piece (>= lo) or splittable further.
+    const ok = c.filter((x) => left - x >= lo - 1e-6);
+    const pick = ok.length ? ok[Math.floor(rand() * ok.length)] : lo;
+    out.push(pick);
+    left -= pick;
+  }
+  if (left > 1e-6) out.push(left);
+  // A remainder below the smallest choice is merged into a neighbour that has room under `hi`.
+  const last = out[out.length - 1];
+  if (out.length > 1 && last < lo - 1e-6) {
+    const k = out.findIndex((x, i) => i < out.length - 1 && x + last <= hi + 1e-6);
+    if (k >= 0) {
+      out[k] += last;
+      out.pop();
+    }
+  }
+  return out;
 }
 
 /** Target shot length at time t (s). */
@@ -84,14 +133,29 @@ export function sentenceType(text: string, isFirstOfProduct: boolean): SentenceT
 export function pacingConfig(niche: Niche, envOff: boolean): PacingConfig {
   const p = ((niche as unknown as { pacing?: Partial<PacingConfig> }).pacing ?? {}) as Partial<PacingConfig>;
   return {
-    enabled: !envOff && p.enabled === true,
+    // On unless the niche switches it off: without it a scene shows one clip for its full length.
+    enabled: !envOff && p.enabled !== false,
     targetShotSec: p.targetShotSec ?? 2.8,
     minShotSec: p.minShotSec ?? 1.4,
     maxShotSec: p.maxShotSec ?? 4,
     openingSec: p.openingSec ?? 30,
     openingFactor: p.openingFactor ?? 1,
     laterFactor: p.laterFactor ?? 1,
+    shotChoices: shotChoicesFor(p),
   };
+}
+
+/**
+ * Random 2 / 3 / 4 s cutting for niches without a tuned pacing block (general, documentary, ...),
+ * where scenes used to hold one clip for 5-12 s. Niches tuned from the channel study keep their
+ * target pacing unless they list `shotChoices`. SHOT_CHOICES="2,3,4" overrides; "off" disables.
+ */
+function shotChoicesFor(p: Partial<PacingConfig>): number[] {
+  const raw = env("SHOT_CHOICES", "").trim().toLowerCase();
+  if (raw === "off") return [];
+  if (raw) return raw.split(/[,\s]+/).map(Number).filter((x) => Number.isFinite(x) && x > 0);
+  if (p.shotChoices) return p.shotChoices;
+  return p.targetShotSec === undefined ? [2, 3, 4] : [];
 }
 
 export interface Word {
@@ -103,6 +167,7 @@ export interface Word {
 /** Cut times (absolute seconds, excluding scene start/end) snapped to word starts. */
 export function cutTimes(start: number, end: number, words: Word[], cfg: PacingConfig, carry?: { v: number }): number[] {
   const len = end - start;
+  if (cfg.shotChoices?.length) return randomCuts(start, end, words, cfg.shotChoices);
   const target = targetAt(cfg, (start + end) / 2);
   // carry: rounding error from earlier scenes, so ~4 s scenes average out to the target over the video.
   let n = Math.max(1, Math.round((len + (carry?.v ?? 0)) / target + (start < cfg.openingSec ? 0.1 : 0)));
@@ -121,6 +186,30 @@ export function cutTimes(start: number, end: number, words: Word[], cfg: PacingC
     cuts.push(Math.round(t * 1000) / 1000);
     prev = t;
   }
+  return cuts;
+}
+
+/**
+ * Cut times for random-length shots (cfg.shotChoices). A cut moves to a nearby word start (within
+ * 0.35 s) only when both pieces around it stay inside the allowed range, so the maximum holds.
+ */
+export function randomCuts(start: number, end: number, words: Word[], choices: number[]): number[] {
+  const pieces = randomPieces(end - start, choices, seededRandom(Math.round(start * 1000) + 1));
+  if (pieces.length < 2) return [];
+  const lo = Math.min(...choices);
+  const hi = Math.max(...choices);
+  // Fixed ideal boundaries; snapping moves one cut and is checked against both fixed neighbours.
+  const ideal = pieces.slice(0, -1).map((_, k) => start + pieces.slice(0, k + 1).reduce((a, b) => a + b, 0));
+  const cuts: number[] = [];
+  ideal.forEach((t, k) => {
+    const prev = cuts.length ? cuts[cuts.length - 1] : start;
+    const next = k + 1 < ideal.length ? ideal[k + 1] : end;
+    const snap = words
+      .map((w) => w.start)
+      .filter((w) => Math.abs(w - t) <= 0.35 && w - prev >= lo && w - prev <= hi && next - w <= hi && next - w >= lo)
+      .sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];
+    cuts.push(Math.round((snap ?? t) * 1000) / 1000);
+  });
   return cuts;
 }
 
@@ -173,6 +262,26 @@ export class ShotLedger {
 
 const STILL = 1e6;
 
+/**
+ * In-point for a forced repeat: inside [0, dur - need] (never past the file's end, where the
+ * renderer would loop), as far as possible from every start already shown. Unknown length: `fallback`.
+ */
+export function farthestIn(ledger: ShotLedger, key: string, dur: number | undefined, need: number, fallback: number): number {
+  if (!dur || dur < need) return Math.max(0, Math.min(fallback, (dur ?? need) - need));
+  const starts = ledger.used.filter((u) => u.key === key).map((u) => u.a);
+  if (!starts.length) return Math.min(fallback, dur - need);
+  let best = 0;
+  let bestD = -1;
+  for (let t = 0; t + need <= dur + 0.01; t += 0.25) {
+    const d = Math.min(...starts.map((x) => Math.abs(x - t)));
+    if (d > bestD) {
+      bestD = d;
+      best = Math.round(t * 100) / 100;
+    }
+  }
+  return best;
+}
+
 export function applyPacing(
   tl: TlScene[],
   scenes: Scene[],
@@ -222,7 +331,9 @@ export function applyPacing(
   const generic = new Map<string, { path: string; duration: number; source: string }>();
   tl.forEach((t, i) => {
     const a = t.asset;
-    if (a.kind === "video" && a.source !== "graphic" && !productOf.has(scenes[i].id)) generic.set(sourceKey(a.path), { path: a.path, duration: a.duration ?? 8, source: a.source });
+    // Only clips with a known length: a guessed one lets windows run past the file's end, where the
+    // renderer's -stream_loop starts the clip over (a visible repeat).
+    if (a.kind === "video" && a.source !== "graphic" && a.duration && !productOf.has(scenes[i].id)) generic.set(sourceKey(a.path), { path: a.path, duration: a.duration, source: a.source });
   });
 
   // Pre-register what cards already show (product photos under side-panel cards).
@@ -430,12 +541,19 @@ export function applyPacing(
         s = genericPick(need, sc.id);
         if (s) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
       }
+      // Before any repeat: a later, unused moment of the scene's own clip, even right after itself
+      // (a jump forward in the same footage reads as a cut; the same frames twice read as a loop).
+      if (!s && !product && a.kind === "video" && !t.backdrop && a.duration) s = clipPick(a.path, a.duration, a.source, need, (a.in ?? 0) + k * need, sc.id);
       if (!s) {
-        // Nothing unused left: reuse (logged, QA reports it).
+        // Nothing unused left: reuse (logged, QA reports it), at the in-point farthest from the
+        // moments already shown and with a mirror / punch-in so it is not the same picture again.
         const key = sourceKey(a.path);
         ledger.forced.push(`scene ${sc.id} sub-shot ${k + 1}: ${a.path.split(/[\\/]/).pop()}`);
-        s = { path: a.path, kind: a.kind, in: a.in ?? 0, frames: 0, source: a.source, key, srcIn: a.in ?? 0, reused: true };
-        ledger.take(key, a.in ?? 0, a.kind === "image" ? STILL : (a.in ?? 0) + need, sc.id);
+        const at = a.kind === "video" ? farthestIn(ledger, key, a.duration, need, a.in ?? 0) : 0;
+        const n = ledger.used.filter((u) => u.key === key).length;
+        const variant = a.kind === "video" ? (["mirror", "punch", "mirror_punch"] as const)[n % 3] : undefined;
+        s = { path: a.path, kind: a.kind, in: at, frames: 0, source: a.source, key, srcIn: at, reused: true, ...(variant ? { variant } : {}) };
+        ledger.take(key, at, a.kind === "image" ? STILL : at + need, sc.id);
       }
       s.frames = f;
       if (s.source === "web_crawl" && s.product) poolShots++;

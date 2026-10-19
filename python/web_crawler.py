@@ -31,7 +31,10 @@ import tempfile
 import time
 import unicodedata
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+from urllib.robotparser import RobotFileParser
 
 try:
     import yt_dlp
@@ -108,7 +111,7 @@ def sanitize(keyword: str) -> str:
     text = unicodedata.normalize("NFKC", keyword or "")
     text = re.sub(r"\b\w+:\S+", " ", text)  # site:x.com, filetype:mp4, intitle:x ...
     text = re.sub(r"[^\w\s-]", " ", text, flags=re.UNICODE).replace("_", " ")
-    text = re.sub(r"(^|\s)-+", " ", text)  # leading minus = exclusion operator
+    text = re.sub(r"(^|\s)-+\S*", " ", text)  # "-word" excludes it: drop the word, never search for it
     words = [w for w in text.lower().split() if w.strip("-")]
     return " ".join(words[:8])[:120]
 
@@ -198,7 +201,7 @@ def search(keyword: str, deadline: float) -> list[dict]:
                 seen.add(url)
                 hits.append({"url": url, "title": r.get("title") or "", "publisher": r.get("publisher") or ""})
             if len(hits) >= MAX_HITS:
-                return hits
+                return interleave(hits)
         if hits:
             return interleave(hits)
     return interleave(hits)
@@ -233,6 +236,69 @@ def licence_ok(lic: str) -> bool:
         return True
     return any(k in s for k in ("creative commons", "creativecommons", "cc by", "cc0",
                                 "public domain", "publicdomain", "pdm", "attribution"))
+
+
+USER_AGENT = "ClipForge-web_cc/1.0 (+https://github.com/Zain-ul-Abedin87/clipforge)"
+_robots: dict[str, "RobotFileParser | None"] = {}
+_last_hit: dict[str, float] = {}
+
+
+def robots_allowed(url: str, fetch=None) -> bool:
+    """
+    robots.txt check per host (cached for the run), after RFC 9309: a 4xx robots.txt means no rules;
+    a site that cannot be reached is allowed with a log line (the proxy, not the site, is the usual
+    cause). WEBCC_ROBOTS=off skips the check. `fetch(url) -> (status, text)` is injectable for tests.
+    """
+    if os.environ.get("WEBCC_ROBOTS", "on").strip().lower() == "off":
+        return True
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.hostname:
+        return False
+    base = f"{parts.scheme}://{parts.netloc}"
+    if base not in _robots:
+        try:
+            status, text = (fetch or _fetch_robots)(base + "/robots.txt")
+        except Exception as e:
+            log(f"robots.txt of {parts.hostname} unreachable ({type(e).__name__}); allowed")
+            status, text = 404, ""
+        rp = RobotFileParser()
+        if 200 <= status < 300:
+            rp.parse(text.splitlines())
+        elif status >= 500:
+            rp.disallow_all = True  # RFC 9309: server error = assume complete disallow
+        else:
+            rp.allow_all = True
+        _robots[base] = rp
+    return _robots[base].can_fetch(USER_AGENT, url)
+
+
+def _fetch_robots(url: str) -> tuple[int, str]:
+    req = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(req, timeout=8) as r:
+            return r.status, r.read(512 * 1024).decode("utf-8", "replace")
+    except HTTPError as e:
+        return e.code, ""
+
+
+def host_pause(url: str, gap: float | None = None, sleep=time.sleep, clock=time.monotonic) -> None:
+    """At most one page probe per host every WEBCC_HOST_DELAY s (default 1.5), on top of yt-dlp's own sleeps."""
+    gap = float(os.environ.get("WEBCC_HOST_DELAY", "1.5")) if gap is None else gap
+    host = urlsplit(url).hostname or ""
+    wait = _last_hit.get(host, -1e9) + gap - clock()
+    if wait > 0:
+        sleep(wait)
+    _last_hit[host] = clock()
+
+
+def cached_ok(out: Path, meta_file: Path, seconds: float) -> bool:
+    """A clip from an earlier run is reused only when it is at least as long as this scene needs."""
+    if not (out.exists() and meta_file.exists() and out.stat().st_size > 10_000):
+        return False
+    try:
+        return float(json.loads(meta_file.read_text(encoding="utf-8")).get("duration") or 0) >= seconds - 0.05
+    except (OSError, ValueError):
+        return False
 
 
 class QuietLogger:
@@ -434,9 +500,10 @@ def main() -> int:
 
     out = workdir / f"web_{scene}_{hashlib.sha1(keyword.encode()).hexdigest()[:10]}.mp4"
     meta_file = out.with_suffix(".json")
-    if out.exists() and meta_file.exists() and out.stat().st_size > 10_000:
+    if cached_ok(out, meta_file, seconds):
         print(f"SUCCESS:{out}", flush=True)
         return 0
+    meta_file.unlink(missing_ok=True)  # too short for this scene: cut a new one
 
     try:
         hits = search(keyword, deadline)
@@ -445,6 +512,10 @@ def main() -> int:
             if time.monotonic() > deadline:
                 log("deadline reached")
                 break
+            if not robots_allowed(hit["url"]):
+                log(f"skip {hit['url']}: disallowed by robots.txt")
+                continue
+            host_pause(hit["url"])
             meta = try_candidate(hit, out, seconds, args.ffmpeg or None, workdir)
             if meta:
                 meta["keyword"] = keyword

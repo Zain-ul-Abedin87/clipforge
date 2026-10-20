@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
-import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { batchSize, llm, llmAvailable, splitWhenTooBig } from "../agents/llm/llm.js";
 import { LlmCache } from "../llmCache.js";
 
 /**
@@ -66,14 +66,22 @@ export async function planSubjects(
   }
   if (todo.length) {
     try {
-      const res = await client().messages.parse({
-        model: agentModel(),
-        max_tokens: 16000,
-        output_config: outputConfig(SubjectsSchema),
-        system: SUBJECTS,
-        messages: [{ role: "user", content: JSON.stringify({ topic, products, scenes: todo.map((s) => ({ id: s.id, text: s.text })) }) }],
-      });
-      const rows = new Map((res.parsed_output?.scenes ?? []).map((r) => [r.id, { subject: products.find((p) => p.toLowerCase() === r.subject.toLowerCase()) ?? null, shot: r.shot }]));
+      // Chunks a local model's context holds; one it cannot take is halved (splitWhenTooBig).
+      const ask = async (part: typeof todo) => {
+        const res = await client().messages.parse({
+          model: agentModel(),
+          max_tokens: 16000,
+          output_config: outputConfig(SubjectsSchema),
+          system: SUBJECTS,
+          messages: [{ role: "user", content: JSON.stringify({ topic, products, scenes: part.map((s) => ({ id: s.id, text: s.text })) }) }],
+        });
+        return [res];
+      };
+      const size = batchSize(400);
+      const answers = [];
+      for (let i = 0; i < todo.length; i += size) answers.push(...(await splitWhenTooBig(todo.slice(i, i + size), ask, log)));
+      const res = { usage: { input_tokens: answers.reduce((a, r) => a + r.usage.input_tokens, 0), output_tokens: answers.reduce((a, r) => a + r.usage.output_tokens, 0) } };
+      const rows = new Map(answers.flatMap((r) => r.parsed_output?.scenes ?? []).map((r) => [r.id, { subject: products.find((p) => p.toLowerCase() === r.subject.toLowerCase()) ?? null, shot: r.shot }]));
       for (const g of groups.values()) {
         if (!g.every((s) => rows.has(s.id) || out.has(s.id))) continue;
         for (const s of g) if (rows.has(s.id)) out.set(s.id, rows.get(s.id)!);
@@ -113,8 +121,9 @@ export async function vetCandidates(items: VetItem[], topic: string, log: (m: st
   // Thumbnails are images: only a vision-capable model can judge them.
   if (!agentEnabled() || !llmAvailable({ vision: true })) return out;
   const usage = { in: 0, out: 0 };
-  for (let i = 0; i < items.length; i += 5) {
-    const batch = items.slice(i, i + 5).filter((b) => b.thumbs.length);
+  const per = batchSize(5, 1); // a local vision model: one scene's thumbnails per request
+  for (let i = 0; i < items.length; i += per) {
+    const batch = items.slice(i, i + per).filter((b) => b.thumbs.length);
     if (!batch.length) continue;
     const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
     for (const it of batch) {

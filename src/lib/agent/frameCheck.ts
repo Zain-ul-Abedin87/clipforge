@@ -7,7 +7,7 @@ import { z } from "zod";
 import { env } from "../env.js";
 import { run } from "../exec.js";
 import { agentEnabled, agentModel } from "./footage.js";
-import { llm } from "../agents/llm/llm.js";
+import { batchSize, llm } from "../agents/llm/llm.js";
 import { llmAvailable } from "../agents/llm/llm.js";
 
 /**
@@ -78,8 +78,9 @@ export async function checkFrames(
   const model = agentModel();
   const verdicts: FrameVerdict[] = [];
   const usage = { in: 0, out: 0 };
-  for (let i = 0; i < scenes.length; i += 8) {
-    const batch = scenes.slice(i, i + 8);
+  const per = batchSize(8, 2); // a local vision model gets a couple of frames per request
+  for (let i = 0; i < scenes.length; i += per) {
+    const batch = scenes.slice(i, i + per);
     const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
     for (const s of batch) {
       const k = scenes.indexOf(s);

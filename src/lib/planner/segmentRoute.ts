@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import type { Niche } from "../niche.js";
 import type { Scene } from "../scenes.js";
-import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { batchSize, llm, llmAvailable, splitWhenTooBig } from "../agents/llm/llm.js";
 import { LlmCache } from "../llmCache.js";
 
 /**
@@ -48,7 +48,10 @@ export async function routeSegments(scenes: Scene[], niche: Niche, topic: string
   if (useLlm && llmAvailable() && (todo.length || !cachedCine)) {
     try {
       const client = llm();
-      const lines = todo.map((s) => `${s.id}${s.product_name ? ` [product: ${s.product_name}]` : ""}: ${s.text}`).join("\n");
+      // One request per chunk of lines (a local model's context holds ~15 lines, not a whole video);
+      // a chunk the model cannot take is halved (splitWhenTooBig).
+      const ask = async (part: Scene[]) => {
+      const lines = part.map((s) => `${s.id}${s.product_name ? ` [product: ${s.product_name}]` : ""}: ${s.text}`).join("\n");
       const res = await client.messages.parse({
         model,
         max_tokens: 4000,
@@ -57,6 +60,14 @@ export async function routeSegments(scenes: Scene[], niche: Niche, topic: string
           "You route narration lines of a faceless YouTube video to footage sources. For every scene id answer segment=specific_product when the line is about one specific named product/model (its features, price, specs, use) so footage must show that exact model; answer generic_hook for intros, hooks, statistics, abstract ideas, buying advice, comparisons in general, transitions and outros where no single product must be on screen. reason: max 10 words. Also return 'cinematic': 8-10 varied broad (different settings, angles, times of day, seasons), visual, cinematic stock-footage search queries (2-4 words each) for the video's niche/topic, the kind Pexels/Pixabay have (no brand or model names, no people talking).",
         messages: [{ role: "user", content: `Niche: ${niche.label}. Topic: ${topic}.\nScenes:\n${lines || "(none changed)"}` }],
       });
+      return [res];
+      };
+      const size = batchSize(200);
+      const chunks: Scene[][] = [];
+      for (let i = 0; i < Math.max(1, todo.length); i += size) chunks.push(todo.slice(i, i + size));
+      const answers = [];
+      for (const c of chunks) answers.push(...(await splitWhenTooBig(c, ask, log)));
+      for (const res of answers) {
       const out = res.parsed_output;
       if (out) {
         for (const r of out.scenes) {
@@ -67,11 +78,12 @@ export async function routeSegments(scenes: Scene[], niche: Niche, topic: string
         }
         const c = out.cinematic.map((q) => q.trim()).filter(Boolean);
         // Keep the cached list when there is one, so unchanged generic scenes keep their searches.
-        if (c.length && !cachedCine) {
+        if (c.length && !cachedCine && !cache?.get(cineKey)) {
           cinematic = c.slice(0, 10);
           cache?.set(cineKey, { cinematic });
         }
         log(`[plan] segment routing by ${(res as { model?: string }).model ?? model} (${res.usage.input_tokens} in / ${res.usage.output_tokens} out tokens)`);
+      }
       }
     } catch (err) {
       log(`[plan] segment routing LLM failed (${String((err as Error).message ?? err).slice(0, 120)}); heuristic used`);

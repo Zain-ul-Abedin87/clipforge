@@ -6,7 +6,7 @@ import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import type { Niche } from "../niche.js";
 import type { Scene } from "../scenes.js";
-import { llm, llmAvailable } from "../agents/llm/llm.js";
+import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
 
 /**
  * AI Footage Agent: Claude reads each scene and writes stock-footage searches the way a human
@@ -127,8 +127,9 @@ export async function planFootage(
     : "";
   const system = `${SYSTEM.replace("{BLOCKED}", blocked)}\n\nVideo type (${niche.label}): ${niche.llmGuidance}${briefNote}`;
 
-  for (let i = 0; i < todo.length; i += 40) {
-    const batch = todo.slice(i, i + 40);
+  const per = batchSize(40);
+  for (let i = 0; i < todo.length; i += per) {
+    const batch = todo.slice(i, i + per);
     log(`[agent] planning footage for scenes ${i + 1}-${i + batch.length} of ${todo.length} (${model})`);
     const payload = batch.map((s) => ({
       id: s.id,
@@ -182,8 +183,9 @@ export async function broadenFootage(weak: WeakScene[], niche: Niche, log: (m: s
   if (!agentEnabled() || !weak.length) return out;
   const usage = { in: 0, out: 0 };
   const system = `${BROADEN.replace("{BLOCKED}", niche.stock.blockedTerms.join(", "))}\n\nVideo type (${niche.label}): ${niche.llmGuidance}`;
-  for (let i = 0; i < weak.length; i += 30) {
-    const batch = weak.slice(i, i + 30);
+  const perWeak = batchSize(30);
+  for (let i = 0; i < weak.length; i += perWeak) {
+    const batch = weak.slice(i, i + perWeak);
     log(`[agent] re-searching ${batch.length} weak scene(s) with broader queries`);
     const res = await ask(system, batch.map((w) => ({ ...w, found: w.found.slice(0, 6).map((f) => f.slice(0, 80)) })), log, usage);
     for (const r of res?.scenes ?? []) {

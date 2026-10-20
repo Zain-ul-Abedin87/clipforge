@@ -7,7 +7,7 @@ import { z } from "zod";
 import { env } from "./env.js";
 import { agentEnabled, agentModel } from "./agent/footage.js";
 import type { Scene } from "./scenes.js";
-import { llm } from "./agents/llm/llm.js";
+import { llm, splitWhenTooBig } from "./agents/llm/llm.js";
 
 /**
  * Script fact sheet (any product niche: tech, kitchen, tools, outdoor, ...). The LLM reads the
@@ -94,14 +94,22 @@ export async function extractFacts(dir: string, scenes: Scene[], log: (m: string
   if (agentEnabled() && env("FACTS", "on").toLowerCase() !== "off") {
     for (let attempt = 1; attempt <= 2 && !facts; attempt++) try {
       const client = llm();
-      const res = await client.messages.parse({
-        model: agentModel(),
-        max_tokens: 8000,
-        ...(agentModel().startsWith("claude-haiku") ? { output_config: { format: zodOutputFormat(Schema) } } : { output_config: { effort: "low" as const, format: zodOutputFormat(Schema) } }),
-        system: SYSTEM,
-        messages: [{ role: "user", content: JSON.stringify({ products, script: scenes.map((s) => s.text).join(" ") }) }],
-      });
-      const p = res.parsed_output;
+      // All products at once when the model can take it; a local model too small for the whole
+      // script gets fewer products per request, each with only the narration about them.
+      const ask = async (part: string[]) => {
+        const text = part.length === products.length ? scenes.map((s) => s.text).join(" ") : scenes.filter((s) => s.product_name && part.includes(s.product_name)).map((s) => s.text).join(" ");
+        const r = await client.messages.parse({
+          model: agentModel(),
+          max_tokens: 8000,
+          ...(agentModel().startsWith("claude-haiku") ? { output_config: { format: zodOutputFormat(Schema) } } : { output_config: { effort: "low" as const, format: zodOutputFormat(Schema) } }),
+          system: SYSTEM,
+          messages: [{ role: "user", content: JSON.stringify({ products: part, script: text }) }],
+        });
+        return [r];
+      };
+      const parts = await splitWhenTooBig(products.length ? products : [""], (part) => ask(part.filter(Boolean).length ? part : products), log);
+      const res = { usage: { input_tokens: parts.reduce((a, r) => a + r.usage.input_tokens, 0), output_tokens: parts.reduce((a, r) => a + r.usage.output_tokens, 0) } };
+      const p = parts.length === 1 ? parts[0].parsed_output : { topic: parts.find((r) => r.parsed_output?.topic)?.parsed_output?.topic ?? "", products: parts.flatMap((r) => r.parsed_output?.products ?? []) };
       if (p?.products?.length) {
         facts = {
           source: "llm",

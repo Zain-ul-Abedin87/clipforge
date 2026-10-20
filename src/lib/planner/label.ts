@@ -6,7 +6,7 @@ import { env, hasKey } from "../env.js";
 import { GRAPHIC_KINDS, Graphic, Scene, SCENE_TYPES, Section, SceneType } from "../scenes.js";
 import type { Span } from "./structure.js";
 import { Niche, nicheHints } from "../niche.js";
-import { activeProvider, batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
+import { activeProvider, batchSize, isTooBig, llm, llmAvailable } from "../agents/llm/llm.js";
 import { LlmCache } from "../llmCache.js";
 
 const STOP = new Set(
@@ -277,7 +277,8 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`;
     const payload = ids.map((i) => ({ id: i, section: sectionOf(i), seconds: seconds(i), text: spans[i].text }));
 
     let labels: Map<number, Label> | null = null;
-    for (let attempt = 1; attempt <= 2 && !labels; attempt++) {
+    let split = false;
+    for (let attempt = 1; attempt <= 2 && !labels && !split; attempt++) {
       log(`[plan] LLM batch ${b + 1}/${batches.length} (${ids.length} scenes), attempt ${attempt}`);
       try {
         const res = await client.messages.parse({
@@ -314,10 +315,17 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`;
           log(`[plan] ANTHROPIC_API_KEY rejected; falling back to heuristic labels`);
           return null;
         }
-        if (err instanceof Anthropic.APIError) log(`[plan] API error ${err.status}: ${err.message}`);
+        if (isTooBig(err) && ids.length > 1) {
+          // Too big for the local model's context (or garbage back): two smaller batches, later in this loop.
+          const mid = Math.ceil(ids.length / 2);
+          batches.push(ids.slice(0, mid), ids.slice(mid));
+          log(`[plan] batch of ${ids.length} scenes too big for the model (${err instanceof Error ? err.message.slice(0, 100) : ""}); retrying as ${mid} + ${ids.length - mid}`);
+          split = true;
+        } else if (err instanceof Anthropic.APIError) log(`[plan] API error ${err.status}: ${err.message}`);
         else throw err;
       }
     }
+    if (split) continue;
 
     if (labels) {
       const fill = labels.size < ids.length ? heuristicLabels(spans, sections, niche) : [];

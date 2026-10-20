@@ -120,7 +120,12 @@ export async function findBounds(
   const log = opts.log ?? (() => {});
   const fallback = heuristicBounds(sentences, duration, opts.afterIdx);
   if (!opts.useLlm || !sentences.length || (!opts.ask && !llmAvailable())) return fallback;
-  const lines = sentences.map((s, i) => `${i} [${s.start.toFixed(1)}s]: ${s.text.slice(0, 200)}`).join("\n");
+  // Only the parts that can hold a boundary: the opening (hook / intro, at most 40% of the video,
+  // first 45 sentences) and the outro window. Numbers stay the real sentence indices. A whole
+  // 15-minute narration is ~10K tokens, more than a local model's context.
+  const outroFrom = Math.max(duration - OUTRO_MAX, duration * 0.6);
+  const keep = sentences.map((s, i) => ({ s, i })).filter(({ s, i }) => (i < 45 && s.start <= duration * 0.4) || s.end >= outroFrom);
+  const lines = keep.map(({ s, i }, k) => `${k > 0 && keep[k - 1].i !== i - 1 ? "...\n" : ""}${i} [${s.start.toFixed(1)}s]: ${s.text.slice(0, 200)}`).join("\n");
   const prompt = `Video length ${duration.toFixed(0)} s.\n${lines}`;
   try {
     // Cached by the opening and closing lines only: an edit in the middle keeps hook and outro.

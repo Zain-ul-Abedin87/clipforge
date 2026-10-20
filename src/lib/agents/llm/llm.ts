@@ -61,7 +61,26 @@ export const activeProvider = (): ProviderName | null => providerOrder()[0] ?? n
 export function batchSize(claudeSize: number, localSize = Math.max(8, Math.round(claudeSize / 3))): number {
   const override = Number(env("LLM_BATCH_SCENES", "0"));
   if (override > 0) return override;
-  return activeProvider() === "qwen" && loadLlmSettings().qwen.mode === "local" ? localSize : claudeSize;
+  const s = loadLlmSettings();
+  return activeProvider() === "qwen" && s.qwen.mode === "local" ? Math.max(1, Math.min(localSize, s.qwen.maxBatch || localSize)) : claudeSize;
+}
+
+/** A request the local model cannot take in one piece (413: over num_ctx; 422 from a big request: garbage). */
+export const isTooBig = (err: unknown) => err instanceof Anthropic.APIError && (err.status === 413 || (err.status === 422 && /split/i.test(err.message)));
+
+/**
+ * Runs `run` on all items; when the model says the request is too big (see isTooBig), runs each half
+ * on its own, down to single items. Results come back in item order. Any other error is thrown.
+ */
+export async function splitWhenTooBig<T, R>(items: T[], run: (part: T[]) => Promise<R[]>, log: (m: string) => void = () => {}): Promise<R[]> {
+  try {
+    return await run(items);
+  } catch (err) {
+    if (!isTooBig(err) || items.length <= 1) throw err;
+    const mid = Math.ceil(items.length / 2);
+    log(`[llm] request too big for the local model (${String((err as Error).message).slice(0, 120)}); splitting ${items.length} items into ${mid} + ${items.length - mid}`);
+    return [...(await splitWhenTooBig(items.slice(0, mid), run, log)), ...(await splitWhenTooBig(items.slice(mid), run, log))];
+  }
 }
 
 const apiError = (status: number, message: string) => new Anthropic.APIError(status, { type: "error", error: { type: "api_error", message } }, message, undefined);
@@ -170,8 +189,27 @@ export const looksLikeGpuFault = (textOrError: string) => /@{6,}|repeat limit|gr
 let gpuFaults = 0;
 const gpuGivenUp = () => gpuFaults >= Math.max(1, Number(env("QWEN_GPU_MAX_FAULTS", "2")) || 2);
 
+/** Rough prompt size: ~3.5 characters per token for text, ~1200 tokens per image (Qwen2.5-VL, 720p-ish). */
+export function estimateTokens(messages: ChatMessage[]): number {
+  let chars = 0;
+  let images = 0;
+  for (const m of messages) {
+    if (typeof m.content === "string") chars += m.content.length;
+    else for (const p of m.content) p.type === "text" ? (chars += p.text.length) : images++;
+    chars += 16; // role / template tokens
+  }
+  return Math.ceil(chars / 3.5) + images * 1200;
+}
+
+/** Tokens kept for the answer: what the caller asked, at most 30% of the context (and 8192). */
+export const answerTokens = (maxTokens: number, numCtx: number) => Math.max(256, Math.min(maxTokens || 4096, 8192, Math.floor(numCtx * 0.3)));
+
+/** An answer with nothing usable in it: empty, one symbol, or a run of "@" (truncated / faulting model). */
+export const looksEmpty = (text: string) => /^\W{0,2}$/.test(text.trim());
+
 async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean, cpu: boolean): Promise<ChatResult> {
   const s = loadLlmSettings();
+  const numCtx = s.qwen.numCtx || 16384;
   const base = s.qwen.baseUrl.replace(/\/v1\/?$/, "");
   const res = await qwenFetch(`${base}/api/chat`, {
     method: "POST",
@@ -181,7 +219,8 @@ async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: num
       messages: await toOllamaMessages(messages),
       stream: false,
       ...(json ? { format: "json" } : {}),
-      options: { temperature: 0.2, num_predict: Math.min(maxTokens || 4096, 8192), ...(cpu ? { num_gpu: 0 } : {}) },
+      // num_ctx on every request: without it Ollama uses 4096 and silently cuts longer prompts.
+      options: { temperature: 0.2, num_ctx: numCtx, num_predict: answerTokens(maxTokens, numCtx), ...(cpu ? { num_gpu: 0 } : {}) },
     }),
     signal: AbortSignal.timeout(Number(env("QWEN_TIMEOUT_MS", "240000")) * (cpu ? 3 : 1)),
   }).catch((err: Error) => {
@@ -230,8 +269,14 @@ async function whenOllamaUp<T>(request: () => Promise<T>): Promise<T> {
 
 /** Local model: GPU first, and the same request on the CPU when the GPU returns garbage (device "auto"). */
 async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean): Promise<ChatResult> {
-  const device = loadLlmSettings().qwen.device;
+  const { device, numCtx: ctx } = loadLlmSettings().qwen;
+  const numCtx = ctx || 16384;
   const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
+  // Token budget: a prompt that does not fit is refused here (the caller splits it), never sent cut.
+  const est = estimateTokens(messages);
+  const answer = answerTokens(maxTokens, numCtx);
+  process.stderr.write(`[llm] ${model}: request ~${est} tokens + ${answer} for the answer (num_ctx ${numCtx})\n`);
+  if (est + answer > numCtx) throw apiError(413, `prompt ~${est} tokens + ${answer} for the answer exceeds num_ctx ${numCtx}: split the request`);
   const chat = (cpu: boolean) => {
     // The vision model on the CPU needs 30+ minutes per request: a step that checks pictures would
     // stall for hours. It stops instead, and the agent falls back to its rules (VISION_CPU=on allows it).
@@ -244,8 +289,10 @@ async function localChat(messages: ChatMessage[], model: string, maxTokens: numb
   let problem = "";
   try {
     const r = await chat(false);
-    if (!looksLikeGpuFault(r.text) && r.finish !== "aborted") return r;
+    if (!looksLikeGpuFault(r.text) && !looksEmpty(r.text) && r.finish !== "aborted") return r;
     problem = r.text.slice(0, 80) || "empty answer";
+    // A big request that came back as garbage: a smaller request first, the CPU only after that.
+    if (est > numCtx * 0.35) throw apiError(422, `garbage answer (${problem}) to a ~${est}-token request: split it into smaller ones`);
   } catch (err) {
     if (!(err instanceof Anthropic.APIError) || err.status === 503 || !looksLikeGpuFault(err.message)) throw err;
     problem = err.message.slice(0, 120);

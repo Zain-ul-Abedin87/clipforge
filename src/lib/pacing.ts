@@ -750,7 +750,7 @@ export function applyPacing(
       // (a jump forward in the same footage reads as a cut; the same frames twice read as a loop).
       if (!s && !product && a.kind === "video" && !t.backdrop && a.duration) s = clipPick(a.path, a.duration, a.source, need, (a.in ?? 0) + k * need, sc.id);
       // A product still (Ken Burns) shown again a few seconds later beats looping the same footage.
-      if (!s && product && !t.backdrop) s = photoReuse(product, sc.id, prevKey, 6);
+      if (!s && product && !t.backdrop) s = photoReuse(product, sc.id, prevKey, 6) ?? photoReuse(product, sc.id, prevKey, 2.5);
       if (!s) {
         // Nothing unused left: reuse (logged, QA reports it), at the in-point farthest from the
         // moments already shown and with a mirror / punch-in so it is not the same picture again.

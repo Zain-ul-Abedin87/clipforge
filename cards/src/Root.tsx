@@ -1,6 +1,6 @@
 import React from 'react';
 import {Composition} from 'remotion';
-import {RankCard, PriceCard, SpecCard, LowerThird, SpecBars, ProsCons, PriceTag, CompareTable, GaugeCard, PartCallout, PhotoParallax, HookTitle} from './Cards';
+import {RankCard, PriceCard, SpecCard, LowerThird, SpecBars, ProsCons, PriceTag, CompareTable, GaugeCard, PartCallout, PhotoParallax, HookTitle, RecapGrid} from './Cards';
 
 // Lengths here are only defaults for the Studio preview; render.mjs sets each card's real length.
 const c = {fps: 30, width: 1920, height: 1080};
@@ -17,6 +17,7 @@ export const Root: React.FC = () => (
     <Composition id="GaugeCard" component={GaugeCard} durationInFrames={120} {...c} defaultProps={{title: 'PRODUCT NAME', label: 'Engine', value: '163 cc', pct: 0.7, compare: [{name: 'A', value: '163 cc', pct: 0.7, me: true}, {name: 'B', value: '223 cc', pct: 1}] as {name: string; value: string; pct: number; me?: boolean}[] | undefined}} />
     <Composition id="PartCallout" component={PartCallout} durationInFrames={150} {...c} defaultProps={{photo: 'callout/sample.jpg', box: {x: 0.4, y: 0.4, w: 0.2, h: 0.2}, aspect: 1.5, title: 'PRODUCT NAME', label: 'Deck', value: '14-gauge steel'}} />
     <Composition id="HookTitle" component={HookTitle} durationInFrames={150} {...c} defaultProps={{chunks: [{from: 0, to: 1.6, words: [{w: 'Stop', at: 0.1, hi: true}, {w: 'buying', at: 0.5, hi: false}, {w: 'mowers', at: 0.9, hi: false}]}, {from: 1.6, to: 2.6, words: [{w: 'until', at: 1.7, hi: false}, {w: 'you', at: 2, hi: false}, {w: 'see', at: 2.2, hi: false}]}, {from: 2.6, to: 5, words: [{w: 'number', at: 2.7, hi: false}, {w: '#1', at: 3.1, hi: true}]}]}} />
+    <Composition id="RecapGrid" component={RecapGrid} durationInFrames={240} {...c} defaultProps={{items: [{rank: 3, name: 'Product C'}, {rank: 2, name: 'Product B'}, {rank: 1, name: 'Product A'}] as {rank?: number | null; name: string}[], highlights: [{i: 0, at: 0.8}, {i: 1, at: 2.2}, {i: 2, at: 3.6}], endAt: 5.5 as number | null, endText: 'Thanks for watching', enter: true, exit: true}} />
     <Composition id="PhotoParallax" component={PhotoParallax} durationInFrames={90} {...c} defaultProps={{photo: 'callout/sample.jpg', aspect: 1.5}} />
   </>
 );

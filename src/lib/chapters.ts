@@ -23,7 +23,11 @@ export interface Chapter {
   firstScene: number;
 }
 
-export function buildChapters(scenes: Scene[], facts: Facts | null): Chapter[] {
+/**
+ * `outroStart` (s): where the closing recap / call to action starts. The last product's chapter
+ * ends there and an "Outro" chapter follows, so that product's graphics never run into the recap.
+ */
+export function buildChapters(scenes: Scene[], facts: Facts | null, outroStart?: number): Chapter[] {
   if (!scenes.length) return [];
   const total = scenes[scenes.length - 1].end;
   const names = productOrder(scenes);
@@ -59,6 +63,8 @@ export function buildChapters(scenes: Scene[], facts: Facts | null): Chapter[] {
     out.push({ index: out.length, title: s.name, start: scenes[s.i].start, end: 0, product: s.name, rank: f?.rank, firstScene: scenes[s.i].id });
   }
   if (out.length) out[0].start = 0;
+  const outroScene = outroStart !== undefined ? scenes.find((s) => s.start >= outroStart - 0.05) : undefined;
+  if (outroScene && out.length && outroScene.start > out[out.length - 1].start + 1) out.push({ index: out.length, title: "Outro", start: outroScene.start, end: 0, firstScene: outroScene.id });
   for (let k = 0; k < out.length; k++) out[k].end = k + 1 < out.length ? out[k + 1].start : total;
   return out;
 }

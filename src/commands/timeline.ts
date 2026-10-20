@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { recapCards } from "../lib/render/recap.js";
 import { nameTrusted, photoNameTrustEnabled, readRetailSources } from "../lib/assets/photoTrust.js";
 import path from "node:path";
 import type { Asset, Assets } from "../lib/assets/types.js";
@@ -126,7 +127,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   // Script facts (name, price, specs per product) and chapters (one per product).
   const facts: Facts | null = await extractFacts(dir, scenes, log).catch((e) => (log(`[facts] failed: ${String(e).slice(0, 160)}`), readFacts(dir)));
   FACTS = facts;
-  const chapters = buildChapters(scenes, facts);
+  const sections = fs.existsSync(path.join(dir, "sections.json")) ? readJson<Section[]>(path.join(dir, "sections.json")) : [];
+  const chapters = buildChapters(scenes, facts, sections.find((x) => x.kind === "outro")?.start);
   writeChapters(dir, chapters);
   log(`[chapters] ${chapters.length}: ${chapters.map((c) => `${c.title} @${c.start.toFixed(1)}s`).join(", ")}`);
   const preset = cardPreset(style);
@@ -138,7 +140,6 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   // Stills alternate gentle moves so a run of images does not feel static; cards only breathe.
   const stillMoves: Motion[] = ["zoom_in", "pan_right", "zoom_out", "pan_left"];
   let stillIdx = 0;
-  const sections = fs.existsSync(path.join(dir, "sections.json")) ? readJson<Section[]>(path.join(dir, "sections.json")) : [];
   const mg = (style.motionGraphics ?? {}) as Record<string, unknown>;
   const motionCfg = { graphics: mg.enabled !== false, sfx: mg.sfx !== false, sfxDb: Number(mg.sfxDb ?? -14) };
   const tl: TimelineScene[] = scenes.map((s) => {
@@ -215,7 +216,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     // Card set from the channel preset; the theme (colours, font) goes to every card.
     for (const t of tl) for (const l of t.overlays ?? []) {
       if (!l.card) continue;
-      if (l.card.comp !== "HookTitle" && !preset.set.has(l.card.comp)) delete l.card;
+      if (l.card.comp !== "HookTitle" && l.card.comp !== "RecapGrid" && !preset.set.has(l.card.comp)) delete l.card;
       else if (preset.custom) l.card.props = { ...l.card.props, theme: themeOf(preset) };
     }
   }
@@ -254,6 +255,22 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       }
     }
     log(`[timeline] montage labels: ${n} (intro teaser / outro recap)`);
+  }
+  // Outro recap: every product's rank + name on a grid, lit as the narration names it, then a
+  // subscribe end card (RECAP_GRID=off to skip). It replaces the outro's montage name labels.
+  if (motionCfg.graphics && pace.outroStart !== undefined && env("RECAP_GRID", "on").toLowerCase() !== "off" && fs.existsSync(path.join(dir, "aligned.json"))) {
+    const items = sections.filter((s) => s.kind === "item" && s.product_name).map((s) => ({ name: s.product_name!, rank: s.rank }));
+    const outro = tl.filter((t) => t.start >= pace.outroStart! - 0.05);
+    const words = readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words;
+    const cards = recapCards(items, words, outro, { endText: env("RECAP_END_TEXT", "Thanks for watching") });
+    const blank = path.join(dir, "graphics", "blank.png");
+    cards.forEach((props, k) => {
+      const t = outro[k];
+      const dur = t.end - t.start;
+      t.overlays = (t.overlays ?? []).filter((l) => l.card?.comp !== "LowerThird");
+      t.overlays.push({ path: blank, delay: 0, anim: "fade", out: dur, card: { comp: "RecapGrid", props: preset.custom ? { ...props, theme: themeOf(preset) } : { ...props }, seconds: dur } });
+    });
+    if (cards.length) log(`[timeline] recap grid: ${items.length} product(s) over ${cards.length} outro scene(s), ${cards[0].highlights.length} named in the narration`);
   }
   // Verified product stills -> 2.5D parallax + light sweep clips (Remotion), before the cards render.
   await parallaxStills(tl, log).catch((e) => log(`[parallax] failed: ${String(e).slice(0, 140)}`));
@@ -379,11 +396,15 @@ async function addMotionGraphics(
   const OWN_MEDIA = new Set(["local", "presskit", "wikimedia"]);
   const chipScene = new Map<string, number>();
   const photoTurn = new Map<string, number>();
+  // Only inside the product's own section: an intro preview or outro recap that names it gets none.
+  const kindOf = new Map(sections.map((s) => [s.id, s.kind]));
   for (const [i, sc] of scenes.entries()) {
     const name = sc.product_name;
     const src = assets[String(sc.id)]?.source;
     const len = tl[i].end - tl[i].start;
     if (sc.type !== "product" || !name || src === "graphic" || len < 3) continue;
+    const kind = typeof sc.section === "number" ? kindOf.get(sc.section) : undefined;
+    if (kind === "intro" || kind === "outro") continue;
     const prev = chipScene.get(name);
     const prevOwn = prev !== undefined && OWN_MEDIA.has(assets[String(prev)]?.source ?? "");
     if (prev === undefined || (!prevOwn && OWN_MEDIA.has(src ?? ""))) chipScene.set(name, sc.id);

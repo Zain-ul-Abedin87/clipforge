@@ -35,7 +35,7 @@ function sourceHash(): string {
 /** Card length: until the layer's own fade-out, else to the end of the scene (1-6 s; a hook title up to 16 s). */
 export function cardFrames(l: Pick<Layer, "card" | "out" | "delay">, sceneDur: number): number {
   const secs = l.card?.seconds ?? (l.out !== undefined ? l.out - l.delay + 0.3 : sceneDur - l.delay);
-  const max = l.card?.comp === "HookTitle" ? 16 : 6;
+  const max = l.card?.comp === "HookTitle" ? 16 : l.card?.comp === "RecapGrid" ? 30 : 6;
   return Math.max(30, Math.min(max * FPS, Math.round(secs * FPS)));
 }
 

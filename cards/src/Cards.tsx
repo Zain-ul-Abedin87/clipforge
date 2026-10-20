@@ -447,3 +447,68 @@ export const HookTitle: React.FC<{chunks: {from: number; to: number; words: {w: 
     </AbsoluteFill>
   );
 };
+
+/**
+ * Outro recap: every product as a tile (rank + name). A tile lights up when the narration names it
+ * (`highlights`, seconds from this card's start); shown tiles stay lit, the rest wait dimmed. From
+ * `endAt` the grid gives way to a subscribe end card. One card per outro scene: `enter` only on the
+ * first (the grid slides in once), `exit` only on the last.
+ */
+export const RecapGrid: React.FC<{
+  items: {rank?: number | null; name: string}[];
+  highlights: {i: number; at: number}[];
+  endAt?: number | null;
+  endText?: string;
+  enter?: boolean;
+  exit?: boolean;
+  theme?: Theme;
+}> = ({items, highlights, endAt, endText, enter = true, exit = true, theme}) => {
+  useTheme(theme);
+  const f = useCurrentFrame();
+  const {fps, durationInFrames: d} = useVideoConfig();
+  const t = f / fps;
+  const inA = useIn(), outA = useOut();
+  const a = enter ? inA : 1;
+  const o = exit ? outA : 1;
+  const n = Math.max(1, items.length);
+  const cols = n <= 3 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
+  const rows = Math.ceil(n / cols);
+  const tileW = Math.min(520, (1920 - 160 - (cols - 1) * 28) / cols);
+  const tileH = Math.min(230, (1080 - 260 - (rows - 1) * 24) / rows);
+  const past = highlights.filter((h) => h.at <= t);
+  const active = past.length ? past[past.length - 1].i : -1;
+  const lit = new Set(past.map((h) => h.i));
+  const endF = endAt !== undefined && endAt !== null ? Math.round(endAt * fps) : d + 1;
+  const end = spring({frame: f - endF, fps, config: {damping: 14, stiffness: 140}});
+  const gridO = f >= endF ? 1 - end : 1;
+  return (
+    <AbsoluteFill style={{opacity: o}}>
+      <AbsoluteFill style={{background: 'rgba(0,0,0,.62)', opacity: a}} />
+      <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center', opacity: gridO}}>
+        <div style={{display: 'grid', gridTemplateColumns: `repeat(${cols}, ${tileW}px)`, gap: '24px 28px', transform: `translateY(${(1 - a) * 60}px)`}}>
+          {items.map((it, i) => {
+            const on = i === active;
+            const seen = lit.has(i) || !highlights.length;
+            const pop = on ? spring({frame: f - Math.round((highlights.filter((h) => h.i === i && h.at <= t).pop()?.at ?? 0) * fps), fps, config: {damping: 12, stiffness: 180}}) : 0;
+            return (
+              <div key={i} style={{height: tileH, background: PANEL, borderRadius: 18, border: `6px solid ${on ? Y : 'rgba(255,255,255,.08)'}`, opacity: seen ? 1 : 0.42, transform: `scale(${1 + 0.06 * pop})`, display: 'flex', alignItems: 'center', padding: '0 26px', boxShadow: on ? `0 0 46px ${Y}66` : 'none'}}>
+                {it.rank !== undefined && it.rank !== null ? (
+                  <T s={{fontSize: Math.min(96, tileH * 0.55), color: on ? '#111' : Y, background: on ? Y : 'transparent', padding: '0 14px', borderRadius: 10, marginRight: 20}}>#{it.rank}</T>
+                ) : null}
+                <T s={{fontSize: fit(it.name, Math.min(46, tileH * 0.24), 22), lineHeight: 1.1}}>{it.name}</T>
+              </div>
+            );
+          })}
+        </div>
+      </AbsoluteFill>
+      {f >= endF ? (
+        <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center', opacity: end}}>
+          <T s={{fontSize: 64, marginBottom: 34, transform: `translateY(${(1 - end) * 40}px)`}}>{endText || 'Thanks for watching'}</T>
+          <div style={{background: '#e62117', borderRadius: 14, padding: '18px 54px', transform: `scale(${0.7 + 0.3 * end})`}}>
+            <T s={{fontSize: 72, letterSpacing: 2}}>Subscribe</T>
+          </div>
+        </AbsoluteFill>
+      ) : null}
+    </AbsoluteFill>
+  );
+};

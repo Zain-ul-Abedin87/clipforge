@@ -280,7 +280,9 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
     for (const r of research) {
       const clips = findVaultFor(r.name)?.manifest.items.filter((i) => i.kind === "video").length ?? 0;
       if (clips >= minClips) continue;
-      await fetchRetailImages(channel, r.name, harvestCategory, Number(env("RETAIL_IMAGES_WANT", "16")), log).catch((err) => log(`[retail] ${r.name}: skipped (${String(err).slice(0, 100)})`));
+      // No clips at all: more stills, so the chapter is carried by Ken Burns photos and cards, not one looped clip.
+      const want = Number(env("RETAIL_IMAGES_WANT", "16")) * (clips === 0 ? 1.5 : 1);
+      await fetchRetailImages(channel, r.name, harvestCategory, Math.round(want), log).catch((err) => log(`[retail] ${r.name}: skipped (${String(err).slice(0, 100)})`));
       // Moving footage too: Amazon listing videos that name this model join its own vault.
       if (!hasModelToken(r.model) || !r.manufacturer.trim()) continue;
       const named = (title: string) => nameTrusted(`retail_v`, r.name, { retail_v: { title } });

@@ -211,6 +211,8 @@ function productPhotos(channel: string, product: string): string[] {
 
 /** Scene ids per product: from its first named scene up to the next product's first scene (cards excluded). */
 export function productRegions(scenes: Scene[]): Map<string, Scene[]> {
+  const bySection = sectionRegions(scenes);
+  if (bySection) return bySection;
   const firsts: { name: string; idx: number }[] = [];
   scenes.forEach((s, i) => {
     if (s.product_name && !firsts.some((f) => f.name === s.product_name)) firsts.push({ name: s.product_name, idx: i });
@@ -223,6 +225,34 @@ export function productRegions(scenes: Scene[]): Map<string, Scene[]> {
     while (stop - 1 > f.idx && scenes[stop - 1].type === "graphic" && !scenes[stop - 1].product_name) stop--;
     out.set(f.name, scenes.slice(f.idx, stop));
   });
+  return out;
+}
+
+/**
+ * Section-based regions: when the plan has product sections (a countdown / script headings), a
+ * section whose scenes mostly carry one product is that product's region, whole. A label that
+ * shows up once elsewhere (an intro preview, an outro recap) can never open or steal a region.
+ * Returns null when fewer than 2 sections are product sections (fall back to first-mention order).
+ */
+export function sectionRegions(scenes: Scene[]): Map<string, Scene[]> | null {
+  if (!scenes.length || scenes.some((s) => typeof s.section !== "number")) return null;
+  const ids = [...new Set(scenes.map((s) => s.section))];
+  const owner = new Map<number, string>();
+  for (const id of ids) {
+    const list = scenes.filter((s) => s.section === id);
+    const counts = new Map<string, number>();
+    for (const s of list) if (s.product_name) counts.set(s.product_name, (counts.get(s.product_name) ?? 0) + 1);
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] >= Math.max(2, Math.ceil(list.length * 0.6))) owner.set(id, top[0]);
+  }
+  if (owner.size < 2) return null;
+  const out = new Map<string, Scene[]>();
+  for (const s of scenes) {
+    const name = owner.get(s.section);
+    if (!name) continue;
+    if (!out.has(name)) out.set(name, []);
+    out.get(name)!.push(s);
+  }
   return out;
 }
 

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { hasModelToken } from "../productNames.js";
+import { hasModelToken, looksBranded } from "../productNames.js";
 import path from "node:path";
 import type { ProductRecord, SpecVisualTag } from "../../domain/product.types.js";
 import { env } from "../env.js";
@@ -38,7 +38,8 @@ export interface FootageState {
 export function planFetches(products: ProductRecord[], specsByProduct: Record<string, SpecVisualTag[]>, state: FootageState, minClips = 6): FetchNeed[] {
   const out: FetchNeed[] = [];
   // Nothing to search for: an empty model (the LLM's "null" product). Logged by the caller.
-  products = products.filter((p) => hasModelToken(p.model) && p.manufacturer.trim());
+  // Brandless names ("waterproof case", "Tactical Pen") are not one exact product: never harvested.
+  products = products.filter((p) => hasModelToken(p.model) && p.manufacturer.trim() && looksBranded(p.manufacturer, p.model));
   for (const p of products) {
     const n = state.clips(p.name);
     if (n < minClips) out.push({ product: p.name, brand: p.manufacturer, model: p.model, kind: "model", why: n ? `only ${n} clip(s) in the vault` : "no vault yet" });
@@ -104,7 +105,7 @@ export async function ensureFootage(
   const d = { ...defaultDeps, ...deps };
   const needs = planFetches(o.products, o.specsByProduct, d.state, Number(env("AUTO_FETCH_MIN_CLIPS", "6")) || 6);
   const report: AutoFetchReport = { needs, done: [], diagrams: readDiagrams(dir) };
-  const unsearchable = o.products.filter((p) => !hasModelToken(p.model) || !p.manufacturer.trim());
+  const unsearchable = o.products.filter((p) => !hasModelToken(p.model) || !p.manufacturer.trim() || !looksBranded(p.manufacturer, p.model));
   if (unsearchable.length) o.log(`[auto-fetch] skipped (no brand / model to search for; fix the name in the review page): ${unsearchable.map((p) => p.name).join(", ")}`);
   if (!needs.length) return report;
   o.log(`[auto-fetch] pausing assets: ${needs.length} gap(s) to fill - ${needs.map((n) => (n.kind === "model" ? `${n.product} (${n.why})` : `${n.product} / ${n.spec!.spec}`)).join(", ")}`);

@@ -35,6 +35,10 @@ export const OUTRO_RE = new RegExp(
   "\\b(" +
     [
       "that wraps up",
+      "so that's (?:the|my|our) (?:list|countdown|ranking|picks)",
+      "that's (?:the|my|our) (?:whole |full )?(?:list|countdown|ranking)",
+      "which (?:one )?(?:would|will|do) you (?:actually |really )?(?:buy|pick|choose|get|go with)",
+      "drop it in the comments",
       "wrap(?:s|ping)? (?:it|things|this) up",
       "thanks? (?:you )?for watching",
       "let (?:us|me) know in the comments",
@@ -55,7 +59,7 @@ export const OUTRO_RE = new RegExp(
 );
 
 /** Calls to action that end a video ("subscribe", "hit the bell"), used when no wrap-up line is found. */
-export const CTA_RE = /\b(subscribe|hit the (?:bell|like)|like (?:this|the) video|drop a comment|comment below)\b/i;
+export const CTA_RE = /\b(subscribe|hit the (?:bell|like)|like (?:this|the) video|drop a comment|drop it in the comments|comment below)\b/i;
 
 const HOOK_MIN = 3;
 const HOOK_MAX = 15;

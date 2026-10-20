@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { cleanProductName, mergeProductNames } from "../lib/productNames.js";
+import { cleanProductName, distinctiveTokens, mergeProductNames } from "../lib/productNames.js";
 import path from "node:path";
 import { env, hasKey } from "../lib/env.js";
 import { run } from "../lib/exec.js";
@@ -9,7 +9,7 @@ import { paths } from "../lib/paths.js";
 import { heuristicLabels, llmLabels, type SectionLabels } from "../lib/planner/label.js";
 import { LlmCache } from "../lib/llmCache.js";
 import { routeSegments, type RouteCache } from "../lib/planner/segmentRoute.js";
-import { detectSections, splitIntoScenes } from "../lib/planner/structure.js";
+import { detectSections, scriptHeadings, splitIntoScenes, type ScriptHeading } from "../lib/planner/structure.js";
 import { applyBounds, findBounds, type BoundAnchors } from "../lib/planner/introOutro.js";
 import { fingerprint, isCached, markDone, projectDir, readJson, writeJson } from "../lib/project.js";
 import { Scene, Section, validateScenes } from "../lib/scenes.js";
@@ -105,15 +105,98 @@ export function sectionsFromScript(beats: ScriptSection[], aligned: Pick<Aligned
   return merged;
 }
 
+const UNITS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const MULT: Record<string, number> = { hundred: 100, thousand: 1000, million: 1e6, k: 1000 };
+
+/** Numbers a narration says, as digits ("$70", "1,299") or words ("a hundred and ninety-nine", "five to six hundred"). */
+export function spokenNumbers(text: string): number[] {
+  const out: number[] = [];
+  for (const m of text.matchAll(/\d[\d,]*(?:\.\d+)?/g)) out.push(Number(m[0].replace(/,/g, "")));
+  const toks = text.toLowerCase().replace(/-/g, " ").split(/[^a-z0-9.]+/).filter(Boolean);
+  let total = 0, cur = 0, inNum = false;
+  const flush = () => {
+    if (inNum) out.push(total + cur);
+    total = 0; cur = 0; inNum = false;
+  };
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t in UNITS) (cur += UNITS[t]), (inNum = true);
+    else if (t in TENS) (cur += TENS[t]), (inNum = true);
+    else if (t === "a" && MULT[toks[i + 1]]) (cur = 1), (inNum = true);
+    else if (t in MULT && inNum) {
+      if (MULT[t] === 100) cur *= 100;
+      else (total += cur * MULT[t]), (cur = 0);
+    } else if (t === "and" && inNum && (UNITS[toks[i + 1]] !== undefined || TENS[toks[i + 1]] !== undefined)) continue;
+    else flush();
+  }
+  flush();
+  // "five to six hundred" / "four thousand to seven thousand": the first number takes the multiplier.
+  for (const m of text.toLowerCase().matchAll(/\b([a-z]+)\s+to\s+[a-z]+\s+(hundred|thousand)\b/g)) {
+    const v = UNITS[m[1]] ?? TENS[m[1]];
+    if (v !== undefined) out.push(v * MULT[m[2]]);
+  }
+  return out;
+}
+
+/** A price card only shows prices the narration says (no LLM-invented "$299.99"). */
+export function priceCardSaid(g: { price?: string; lines?: string[] }, said: string): boolean {
+  const shown = spokenNumbers([g.price ?? "", ...(g.lines ?? [])].join(" ")).filter((n) => n > 0);
+  if (!shown.length) return false;
+  // A weight / size range ("3.13 - 3.23 oz") is not a price: the narration must talk money.
+  if (!/(\$|\u20ac|\u00a3|dollar|euro|pound|bucks|price|cost|usd|sells? for|runs? (?:about|around|roughly))/i.test(said)) return false;
+  const heard = spokenNumbers(said);
+  return shown.every((v) => heard.some((h) => Math.abs(h - v) <= Math.max(1, v * 0.02)));
+}
+
+/**
+ * Canonical products = the names of the item sections (script headings / detected countdown).
+ * A planner label is kept only when it is one of them (or a fragment of one); inside an item
+ * section every scene belongs to that section's product. Outside items (intro / outro) a label
+ * stays only when the line actually says a distinctive word of that product's name.
+ */
+export function canonicalLabel(s: Pick<Scene, "text" | "product_name">, sec: Section | undefined, canonical: string[]): string | undefined {
+  if (!canonical.length) return s.product_name ?? undefined;
+  if (sec?.kind === "item" && sec.product_name) return sec.product_name;
+  if (!s.product_name) return undefined;
+  const lw = new Set(distinctiveTokens(s.product_name));
+  const said = new Set(distinctiveTokens(s.text));
+  const best = canonical
+    .map((c) => ({ c, hit: distinctiveTokens(c).filter((w) => lw.has(w)).length, saidHit: distinctiveTokens(c).filter((w) => said.has(w)).length }))
+    .filter((x) => x.hit > 0 && x.saidHit > 0)
+    .sort((a, b) => b.hit - a.hit || b.saidHit - a.saidHit)[0];
+  return best?.c;
+}
+
 /** LLM output can be internally inconsistent; fix what is fixable instead of failing the plan. */
 function repair(scenes: Scene[], sections: Section[], fallback: Scene[]): Scene[] {
   // One name per product: a bare fragment ("Explorer") joins the full name it is part of.
   const merge = mergeProductNames([...scenes, ...sections].map((x) => x.product_name).filter((n): n is string => !!n));
   const canon = (n?: string | null) => { const c = cleanProductName(n); return c ? (merge.get(c) ?? c) : undefined; };
   for (const sec of sections) if (sec.product_name) sec.product_name = canon(sec.product_name);
+  const canonical = [...new Set(sections.filter((x) => x.kind === "item" && x.product_name).map((x) => x.product_name!))];
   return scenes.map((s, i) => {
     const sec = sections[s.section];
     const fixed: Scene = { ...s, queries: [...s.queries], product_name: canon(s.product_name) };
+    if (canonical.length) {
+      const label = canonicalLabel(fixed, sec, canonical);
+      if (label) fixed.product_name = label;
+      else delete fixed.product_name;
+      if (fixed.graphic?.title && !canonical.includes(fixed.graphic.title) && fixed.graphic.kind !== "title_card") fixed.graphic = { ...fixed.graphic, title: fixed.product_name ?? "" };
+      if (fixed.type === "stock" && fixed.product_name && sec?.kind === "item") fixed.type = "product";
+    }
+    // Price cards show only prices the narration says (this line or its neighbours).
+    if (fixed.type === "graphic" && fixed.graphic?.kind === "price_badge") {
+      const said = [scenes[i - 1]?.text, s.text, scenes[i + 1]?.text].filter(Boolean).join(" ");
+      if (!priceCardSaid(fixed.graphic, said)) {
+        delete fixed.graphic;
+        fixed.type = fixed.product_name ? "product" : "stock";
+        if (fixed.product_name) fixed.queries = [fixed.product_name];
+      }
+    }
     if (fixed.type === "product" && !fixed.product_name) {
       if (sec.product_name) fixed.product_name = sec.product_name;
       else fixed.type = "stock";
@@ -153,7 +236,7 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
     aligned: fingerprint(alignedFile),
     style: fingerprint(path.join(paths.channels, channel, "style.json")),
     glossary: fingerprint(glossaryFile),
-    scriptSections: fingerprint(path.join(dir, "script_sections.json")),
+    scriptSections: fingerprint(path.join(dir, "script_sections.json")) + ":" + fingerprint(path.join(dir, "script.txt")) + ":headings-v1",
     niche: `${niche.name}:${fingerprint(nicheFingerprintPath(dir, niche.name))}`,
     labels: `${useLlm ? `${activeProvider()}:${env("LLM_MODEL", "claude-opus-5-5")}` : "heuristic-v5"}:cards-v4:route-v1:bounds-v1`,
     micro: JSON.stringify(microConfig(niche)) + "micro-v1",
@@ -170,11 +253,15 @@ export async function plan(opts: PlanOpts, log: (m: string) => void = console.lo
 
   const scriptSecFile = path.join(dir, "script_sections.json");
   const labelled = aligned.mode === "script" && fs.existsSync(scriptSecFile);
+  // Plain-text / docx scripts: ranked "#N - Name" lines are the product sections and names.
+  const scriptFile = path.join(dir, "script.txt");
+  const headings: ScriptHeading[] = !labelled && fs.existsSync(scriptFile) ? scriptHeadings(fs.readFileSync(scriptFile, "utf8")) : [];
+  if (headings.length) log(`[plan] script headings: ${headings.map((h) => `#${h.rank} ${h.name}`).join(" | ")}`);
   const detected =
     labelled
       ? sectionsFromScript(readJson<ScriptSection[]>(scriptSecFile), aligned, duration)
-      : niche.structure.detectListicle
-        ? detectSections(aligned.sentences, duration, loadGlossary(glossaryFile))
+      : niche.structure.detectListicle || headings.length
+        ? detectSections(aligned.sentences, duration, loadGlossary(glossaryFile), headings)
         : [{ id: 0, kind: "body" as const, start: 0, end: duration }];
   // Hook / intro / outro from the narration (LLM, regex fallback). A countdown's outro must come
   // after its last "Number N" header.

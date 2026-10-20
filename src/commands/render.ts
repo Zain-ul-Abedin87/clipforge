@@ -144,7 +144,7 @@ function layerPosition(l: CompiledLayer): string {
 function variantFilter(v?: string): string {
   if (!v) return "";
   const f: string[] = [];
-  if (v.includes("mirror")) f.push("hflip");
+  if (v.includes("mirror") && process.env.ALLOW_MIRROR === "1") f.push("hflip");
   if (v.includes("punch")) f.push(`scale=${Math.round(W * 1.12)}:${Math.round(H * 1.12)},crop=${W}:${H}`);
   return "," + f.join(",");
 }

@@ -246,6 +246,9 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   const categoryHints = nicheHints(niche, productNamesAll).slice(0, niche.stock.sectionHintCount ?? 0);
   const productOfScene = new Map<number, string>();
   for (const [n, list] of productRegions(scenes)) for (const s of list) productOfScene.set(s.id, n);
+  // Text card (no footage): the product the line is about, else the line's own opening words -
+  // never the stock search query ("police equipment aerial" on screen).
+  const cardLabel = (scene: Scene) => scene.product_name ?? productOfScene.get(scene.id) ?? scene.text.split(/\s+/).slice(0, 6).join(" ");
   // Product research records (identity + Amazon/spec links) for every product the video names.
   const research = ensureProductRecords(dir, [...new Set(scenes.map((s) => s.product_name ?? productOfScene.get(s.id)).filter((x): x is string => !!x))]);
   const brands = [...new Set(research.map((r) => r.manufacturer).filter(Boolean))];
@@ -555,7 +558,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
         result[id] = web;
         continue;
       }
-      const file = await renderTextCard("", scene.queries[0] ?? scene.text.split(/\s+/).slice(0, 6).join(" "), cardStyle, graphicsDir);
+      const file = await renderTextCard("", cardLabel(scene), cardStyle, graphicsDir);
       result[id] = {
         path: file, source: "graphic", license: GENERATED, url: "", kind: "image", width: 1920, height: 1080,
         query: scene.queries[0],
@@ -798,7 +801,7 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
         result[String(sceneId)] = web;
         continue;
       }
-      const card = await renderTextCard("", scene.queries[0] ?? "", cardStyle, graphicsDir);
+      const card = await renderTextCard("", cardLabel(scene), cardStyle, graphicsDir);
       result[String(sceneId)] = { path: card, source: "graphic", license: GENERATED, url: "", kind: "image", width: 1920, height: 1080, note: "Stock download failed" };
     }
   }

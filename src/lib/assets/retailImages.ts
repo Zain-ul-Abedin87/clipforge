@@ -32,7 +32,7 @@ export async function fetchRetailImages(channel: string, product: string, catego
   const modelWords = product.toLowerCase().split(/\s+/).slice(1).filter((w) => w.length > 1);
   const seen = new Set<string>();
   let saved = 0;
-  for (const q of [`${product} ${category}`.trim(), `${product} official product photo`, `${product} amazon`]) {
+  for (const q of [`${product} ${category}`.trim(), `${product} official product photo`, `${product} amazon`, `${product} white background`, `${product} product image png`]) {
     if (have + saved >= want + 4) break; // a few spare: some will fail the exact-model check
     await acquire("retail"); // product_web.py: retailer + image search pages
     const r = await run(py, [script, "images", q, "40"], { timeoutMs: 60_000 });

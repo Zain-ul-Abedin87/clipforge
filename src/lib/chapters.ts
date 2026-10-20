@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Scene } from "./scenes.js";
 import type { Facts } from "./facts.js";
 import { productOrder } from "./facts.js";
+import { sectionRegions } from "./assets/productPool.js";
 
 /**
  * Chapters: every product is one chapter (any niche). A chapter starts at the product's title /
@@ -29,7 +30,17 @@ export function buildChapters(scenes: Scene[], facts: Facts | null): Chapter[] {
   const planned = new Set(names);
   for (const p of facts?.products ?? []) if (!names.includes(p.name) && scenes.some((s) => s.text.toLowerCase().includes(p.name.toLowerCase()))) names.push(p.name);
   const starts: { name: string; i: number }[] = [];
-  for (const name of names) {
+  // Product sections known: each chapter starts at its section (not at a stray earlier mention).
+  const regions = sectionRegions(scenes);
+  if (regions) {
+    for (const [name, list] of regions) {
+      let i = scenes.indexOf(list[0]);
+      const prev = scenes[i - 1];
+      if (prev?.graphic && ["title_card", "intro_card"].includes(prev.graphic.kind) && prev.graphic.title.toLowerCase().includes(name.toLowerCase())) i--;
+      starts.push({ name, i });
+    }
+  }
+  for (const name of regions ? [] : names) {
     const lc = name.toLowerCase();
     const first = scenes.findIndex((s) => s.product_name === name || (s.graphic && s.graphic.title.toLowerCase().includes(lc)) || (!planned.has(name) && s.text.toLowerCase().includes(lc)));
     if (first < 0) continue;

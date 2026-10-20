@@ -10,7 +10,37 @@ export interface Span {
   text: string;
 }
 
-const HEADER_RE = /^(?:and\s+)?(?:(?:coming\s+in\s+)?at\s+|our\s+)?(?:number|no\.?|#)\s*([a-z0-9-]+)\b/i;
+// "Number 5", "number #10" (spoken "number" + the script's "#10"), "No. 10", "No 3", "#4", "at number two".
+// "No" needs a digit after it, so "Not a drone" / "Normal" never read as headers.
+const HEADER_RE = /^(?:and\s+)?(?:(?:coming\s+in\s+)?at\s+|our\s+)?(?:number\s*#?\s*|no\.\s*#?\s*|no\s+(?=#?\s*\d)#?\s*|#\s*)([a-z0-9-]+)\b/i;
+
+/** A ranked heading written in the script ("#10 — Name", "No. 3: Name", "Number 2 - Name"). */
+export interface ScriptHeading {
+  rank: number;
+  name: string;
+}
+
+const HEADING_LINE_RE = /^\s*(?:#|no\.?\s*#?|number\s*#?)\s*(\d{1,2})\s*(?:[\u2014\u2013:\-.)]+\s*)?(.+?)\s*$/i;
+
+/**
+ * Ranked product headings from a plain-text / docx script: lines of their own that start with a
+ * rank and carry a name. Needs at least 3 distinct ranks (a list), else returns [].
+ */
+export function scriptHeadings(script: string): ScriptHeading[] {
+  const out: ScriptHeading[] = [];
+  for (const line of script.split(/\r?\n/)) {
+    if (line.length > 120) continue;
+    const m = line.match(HEADING_LINE_RE);
+    if (!m) continue;
+    const rank = Number(m[1]);
+    const name = m[2].replace(/[.!?:;,\s]+$/, "").trim();
+    if (!(rank >= 1 && rank <= 25) || !/[a-z]/i.test(name) || name.split(/\s+/).length > 14) continue;
+    if (!out.some((h) => h.rank === rank)) out.push({ rank, name });
+  }
+  return out.length >= 3 ? out : [];
+}
+
+const nameWords = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2);
 
 function rankOf(sentence: string): number | null {
   const m = sentence.trim().match(HEADER_RE);
@@ -59,10 +89,19 @@ function findProduct(texts: string[], glossary: string[]): string | undefined {
 }
 
 /** Detects "Number 5 ... Number 1" listicle structure; falls back to a single body section. */
-export function detectSections(sentences: Sentence[], duration: number, glossary: string[]): Section[] {
+export function detectSections(sentences: Sentence[], duration: number, glossary: string[], headings: ScriptHeading[] = []): Section[] {
+  const headingOf = (rank: number) => headings.find((h) => h.rank === rank);
   const cands = sentences
     .map((s, idx) => ({ idx, rank: rankOf(s.text) }))
-    .filter((c): c is { idx: number; rank: number } => c.rank !== null);
+    .filter((c): c is { idx: number; rank: number } => c.rank !== null)
+    // Script headings known: a "number N" sentence is the header only when it (or the next one) says
+    // a word of that heading's name ("at number two" in the middle of item #2 is not a header).
+    .filter((c) => {
+      const h = headingOf(c.rank);
+      if (!headings.length || !h) return true;
+      const near = nameWords(sentences.slice(c.idx, c.idx + 2).map((x) => x.text).join(" "));
+      return nameWords(h.name).some((w) => near.includes(w));
+    });
   const chain = pickHeaderChain(cands);
 
   if (!chain.length) return [{ id: 0, kind: "body", start: 0, end: duration }];
@@ -81,7 +120,7 @@ export function detectSections(sentences: Sentence[], duration: number, glossary
       start: sections.length === 0 ? 0 : s.start,
       end: nextStart,
       rank: c.rank,
-      product_name: findProduct(near, glossary),
+      product_name: headingOf(c.rank)?.name ?? findProduct(near, glossary),
     });
   });
 

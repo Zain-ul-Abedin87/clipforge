@@ -528,7 +528,7 @@ describe("Exact-model footage: YouTube title / window / shot logic", () => {
   });
 
   test("search queries cover walkaround / review / demo / official", () => {
-    assert.deepEqual(yx.searchQueries("Scag", "Turf Tiger II"), ['"Scag Turf Tiger II" walkaround', '"Scag Turf Tiger II" review', '"Scag Turf Tiger II" demo', '"Scag Turf Tiger II" official']);
+    assert.deepEqual(yx.searchQueries("Scag", "Turf Tiger II").slice(0, 4), ['"Scag Turf Tiger II" walkaround', '"Scag Turf Tiger II" review', '"Scag Turf Tiger II" demo', '"Scag Turf Tiger II" official']);
   });
 
   test("windows skip the intro, prefer feature chapters and never overlap", () => {

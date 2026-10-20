@@ -20,6 +20,44 @@ export const hasModelToken = (model: string | null | undefined) => /[a-z0-9]/i.t
 const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
 /**
+ * Everyday words that name a kind of thing or a quality, never a brand or a model on their own
+ * ("waterproof case", "armored gloves", "Pro version earbuds"). Product-agnostic.
+ */
+const GENERIC_WORDS = new Set(
+  (
+    "a an the and or of for with in on to by new best top cheap budget premium pro plus max mini ultra lite " +
+    "version edition model series generation gen type style kind set kit pack bundle combo " +
+    "case cases bag bags pen pens glove gloves tool tools camera cameras headset headsets earbud earbuds earmuff earmuffs " +
+    "earplug earplugs mount mounts backpack backpacks light lights flashlight lamp knife knives phone phones watch speaker " +
+    "charger cable battery batteries holder cover strap belt box bottle chair table shoe shoes jacket shirt hat helmet vest " +
+    "device devices gadget gadgets gear equipment accessory accessories product products item items thing system " +
+    "tactical special waterproof armored armoured laser resistant heavy duty portable wireless smart electric cordless digital " +
+    "rugged compact small large big mini personal professional outdoor indoor military police"
+  ).split(" "),
+);
+
+export const isGenericWord = (w: string) => GENERIC_WORDS.has(w.toLowerCase());
+
+/** Model tokens that identify a product: anything with a digit, or a non-generic word of 3+ letters. */
+export function distinctiveTokens(model: string | null | undefined): string[] {
+  return words(model ?? "").filter((t) => /\d/.test(t) || (t.length >= 3 && !GENERIC_WORDS.has(t)));
+}
+
+/**
+ * A name a footage search can treat as one exact product: the brand is a real name (not empty,
+ * not lower-case, not only generic words) and the full name has at least one distinctive token.
+ * "waterproof case", "Laser-Resistant Gloves", "Tactical Pen" -> false; "Olight O'Pen Pro" -> true.
+ */
+export function looksBranded(brand: string | null | undefined, model: string | null | undefined): boolean {
+  const b = (brand ?? "").trim();
+  if (!b || !/^[A-Z0-9]/.test(b)) return false;
+  const bw = words(b);
+  if (!bw.length || bw.every((w) => GENERIC_WORDS.has(w))) return false;
+  if (!hasModelToken(model)) return false;
+  return distinctiveTokens(`${b} ${model ?? ""}`).length > 0;
+}
+
+/**
  * name -> the one longer product name it is a whole-word part of ("Explorer" -> "Bounce Imaging
  * Explorer throwable 360 camera"). A fragment that fits two longer names is ambiguous and kept.
  */

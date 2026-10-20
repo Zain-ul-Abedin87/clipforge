@@ -15,7 +15,7 @@ import type { SfxKind } from "../lib/render/sfx.js";
 import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
 import { hookText, hookTitleProps } from "../lib/render/hookTitle.js";
 import { blackSpans, hitsBlack } from "../lib/blackFrames.js";
-import { ffmpegPath, ffprobePath } from "../lib/tools.js";
+import { ffmpegPath, ffprobePath, venvPythonPath } from "../lib/tools.js";
 import { run } from "../lib/exec.js";
 import { exactModelPrompt, productRegions, readPoolStatus, readProductPool } from "../lib/assets/productPool.js";
 import { verifyCandidates, visionVerifyEnabled } from "../lib/agent/visionVerify.js";
@@ -161,6 +161,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
 
   // Exact-model check on every product photo shown under a product (press kit / official / any
   // image in the presskit folder). Only confirmed photos are used; unchecked = not used.
+  REJECTED_STILLS = await rejectPageStills(dir, channel, scenes, log);
   VERIFIED_PHOTOS = await verifyProductPhotos(dir, channel, scenes, poolConfig(loadProjectNiche(project, style)).category, log);
   if (motionCfg.graphics) await addMotionGraphics(tl, scenes, assets, sections, style, path.join(dir, "graphics"), channel);
   const pace = pacingConfig(loadProjectNiche(project, style), env("PACING", "on").toLowerCase() === "off");
@@ -223,6 +224,36 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     const words = readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words;
     const n = await addHookTitle(tl, words, pace.hookEnd, cardStyleOf(style), path.join(dir, "graphics"), preset.custom ? themeOf(preset) : undefined);
     log(`[timeline] hook title: ${n ? `${n} scene(s), first ${pace.hookEnd.toFixed(1)} s` : "no words in the hook"}`);
+  }
+  // Countdown teaser (intro after the hook) and recap (outro): each montage shot of a product gets
+  // its rank + name lower third, so the viewer sees the list in order.
+  if (motionCfg.graphics && env("MONTAGE_LABELS", "on").toLowerCase() !== "off") {
+    const rankOf = new Map<string, number>();
+    for (const s of sections) if (s.kind === "item" && s.rank !== undefined && s.product_name) rankOf.set(s.product_name, s.rank);
+    const introUntil = pace.introEnd ?? pace.hookEnd ?? 0;
+    let n = 0;
+    for (const t of tl) {
+      const st = t.startFrame / FPS;
+      const inIntro = pace.hookEnd !== undefined && st >= pace.hookEnd - 0.05 && st < introUntil;
+      const inOutro = pace.outroStart !== undefined && st >= pace.outroStart - 0.05;
+      if (!(inIntro || inOutro) || t.backdrop) continue;
+      let off = 0;
+      for (const sh of t.asset.shots ?? []) {
+        const at = off / FPS;
+        off += sh.frames;
+        if (!sh.product || sh.frames < FPS * 0.8) continue;
+        const rank = rankOf.get(sh.product);
+        (t.overlays ??= []).push({
+          path: await renderLowerThird(rank, sh.product, cardStyleOf(style), path.join(dir, "graphics")),
+          card: { comp: "LowerThird", props: { title: sh.product, rank, sub: "" } },
+          delay: at + 0.1,
+          anim: "slide_left",
+          out: Math.max(0.6, sh.frames / FPS - 0.3),
+        });
+        n++;
+      }
+    }
+    log(`[timeline] montage labels: ${n} (intro teaser / outro recap)`);
   }
   // Verified product stills -> 2.5D parallax + light sweep clips (Remotion), before the cards render.
   await parallaxStills(tl, log).catch((e) => log(`[parallax] failed: ${String(e).slice(0, 140)}`));
@@ -503,11 +534,43 @@ function cardFor(g: Scene["graphic"] & object, name: string): Layer["card"] {
 
 /** Product photos that passed the exact-model check (set per run by verifyProductPhotos). */
 let VERIFIED_PHOTOS: Map<string, Set<string>> | null = null;
+let REJECTED_STILLS = new Set<string>();
+
+/**
+ * Web / retail stills that are page screenshots or multi-product grids (shop pages) are never used:
+ * python/still_check.py (aspect, tile grid, text density, OCR page words when available). Cached
+ * per file in the project; without Python nothing is rejected.
+ */
+async function rejectPageStills(dir: string, channel: string, scenes: Scene[], log: (m: string) => void): Promise<Set<string>> {
+  if (env("STILL_CHECK", "on").toLowerCase() === "off") return new Set();
+  const py = venvPythonPath();
+  const script = path.join(paths.python, "still_check.py");
+  if (!py || !fs.existsSync(script)) return new Set();
+  const products = [...new Set(scenes.map((s) => s.product_name).filter((p): p is string => !!p))];
+  const files = products.flatMap((p) => allProductPhotos(channel, p));
+  const cacheFile = path.join(dir, "still_check.json");
+  const cache: Record<string, string | null> = fs.existsSync(cacheFile) ? readJson(cacheFile) : {};
+  const todo = files.filter((f) => !(f in cache));
+  for (let i = 0; i < todo.length; i += 40) {
+    const list = path.join(dir, "still_check_in.json");
+    fs.writeFileSync(list, JSON.stringify(todo.slice(i, i + 40)));
+    const r = await run(py, [script, list], { timeoutMs: 5 * 60_000 });
+    try {
+      Object.assign(cache, JSON.parse(r.stdout.trim().split(/\r?\n/).pop() ?? "{}").results ?? {});
+    } catch {
+      log(`[stills] page/grid check failed: ${r.stderr.slice(-160)}`);
+    }
+  }
+  writeJson(cacheFile, cache);
+  const bad = new Set(files.filter((f) => cache[f]));
+  for (const f of bad) log(`[stills] rejected ${path.basename(f)}: ${cache[f]}`);
+  return bad;
+}
 
 function allProductPhotos(channel: string, product: string): string[] {
   const dir = path.join(paths.channels, channel, "presskit", slug(product));
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => path.join(dir, f));
+  return fs.readdirSync(dir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => path.join(dir, f)).filter((f) => !REJECTED_STILLS.has(f));
 }
 
 /** The product's photos in the channel press kit, only those Claude confirmed show the exact model. */

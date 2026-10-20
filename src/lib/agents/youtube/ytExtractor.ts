@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { coreModel, hasModelToken } from "../../productNames.js";
+import { coreModel, distinctiveTokens, hasModelToken, looksBranded } from "../../productNames.js";
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "../../env.js";
@@ -42,6 +42,8 @@ export const VAULT_ROOT = path.join(paths.workspace, "models");
 export const MIN_VIDEO_SEC = 45;
 export const MAX_VIDEO_SEC = 25 * 60;
 export const INTRO_SKIP_SEC = 10;
+/** Last seconds of a source video: end screens and subscribe overlays live there. */
+export const OUTRO_SKIP_SEC = 20;
 
 const num = (name: string, d: number) => {
   const v = Number(env(name, ""));
@@ -88,6 +90,39 @@ export function titleHasModel(title: string, model: string): boolean {
   return modelPattern(model).test(normText(title));
 }
 
+const wordSet = (s: string) => new Set(normText(s).split(/[^a-z0-9]+/).filter(Boolean));
+
+/** Every word of the brand is a whole word of the name / title. */
+export function nameHasBrand(name: string, brand: string): boolean {
+  const bw = [...wordSet(brand)];
+  if (!bw.length) return false;
+  const have = wordSet(name);
+  const joined = normText(name).replace(/[^a-z0-9]+/g, "");
+  return bw.every((w) => have.has(w)) || joined.includes(bw.join(""));
+}
+
+/**
+ * Long models padded with description words are rarely in a title whole ("Imaging Explorer
+ * Throwable 360 Camera"). Brand + most of the distinctive model tokens is enough then; digits stay
+ * required when the model has few word tokens (so "Tiger II" never passes for "Tiger III").
+ */
+export function titleHasBrandAndKeyTokens(title: string, brand: string, model: string): boolean {
+  const dt = [...new Set(distinctiveTokens(model))];
+  if (dt.length < 3 || !nameHasBrand(title, brand)) return false;
+  const have = wordSet(title);
+  const digitTokens = dt.filter((t) => /\d/.test(t));
+  const wordTokens = dt.filter((t) => !/\d/.test(t));
+  if (wordTokens.length < 3 && !digitTokens.every((t) => have.has(t))) return false;
+  return dt.filter((t) => have.has(t)).length >= Math.ceil(dt.length * 0.5);
+}
+
+/** A vault shot counts as verified exact-model footage only when its source title names the brand and the model. */
+export function vaultItemVerified(it: Pick<VaultItem, "title">, m: Pick<VaultManifest, "brand" | "model">): boolean {
+  const t = it.title ?? "";
+  if (!t || !looksBranded(m.brand, m.model) || !nameHasBrand(t, m.brand)) return false;
+  return titleHasModel(t, m.model) || fuzzyTitleHasModel(t, m.model) || titleHasBrandAndKeyTokens(t, m.brand, m.model) || (coreModel(m.model) !== m.model && titleHasModel(t, coreModel(m.model)));
+}
+
 export const durationOk = (sec: number) => sec >= MIN_VIDEO_SEC && sec <= MAX_VIDEO_SEC;
 
 /** YouTube Shorts (vertical, <= 60 s): allowed from 15 s when HARVEST_SHORTS is on, converted to 16:9. */
@@ -101,7 +136,9 @@ const lengthOk = (h: Pick<SearchHit, "url" | "duration">, allowShorts: boolean) 
 /** YouTube searches for one model (the search box has no OR, so one query per kind of video). */
 export function searchQueries(brand: string, model: string): string[] {
   const base = `"${brand} ${model}"`.replace(/\s+/g, " ");
-  return ["walkaround", "review", "demo", "official"].map((k) => `${base} ${k}`);
+  // Low-footage products: also the official channel / launch, news coverage, hands-on and in-use
+  // footage (each hit still has to name brand + model in its title).
+  return ["walkaround", "review", "demo", "official", "official video", "in action", "hands on", "news", "launch"].map((k) => `${base} ${k}`);
 }
 
 export interface SearchHit {
@@ -126,7 +163,7 @@ export function filterHits(
   const kept: SearchHit[] = [];
   const rejected: { hit: SearchHit; why: string }[] = [];
   // Exact token match first; fuzzy (letters may be misspelled, digits never) only when asked.
-  const names = (title: string) => titleHasModel(title, model) || (fuzzy && fuzzyTitleHasModel(title, model));
+  const names = (title: string) => titleHasModel(title, model) || (fuzzy && fuzzyTitleHasModel(title, model)) || titleHasBrandAndKeyTokens(title, brand, model);
   // A product with an empty model (an LLM "null") must not break every other product's search.
   otherModels = otherModels.filter(hasModelToken);
   for (const h of hits) {
@@ -165,7 +202,7 @@ export function planWindows(duration: number, chapters: { start: number; end: nu
   const count = opts.count ?? 4;
   const len = opts.seconds ?? 20;
   const from = Math.min(INTRO_SKIP_SEC, duration * 0.2);
-  const to = Math.max(from + 1, duration * 0.92);
+  const to = Math.max(from + 1, Math.min(duration * 0.92, duration > 3 * OUTRO_SKIP_SEC ? duration - OUTRO_SKIP_SEC : duration));
   const out: Window[] = [];
   const overlaps = (s: number, e: number) => out.some((w) => s < w.end && e > w.start);
   const feats = features.map((f) => f.toLowerCase().trim()).filter(Boolean);
@@ -311,9 +348,19 @@ export function listVaults(root = VAULT_ROOT): { dir: string; name: string; mani
  * longest model (so "Turf Tiger II" beats "Turf Tiger").
  */
 export function findVaultFor(productName: string, root = VAULT_ROOT): { dir: string; manifest: VaultManifest } | null {
-  const all = listVaults(root).filter((v) => v.manifest.items.length);
-  let hits = all.filter((v) => titleHasModel(productName, v.manifest.model));
-  if (!hits.length && env("FUZZY_NAMES", "on").toLowerCase() !== "off") hits = all.filter((v) => fuzzyTitleHasModel(productName, v.manifest.model));
+  // A vault belongs to a product only when the product name carries the vault's brand and the
+  // vault is a real product (brand + distinctive model token). A brandless vault ("waterproof" /
+  // "case") or a single common-word model would otherwise match every product that says "case".
+  // The brand may be left out of the name only for a model with 2+ distinctive tokens ("the Turf Tiger II").
+  const all = listVaults(root).filter(
+    (v) => v.manifest.items.length && looksBranded(v.manifest.brand, v.manifest.model) && (nameHasBrand(productName, v.manifest.brand) || distinctiveTokens(v.manifest.model).length >= 2),
+  );
+  const modelOk = (m: string) => distinctiveTokens(m).length > 0;
+  let hits = all.filter((v) => modelOk(v.manifest.model) && titleHasModel(productName, v.manifest.model));
+  if (!hits.length && env("FUZZY_NAMES", "on").toLowerCase() !== "off") hits = all.filter((v) => modelOk(v.manifest.model) && fuzzyTitleHasModel(productName, v.manifest.model));
+  // Model made only of short / common words ("O O'Pen Pro"): the brand is required anyway, so an
+  // exact whole-phrase match of brand + model in the name is enough.
+  if (!hits.length) hits = all.filter((v) => !modelOk(v.manifest.model) && titleHasModel(productName, `${v.manifest.brand} ${v.manifest.model}`));
   if (!hits.length) return null;
   const brandIn = (v: (typeof hits)[number]) => (normText(productName).includes(normText(v.manifest.brand)) ? 1 : 0);
   hits.sort((a, b) => brandIn(b) - brandIn(a) || b.manifest.model.length - a.manifest.model.length);
@@ -970,7 +1017,8 @@ export function vaultPoolShots(products: string[], root = VAULT_ROOT): PoolShot[
     const v = findVaultFor(name, root);
     if (!v) continue;
     const stills = new Map(v.manifest.items.filter((i) => i.kind === "image").map((i) => [i.id.replace(/_i$/, ""), path.join(v.dir, i.file)]));
-    for (const it of v.manifest.items.filter((i) => i.kind === "video" && fs.existsSync(path.join(v.dir, i.file)))) {
+    // Never the first 5 s of a source video (intro cards / channel branding).
+    for (const it of v.manifest.items.filter((i) => i.kind === "video" && fs.existsSync(path.join(v.dir, i.file)) && !(i.start < 5))) {
       const still = stills.get(it.id.replace(/_v$/, ""));
       out.push({
         id: `vault_${it.id}`,
@@ -986,7 +1034,8 @@ export function vaultPoolShots(products: string[], root = VAULT_ROOT): PoolShot[
         frames: still && fs.existsSync(still) ? [still] : [],
         shotType: it.feature ? "closeup" : "field",
         srcStart: it.start,
-        verified: true,
+        // Harvested by title + CLIP only (no per-shot vision): verified when the source title names brand + model.
+        verified: vaultItemVerified(it, v.manifest),
         ...(it.keyword || it.feature ? { keyword: it.keyword ?? it.feature! } : {}),
       });
     }

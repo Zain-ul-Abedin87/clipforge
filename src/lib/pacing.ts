@@ -475,7 +475,10 @@ export function applyPacing(
     if (!shots.length) return undefined;
     const keyOf = (p: PoolShot) => (p.srcStart === undefined ? sourceKey(p.path) : sourceKey(p.path, p.url));
     const usedOf = (p: PoolShot) => ledger.used.filter((u) => u.key === keyOf(p));
-    const ok = shots.filter((p) => keyOf(p) !== prevKey && (!strictGap || ledger.gapOk(keyOf(p), REUSE_GAP)));
+    // Each source moment is shown at most MAX_MOMENT_REUSE times; past that the gap is filled with
+    // the product's verified stills (Ken Burns) instead of looping the same footage.
+    const cap = Number(process.env.MAX_MOMENT_REUSE ?? 2);
+    const ok = shots.filter((p) => keyOf(p) !== prevKey && usedOf(p).length < cap * Math.max(1, Math.floor(p.duration / Math.max(need, 1))) && (!strictGap || ledger.gapOk(keyOf(p), REUSE_GAP)));
     if (!ok.length) return undefined;
     const sinceLast = (p: PoolShot) => ledger.now - (ledger.lastAt.get(keyOf(p)) ?? -1e6);
     const p = [...ok].sort((x, y) => usedOf(x).length - usedOf(y).length || sinceLast(y) - sinceLast(x) || (x.author === lastUp[lastUp.length - 1] ? 1 : 0) - (y.author === lastUp[lastUp.length - 1] ? 1 : 0))[0];
@@ -490,8 +493,8 @@ export function applyPacing(
       const d = starts.length ? Math.min(...starts.map((x) => Math.abs(x - t))) : 99;
       if (d > bestD) { bestD = d; at = t; }
     }
-    const n = usedOf(p).length;
-    const variant = (["mirror", "punch", "mirror_punch"] as const)[(n - 1 + 3) % 3];
+    // Punch-in only: a mirrored shot shows on-screen text and logos backwards.
+    const variant = "punch" as const;
     ledger.take(local, base + at, base + at + len, scId);
     lastUp.push(p.author);
     reusedCount++;
@@ -499,9 +502,9 @@ export function applyPacing(
     return { path: p.path, kind: "video", in: Math.round(at * 100) / 100, frames: 0, source: "web_crawl", url: p.url, author: p.author, product, key: local, srcIn: base + at, shotType: p.shotType, verified: true, reused: true, variant };
   };
   /** A verified product photo shown again (Ken Burns), only after REUSE_GAP s and not back-to-back. */
-  const photoReuse = (product: string, scId: number, prevKey: string | undefined): SubShot | undefined => {
+  const photoReuse = (product: string, scId: number, prevKey: string | undefined, gap = REUSE_GAP): SubShot | undefined => {
     const list = opts.photosOf?.(product) ?? [];
-    const ph = list.filter((f) => sourceKey(f) !== prevKey && ledger.gapOk(sourceKey(f), REUSE_GAP)).sort((x, y) => (ledger.lastAt.get(sourceKey(x)) ?? -1e6) - (ledger.lastAt.get(sourceKey(y)) ?? -1e6))[0];
+    const ph = list.filter((f) => sourceKey(f) !== prevKey && ledger.gapOk(sourceKey(f), gap)).sort((x, y) => (ledger.lastAt.get(sourceKey(x)) ?? -1e6) - (ledger.lastAt.get(sourceKey(y)) ?? -1e6))[0];
     if (!ph) return undefined;
     ledger.take(sourceKey(ph), 0, STILL, scId);
     return { path: ph, kind: "image", in: 0, frames: 0, source: "presskit", product, key: sourceKey(ph), srcIn: 0, verified: true, reused: true };
@@ -643,6 +646,7 @@ export function applyPacing(
     }
   }
   let lockedShots = 0;
+  let montageTurn = 0;
   for (const i of order) {
     const t = tl[i];
     const sc = scenes[i];
@@ -673,6 +677,7 @@ export function applyPacing(
       if (held) {
         ledger.claim(`${i}:${k}`);
         s = { ...held };
+        if (s.variant && String(s.variant).includes("mirror")) s.variant = "punch";
         lastUp.push(held.author);
         if (product && !held.verified && !t.backdrop) stockFrames.set(product, (stockFrames.get(product) ?? 0) + f);
         lockedShots++;
@@ -686,6 +691,15 @@ export function applyPacing(
       if (!s && said && inIntro) s = poolPick(said, need, sc.id, prevKey, true);
       if (!s && said && inOutro) s = poolPick(said, need, sc.id, prevKey) ?? reusePick(said, need, sc.id, prevKey, false);
       if (s && !held) mentionShots++;
+      // Rest of the intro (after the hook) and the recap outro: a montage of every product in
+      // chapter order (countdown teaser / recap), each its best verified shot.
+      if (!s && !t.backdrop && (inIntro ? a0 >= (cfg.hookEnd ?? 0) - 0.05 : inOutro) && names.length) {
+        for (let m = 0; m < names.length && !s; m++) {
+          const n = names[(montageTurn + m) % names.length];
+          s = poolPick(n, need, sc.id, prevKey, true) ?? (inOutro ? reusePick(n, need, sc.id, prevKey, false) : undefined);
+          if (s) montageTurn = (montageTurn + m + 1) % names.length;
+        }
+      }
       // Hook teaser: the best verified shot of a different product each cut, else other B-roll.
       if (!s && teaserHere && bounds[k] < cfg.hookEnd! - 0.05) {
         s = teaserPick(need, sc.id, prevKey);
@@ -705,8 +719,8 @@ export function applyPacing(
         }
         // Reuse order: another verified moment after the gap, a verified photo (Ken Burns), then
         // any non-adjacent verified moment.
-        if (!s) s = reusePick(product, need, sc.id, prevKey, true);
         if (!s) s = photoReuse(product, sc.id, prevKey);
+        if (!s) s = reusePick(product, need, sc.id, prevKey, true);
         if (!s) s = reusePick(product, need, sc.id, prevKey, false);
       }
       if (!s && product && t.backdrop) s = reusePick(product, need, sc.id, prevKey, true) ?? photoReuse(product, sc.id, prevKey) ?? reusePick(product, need, sc.id, prevKey, false);
@@ -735,6 +749,8 @@ export function applyPacing(
       // Before any repeat: a later, unused moment of the scene's own clip, even right after itself
       // (a jump forward in the same footage reads as a cut; the same frames twice read as a loop).
       if (!s && !product && a.kind === "video" && !t.backdrop && a.duration) s = clipPick(a.path, a.duration, a.source, need, (a.in ?? 0) + k * need, sc.id);
+      // A product still (Ken Burns) shown again a few seconds later beats looping the same footage.
+      if (!s && product && !t.backdrop) s = photoReuse(product, sc.id, prevKey, 6);
       if (!s) {
         // Nothing unused left: reuse (logged, QA reports it), at the in-point farthest from the
         // moments already shown and with a mirror / punch-in so it is not the same picture again.
@@ -742,8 +758,7 @@ export function applyPacing(
         const { key, base } = a.kind === "image" ? { key: sourceKey(a.path), base: 0 } : ident(a.path);
         ledger.forced.push(`scene ${sc.id} sub-shot ${k + 1}: ${a.path.split(/[\\/]/).pop()}`);
         const at = a.kind === "video" ? farthestIn(ledger, key, a.duration, need, a.in ?? 0, base) : 0;
-        const n = ledger.used.filter((u) => u.key === key).length;
-        const variant = a.kind === "video" ? (["mirror", "punch", "mirror_punch"] as const)[n % 3] : undefined;
+        const variant = a.kind === "video" ? ("punch" as const) : undefined;
         s = { path: a.path, kind: a.kind, in: at, frames: 0, source: a.source, key, srcIn: base + at, reused: true, ...(variant ? { variant } : {}) };
         ledger.take(key, base + at, a.kind === "image" ? STILL : base + at + need, sc.id);
       }

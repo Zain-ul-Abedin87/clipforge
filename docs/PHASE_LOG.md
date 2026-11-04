@@ -1151,10 +1151,90 @@ Off by default; Tools > "Sound check & SFX bank".
 
 ---
 
+## Phase B: Explainer and Tutorial video types
+
+Two new kinds of video for creators outside the product-countdown niche. Page: **/make**, also
+linked from the New video page.
+
+**Explainer** (explainroo, github.com/vincentsch/explainroo, MIT; voice, timing and rendering
+are local): an animated diagram with a voice-over.
+1. Inputs: topic, the points to explain (the only facts the script may state), length and look.
+2. The AI writes the narration as scenes; **ClipForge writes `script.md`**, so the syntax is
+   always right.
+3. The AI writes each scene's drawing code against explainroo's Scene API (a condensed
+   reference from its AGENTS.md).
+   - Every scene body is checked before explainroo runs it: no network, browser globals,
+     timers or endless loops, and it must compile.
+   - On-screen words such as "Your location" are not mistaken for code.
+4. `explainroo check --json`:
+   - its errors go back to the AI, for up to `formats.fixRounds` rounds (default 3);
+   - a scene still broken after that becomes a plain list, so the video can render;
+   - what is left is shown to the creator.
+5. The creator reads and fixes the words. "Save & redo the pictures" keeps their words.
+   - "Make the video" refuses changed words until the pictures are redone, so the drawings
+     always match the words.
+6. `explainroo voice` -> `render --out output/<project>.mp4` -> `verify` -> QA.
+
+**Tutorial** (argo, github.com/shreyaskarnik/argo, MIT, npm `@argo-video/cli`): the creator's own
+screen recording with a voice-over.
+1. Upload the recording, plus a few sentences on what it shows.
+2. FFmpeg finds the picture changes -> scenes: at least 4 s each, the strongest changes first.
+3. The AI writes a voice-over per scene from the notes only.
+   - It is cut to whole sentences that fit the scene (2.4 words/s, `formats.wordsPerSec`).
+   - The creator edits it; a text over its scene's limit is flagged.
+4. `argo import --demo tutorial --force` -> `demos/tutorial.scenes.json` +
+   `.argo/tutorial/.timing.json` -> `argo tts generate` -> `argo export tutorial` ->
+   `output/<project>.mp4` (+ .srt / .vtt).
+
+**Both**
+- Pipeline types: Writing and Render(+QA) only, so the pipeline page, logs and Retry work as
+  before.
+- QA lite for videos without a ClipForge timeline: file, black frames, first frame, flashes,
+  silence, loudness, clipping, subtitle file, AI label.
+- Plain-English help when explainroo or argo is not installed, the recording is missing, or
+  Ollama is down. The last one now fails at once instead of waiting a minute.
+
+**Files**: `src/lib/formats/{tool,explainer,tutorial}.ts`, `src/commands/qaLite.ts`,
+`src/server/routes/make.ts`, `src/lib/orchestrator/{pipeline,friendly}.ts`, `src/cli.ts`,
+`src/server/server.ts`, `src/lib/settings/features.ts`, `web/make.html`, `web/new.html`,
+`web/tools.html`, `tests/formats.test.ts` (10).
+
+**Checks**
+- Typecheck passes. 408 tests: 401 pass, 1 skipped, 6 fail. The 6 failures are the same
+  `src/lib/models/` stand-in failures as before.
+- Real runs here:
+  - scene detection on a two-part video: the change was found at 3.0 s;
+  - QA lite on a rendered file: it flagged a fade-in first frame and -21.8 LUFS;
+  - browser: both pages, from inputs to the setup help.
+
+**How to verify on your PC**
+1. Explainer:
+   - `git clone https://github.com/vincentsch/explainroo`, then in it `npm install` and
+     `node bin/explainroo.js doctor --fetch`.
+   - In Tools > Video types, set explainroo to the path of `bin/explainroo.js`.
+   - Make a 1-minute explainer on /make.
+2. Tutorial:
+   - `npm install -g @argo-video/cli`.
+   - Record your screen at a fixed frame rate, then make a tutorial on /make.
+
+**Open risks**
+- Neither tool has been run with ClipForge. Their commands, file formats and JSON outputs were
+  read from their source (explainroo `src/cli.js`, `AGENTS.md`; argo `src/cli.ts`,
+  `src/import.ts`); the tests use fake runs in that shape.
+- The drawing code is the hard part for a small local model (qwen3:8b). Expect more plain-list
+  fallbacks in Local mode than with the API engine.
+- Both tools speak English through Kokoro by default. explainroo supports 8 languages, German
+  not among them.
+- Tutorial scene detection relies on picture changes: a recording that scrolls slowly in one
+  page gets few scenes. The creator can still edit every scene's words, but not its times yet.
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
   then the pushed branch does not compile.
+- **Install explainroo and argo** on your PC to make the first real Explainer / Tutorial.
 - **Run third-party code**: to test earshot / explainroo / argo for real (here or on your PC).
 - **Video API keys** (optional, paid): `GEMINI_API_KEY` for Veo, `RUNWAYML_API_SECRET` for Runway
   (also Veo 3.1 and Seedance 2). Then `npm install` (3 new SDKs) and try one scene.

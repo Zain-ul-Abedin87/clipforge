@@ -152,6 +152,16 @@ program
   });
 
 program
+  .command("shorts")
+  .description("Cut 3 vertical Shorts (30-58 s, captions) from the rendered video at the strongest hooks")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--video <file>", "source video (default output/<project>.mp4)")
+  .action(async (o) => {
+    const { shorts } = await import("./commands/shorts.js");
+    process.exitCode = await shorts({ project: String(o.project), video: o.video });
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

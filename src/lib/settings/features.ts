@@ -147,7 +147,11 @@ export interface FeatureSettings {
   aistyle: {
     /** Where the pictures are made: "comfyui" (this PC, free) or "gemini" (Gemini API, paid, GEMINI_API_KEY). */
     engine: string;
-    /** Gemini image model (ids from Google's own SDK, e.g. gemini-2.5-flash-image). */
+    /**
+     * Gemini image model. Default gemini-3.1-flash-lite-image: $0.0336 per 1K image (Google's Gemini
+     * API pricing page, read 2026-11-04). gemini-2.5-flash-image is deprecated (shut down on
+     * 2027-03-15) and is moved to the default when a saved settings file still names it.
+     */
     geminiModel: string;
     /** ComfyUI + IP-Adapter: how strongly the reference pictures steer the look (0-1). */
     refWeight: number;
@@ -234,7 +238,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
   clips: { perHour: 10, maxClips: 40, minSec: 20, maxSec: 59, format: "9:16", reframe: "smart", captionPreset: "bold-pop" },
-  aistyle: { engine: "comfyui", geminiModel: "gemini-2.5-flash-image", refWeight: 0.8, ipadapterPreset: "PLUS (high strength)", ipadapter: false, maxImages: 400 },
+  aistyle: { engine: "comfyui", geminiModel: "gemini-3.1-flash-lite-image", refWeight: 0.8, ipadapterPreset: "PLUS (high strength)", ipadapter: false, maxImages: 400 },
   factcheck: { wikipedia: true, wikiLang: "en", wikiPages: 3, removeUnverified: true, minOverlap: 2 },
   formats: { explainroo: "explainroo", explainerTheme: "paper", fixRounds: 3, argo: "argo", sceneThreshold: 0.3, minSceneSec: 4, wordsPerSec: 2.4 },
   earshot: { enabled: false, command: "earshot", sfxBank: true, whoosh: "whoosh_fast/crisp", pop: "pop/1", syncCheck: true, minHit: 0.8 },
@@ -257,8 +261,13 @@ export function loadFeatures(file = featuresFile()): FeatureSettings {
   const raw = readFile(file);
   const out = JSON.parse(JSON.stringify(FEATURE_DEFAULTS)) as FeatureSettings;
   for (const k of Object.keys(FEATURE_DEFAULTS) as Section[]) Object.assign(out[k], sanitize(k, raw[k] ?? {}));
+  // Retired models saved in an older settings file move to their replacement.
+  if (DEPRECATED_GEMINI_IMAGE.has(out.aistyle.geminiModel)) out.aistyle.geminiModel = FEATURE_DEFAULTS.aistyle.geminiModel;
   return out;
 }
+
+/** Gemini image models Google has deprecated (Gemini API pricing page: 2.5 Flash Image shuts down 2027-03-15). */
+const DEPRECATED_GEMINI_IMAGE = new Set(["gemini-2.5-flash-image", "gemini-2.5-flash-image-preview"]);
 
 /** Keeps only known keys whose type matches the default (a hand-edited file cannot break a step). */
 function sanitize(section: Section, patch: Record<string, unknown>): Record<string, unknown> {

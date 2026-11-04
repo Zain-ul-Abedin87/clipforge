@@ -1366,6 +1366,23 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Gemini image model: 3.1 Flash Lite Image (2026-11-04)
+
+Google's Gemini API pricing page says `gemini-2.5-flash-image` is deprecated and shuts down on
+**2027-03-15**, and points to `gemini-3.1-flash-lite-image`. The AI image style used 2.5.
+
+- Default `features.json` `aistyle.geminiModel` is now `gemini-3.1-flash-lite-image`. Google's
+  model page: stable, input text / image / video / PDF, output image and text. So the call that
+  sends the style's reference pictures works unchanged.
+- Price per 1K image: **$0.0336** (was $0.039 on 2.5).
+- A saved settings file that still names `gemini-2.5-flash-image` (or the `-preview` id) moves to
+  the new default when it is loaded. A model the creator picked on purpose (e.g.
+  `gemini-3.1-flash-image`) is kept.
+- Tests: the Gemini generator test uses the new id; a new test covers the migration.
+- Full suite: 482 tests: 481 pass, 0 fail, 1 skipped.
+
+---
+
 ## Script engine v3: summary (2026-11-04)
 
 Branch `feature/script-engine-v3` (from `feature/full-pipeline-v2-cwi1sx` at `25e1655`). The idea:

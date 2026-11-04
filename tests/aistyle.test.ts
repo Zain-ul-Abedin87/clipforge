@@ -82,8 +82,8 @@ describe("AI picture style: the look is added by code", () => {
     let sent: any = null;
     const client = { models: { generateContent: async (p: any) => ((sent = p), { candidates: [{ content: { parts: [{ text: "here" }, { inlineData: { data: Buffer.from("IMG").toString("base64"), mimeType: "image/png" } }] } }] }) } } as any;
     const out = path.join(tmp, "g.png");
-    await A.geminiGenerator({ model: "gemini-2.5-flash-image", client })("A harbour.", { refs: [path.join(A.styleDir(CH), ref)], seed: 1, outFile: out, avoid: "text" });
-    assert.equal(sent.model, "gemini-2.5-flash-image");
+    await A.geminiGenerator({ model: "gemini-3.1-flash-lite-image", client })("A harbour.", { refs: [path.join(A.styleDir(CH), ref)], seed: 1, outFile: out, avoid: "text" });
+    assert.equal(sent.model, "gemini-3.1-flash-lite-image");
     assert.equal(sent.contents[0].parts[0].inlineData.mimeType, "image/png");
     assert.match(sent.contents[0].parts[1].text, /reference for the art style.*A harbour\..*Avoid: text/);
     assert.equal(fs.readFileSync(out, "utf8"), "IMG");
@@ -132,5 +132,18 @@ describe("AI picture style in a documentary", () => {
     // The pipeline: plan, then the AI pictures instead of the stock search.
     const cfg = P.readConfig(project);
     assert.deepEqual(P.stageSteps("visuals", project, cfg), [["plan", "-p", project, "--channel", CH], ["aistyle", "-p", project, "--channel", CH]]);
+  });
+});
+
+describe("Gemini image model", () => {
+  test("default is gemini-3.1-flash-lite-image; a saved deprecated 2.5 id moves to it", async () => {
+    const Fs = await import("../src/lib/settings/features.js");
+    const file = path.join(tmp, "features_migrate.json");
+    fs.writeFileSync(file, JSON.stringify({ aistyle: { engine: "gemini", geminiModel: "gemini-2.5-flash-image" } }));
+    const f = Fs.loadFeatures(file);
+    assert.equal(f.aistyle.geminiModel, "gemini-3.1-flash-lite-image");
+    assert.equal(f.aistyle.engine, "gemini", "the rest of the saved section is kept");
+    fs.writeFileSync(file, JSON.stringify({ aistyle: { geminiModel: "gemini-3.1-flash-image" } }));
+    assert.equal(Fs.loadFeatures(file).aistyle.geminiModel, "gemini-3.1-flash-image", "a model the creator chose on purpose is kept");
   });
 });

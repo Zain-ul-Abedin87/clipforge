@@ -76,6 +76,16 @@ program
   });
 
 program
+  .command("titles")
+  .description("10 original title options for a topic (patterns from outliers, Google News hooks, similarity check)")
+  .requiredOption("-t, --topic <topic>", "video topic, e.g. \"best budget 9mm pistols\"")
+  .action(async (o) => {
+    const { runTitles } = await import("./lib/research/index.js");
+    const r = await runTitles(String(o.topic));
+    r.titles.forEach((t, i) => console.log(`${String(i + 1).padStart(2)}. ${t.title}  [${t.pattern}; closest competitor ${Math.round(t.similarity.score * 100)}%]`));
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

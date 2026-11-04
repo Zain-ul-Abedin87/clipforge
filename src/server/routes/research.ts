@@ -1,6 +1,6 @@
 import { loadFeatures, saveFeatures } from "../../lib/settings/features.js";
 import { ResearchDb } from "../../lib/research/db.js";
-import { lastResearch, runResearch } from "../../lib/research/index.js";
+import { lastResearch, runResearch, runTitles } from "../../lib/research/index.js";
 import { YouTubeApi } from "../../lib/research/youtube-api.js";
 
 /**
@@ -41,6 +41,13 @@ export async function researchRoute(parts: string[], method: string, body: () =>
         running = null;
       }
     }
+    if (method === "POST" && parts[2] === "titles") {
+      const req = JSON.parse((await body()) || "{}") as { topic?: unknown };
+      const topic = typeof req.topic === "string" ? req.topic.trim().slice(0, 120) : "";
+      if (!topic) return { status: 400, body: { error: "topic is required" } };
+      return { status: 200, body: await runTitles(topic, { db, api, log: (m) => (logs.push(m), console.log(m)) }) };
+    }
+    if (method === "GET" && parts[2] === "titles") return { status: 200, body: db.lastScan("titles")?.result ?? null };
     return { status: 404, body: { error: "unknown research route" } };
   } finally {
     db.close();

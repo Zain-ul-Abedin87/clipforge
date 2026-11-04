@@ -36,6 +36,15 @@
       <div class="scroll"><table class="tbl" id="outliers"><thead><tr><th></th><th>Video</th><th class="r">Views</th><th class="r">Channel median</th><th class="r">Score</th><th>Seed</th></tr></thead><tbody></tbody></table></div>
     </div>
 
+    <div class="card">
+      <h2>Titles</h2>
+      <p class="help" style="margin-top:-8px">10 original options. Structures come from the outliers above, wording is new; any title more than 80% similar to a competitor title is rewritten.</p>
+      <div class="row" style="margin-top:8px"><input id="topic" placeholder="Topic, e.g. best budget 9mm pistols" style="flex:1;min-width:220px"><button class="btn primary" id="gen">Generate titles</button></div>
+      <p class="error" id="terr"></p>
+      <div class="scroll"><table class="tbl" id="titles" hidden><thead><tr><th>#</th><th>Title</th><th>Structure</th><th class="r">Closest competitor</th></tr></thead><tbody></tbody></table></div>
+      <p class="help" id="news"></p>
+    </div>
+
     <div class="card flush">
       <div style="padding:20px 24px 0"><h2>Growing new faceless channels</h2><p class="help" style="margin-top:-8px">Created in the last 12 months. RPM and revenue are <b>estimates</b> from niche ranges; 28-day views are measured once two scans are 3+ days apart.</p></div>
       <div class="scroll"><table class="tbl" id="channels"><thead><tr><th>Channel</th><th class="r">Age</th><th class="r">Subs</th><th class="r">Views / 28 d</th><th class="r">RPM (est.)</th><th class="r">Revenue / 28 d (est.)</th><th class="r">Faceless</th></tr></thead><tbody></tbody></table></div>
@@ -108,6 +117,28 @@ $("scan").onclick = async () => {
     $("scan").textContent = "Scan";
   }
 };
+function renderTitles(r) {
+  if (!r) return;
+  $("topic").value ||= r.topic;
+  $("titles").hidden = false;
+  $("titles").tBodies[0].innerHTML = r.titles.map((t, i) => `<tr><td>${i + 1}</td><td class="title">${esc(t.title)}<small>${t.title.length} chars - ${t.source}${t.hook ? ` - angle: ${esc(t.hook)}` : ""}</small></td><td><span class="chip">${esc(t.pattern)}</span></td>
+    <td class="r" title="${esc(t.similarity.against)}">${Math.round(t.similarity.score * 100)}%</td></tr>`).join("");
+  $("news").textContent = `${r.competitors} competitor title(s) checked, ${r.rejected.length} draft(s) rejected as too similar${r.news.length ? `; ${r.news.length} news headline(s) offered as angles` : ""}.`;
+}
+$("gen").onclick = async () => {
+  $("terr").textContent = "";
+  $("gen").disabled = true;
+  $("gen").textContent = "Writing...";
+  try {
+    renderTitles(await api("/api/research/titles", { method: "POST", body: { topic: $("topic").value } }));
+  } catch (e) {
+    $("terr").textContent = e.message;
+  } finally {
+    $("gen").disabled = false;
+    $("gen").textContent = "Generate titles";
+  }
+};
+api("/api/research/titles").then(renderTitles).catch(() => {});
 load().catch((e) => ($("err").textContent = e.message));
 </script>
 </body>

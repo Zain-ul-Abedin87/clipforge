@@ -284,6 +284,9 @@ async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: num
       model,
       messages: await toOllamaMessages(messages),
       stream: false,
+      // Thinking models (qwen3, deepseek-r1): thinking off for JSON steps unless THINK=on; any
+      // <think> block that still comes back is stripped below.
+      ...(/qwen3|deepseek-r1/i.test(model) ? { think: env("THINK", "off").toLowerCase() === "on" } : {}),
       ...(json ? { format: "json" } : {}),
       // num_ctx on every request: without it Ollama uses 4096 and silently cuts longer prompts.
       options: { temperature: 0.2, num_ctx: numCtx, num_predict: answerTokens(maxTokens, numCtx), ...(cpu ? { num_gpu: 0 } : {}) },
@@ -299,7 +302,7 @@ async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: num
     throw apiError(res.ok ? 500 : res.status, `Qwen ${res.ok ? 500 : res.status}: ${msg}`);
   }
   return {
-    text: String(body.message?.content ?? ""),
+    text: stripThink(String(body.message?.content ?? "")),
     inTok: body.prompt_eval_count ?? 0,
     outTok: body.eval_count ?? 0,
     finish: body.done_reason === "length" ? "length" : body.done ? "stop" : "aborted",
@@ -586,3 +589,6 @@ export async function testProvider(p: ProviderName): Promise<{ ok: boolean; mode
     return { ok: false, model, ms: Date.now() - t0, error: String((err as Error).message ?? err).slice(0, 300) };
   }
 }
+
+/** Removes <think>...</think> reasoning blocks (qwen3 / deepseek-r1) from an answer. */
+export const stripThink = (s: string) => s.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^[\s\S]*<\/think>/i, "").trim();

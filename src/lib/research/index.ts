@@ -49,3 +49,30 @@ export async function runResearch(o: { seeds?: string[]; db?: ResearchDb; api?: 
 export function lastResearch(db = new ResearchDb()): ResearchResult | null {
   return db.lastScan<ResearchResult>("research")?.result ?? null;
 }
+
+/**
+ * Titles for a topic: competitor titles from the last scan's outliers plus a topic search (when a
+ * YouTube key is set and quota allows; cached), Google News hooks, then the title agent.
+ */
+export async function runTitles(topic: string, o: { db?: ResearchDb; api?: YouTubeApi; log?: (m: string) => void; fetchNews?: typeof fetch } = {}) {
+  const { generateTitles } = await import("../agents/titles.js");
+  const { newsHooks } = await import("./news.js");
+  const feats = loadFeatures();
+  const log = o.log ?? ((m: string) => console.log(m));
+  const db = o.db ?? new ResearchDb();
+  const api = o.api ?? new YouTubeApi({ db, dailyQuota: feats.research.dailyQuota, quotaReserve: feats.research.quotaReserve, log });
+  const comp = new Map<string, number | undefined>();
+  for (const x of lastResearch(db)?.outliers ?? []) comp.set(x.video.title, x.video.views);
+  if (api.configured && api.canSpend(102)) {
+    try {
+      const vids = await api.videos(await api.searchVideos(topic, { maxResults: 25, order: "relevance" }));
+      for (const v of vids) comp.set(v.title, v.views);
+    } catch (err) {
+      log(`[titles] competitor search failed: ${(err as Error).message}`);
+    }
+  }
+  const news = feats.titles.newsHooks ? await newsHooks(topic, { db, log, fetch: o.fetchNews }) : [];
+  const result = await generateTitles(topic, [...comp.entries()].map(([title, views]) => ({ title, views })), { news, log });
+  db.saveScan("titles", [topic], result);
+  return result;
+}

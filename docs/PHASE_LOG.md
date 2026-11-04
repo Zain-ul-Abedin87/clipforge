@@ -940,10 +940,100 @@ Then a fresh clone should pass typecheck and all tests again.
 
 ---
 
+## OpenMontage-inspired: language versions, product photo polish, decision log
+
+Ideas taken from OpenMontage (AGPL-3.0: ideas only, no code copied): its "Localization & Dub"
+pipeline, its enhancement tools (background removal, upscaling) and its decision audit trail.
+
+**1. Language versions (`src/lib/localize/`)**
+- Wizard step 3 has "Another language": pick a language and "Make this version". It creates a NEW
+  project `<video>-<lang>`. The original is never changed (it only gets a link to the version).
+- The version's Writing stage is `translate`. It re-reads the original's latest script, so
+  "Translate again" brings edits over. It has no research stage.
+- Facts are locked: product names and every token with a digit (model numbers, prices, specs,
+  ranks) become markers before the model sees the text.
+  - A paragraph whose markers come back changed is tried once more, then kept in English and
+    flagged. Never a guessed number.
+  - Decimal comma in de/es/fr/it/pt (4.5 -> 4,5; the value is the same).
+- Flagged for the creator (`translation_report.json`, shown under the editor): US prices, US
+  units (kept, since converting them would be a new claim), and paragraphs much shorter or longer
+  than the original.
+- Voice: `<NAME>_<CODE>` settings (`PIPER_MODEL_DE`, `KOKORO_VOICE_ES`, `TTS_PROVIDER_DE`, ...).
+  - No fallback to the English voice.
+  - Kokoro has no German (checked against hexgrad/kokoro), so German needs Piper (e.g.
+    `de_DE-thorsten`; its dataset is CC0, the voice model's licence is not stated) or a cloud voice.
+  - Per-language pronunciations come from `inputs/glossary.<lang>.txt`.
+- Whisper gets the project's language.
+- `norm()` keeps letters of every language (für -> fur, not "fr"). ASCII keys are unchanged.
+- Ranks are found in German/Spanish/French/Italian/Portuguese scripts (Platz 3, Número 3 ...).
+- Settings: `features.json` `localize` (languages, minRatio/maxRatio, localNumbers).
+- CLI: `clipforge translate --from <video> -l de`.
+
+**2. Product photo polish (`src/lib/assets/stillPolish.ts`, `python/still_polish.py`)**
+- `features.json` `stills`, off by default.
+  - Real-ESRGAN upscales photos under 1280 px (portable `realesrgan-ncnn-vulkan`, BSD-3).
+  - rembg `u2net` cuts the product out; the existing showcase puts it on its studio gradient with
+    a shadow.
+  - Not `bria-rmbg`: rembg's README says it needs a paid agreement for commercial use.
+- A cut is refused when:
+  - it keeps <4% or >90% of the picture;
+  - more than 25% of the picture is half-transparent;
+  - the kept part has the background's colour.
+- Measured with a real u2net run here: a product on white gave 0.9% unsure and colour distance
+  310 (kept); an empty image gave 99% and 0 (refused).
+- Results are cached in `cache/stills/`; a failure only leaves the photo as it was.
+
+**3. Decision log (`decisions.json`, `src/lib/assets/decisions.ts`)**
+- Per scene: the winning clip, and the next 3 candidates with every score part (CLIP match,
+  still / vision / model / reuse penalties) and the reason each one lost.
+- A later swap (download fallback, a nearby scene's clip reused) is noted.
+
+**Fixes found on the way**
+- `simple.css .bar` (8 px progress bar, overflow hidden) clipped the script stats pills in the
+  wizard (seen in a screenshot).
+- A version translated from the CLI kept the editor hidden.
+- A new hint rule caught the old "No TTS voice" message.
+
+**Checks**
+- Typecheck passes.
+- 381 tests: 374 pass, 1 skipped, 6 fail. All 6 failures come from the local stand-ins for the
+  uncommitted `src/lib/models/` files (`models.test.ts` and the GPU-time assertion in
+  `orchestrator.test.ts`), not from this work.
+- New: `tests/localize.test.ts` (15), `tests/stills.test.ts` (6).
+- Browser check: original page (language box) -> German version (note, checks, "Translate
+  again") -> Spanish version made by clicking (no Ollama here, so the plain-English Ollama hint
+  showed).
+
+**How to verify on your PC**
+1. Commit `src/lib/models/` first (see the fix above), then `npm test`.
+2. German voice: download the Piper voice `de_DE-thorsten-high.onnx` + `.onnx.json` to
+   `models/piper/`, then add `PIPER_MODEL_DE=models/piper/de_DE-thorsten-high.onnx` to `.env`.
+3. Open a finished video in `/new`, step 3 -> Another language -> German -> Make this version.
+   Read the translation (qwen3:8b), fix it, approve, then run Voice -> Footage -> Video.
+4. Stills: `pip install "rembg[cpu]"` in `.venv`, put `realesrgan-ncnn-vulkan.exe` on PATH, set
+   `stills.cutout` / `stills.upscale` to true, render a video with press-kit photos.
+5. After an assets run, open `workspace/<video>/decisions.json`.
+
+**Open risks**
+- Translation quality of qwen3:8b into German is not measured. Read every version before
+  publishing; the markers only guarantee names and numbers.
+- English-only parts the version still uses: outro detection (`OUTRO_RE`) and number words in
+  `norm()` ("five" -> 5). A German outro is not detected as one.
+- Piper German voice quality and licence: judge by ear; the model licence is not stated by its
+  author.
+- u2net may cut badly on busy lifestyle photos (the checks above catch the obvious failures,
+  not every one). A faint light edge can remain from a white background.
+- LTX-Video image-to-video (Phase idea #1) is not built: it needs a GPU run, and the commercial
+  terms of its 0.9.x weights are not spelled out. Check ltx.io/model/license first.
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
   then the pushed branch does not compile.
+- **German voice**: download a German Piper voice and set `PIPER_MODEL_DE` (see the
+  OpenMontage-inspired entry).
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live
   results. The code and tests run against a fake API.
 

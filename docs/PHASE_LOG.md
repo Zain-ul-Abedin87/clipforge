@@ -1028,10 +1028,71 @@ pipeline, its enhancement tools (background removal, upscaling) and its decision
 
 ---
 
+## AI engine switch and "Make it with AI" in the editor
+
+**What changed**
+- **AI engine switch** on `/new` (top of the page): Local / API / Both, with chips for Ollama
+  running, an AI API key, and the Veo / Runway keys.
+  - It writes the same `llm_settings.json` the Classic page edits (`GET/PUT /api/engine`,
+    `src/lib/agents/llm/engine.ts`).
+- **Editor, "Don't like this picture?"** has two ways:
+  1. **Use another real clip** (vault clips / fetch new clip, as before).
+  2. **Make it with AI**:
+     - Your own words become the prompt, written by the local or API AI. With no AI running, a
+       simple rule-based prompt is made at once.
+     - The product lock ("must stay exactly as in the reference image") is added by code, so a
+       model cannot drop it.
+     - Start from this clip's picture or **a real press-kit photo**. It is the FIRST frame of the
+       video, so the product on screen is the real one.
+     - Then make the video with:
+       - **Google Flow**: free, manual round trip as before.
+       - **Google Veo API**: `GEMINI_API_KEY`.
+       - **Runway API**: `RUNWAYML_API_SECRET`; Gen-4.5, Gen-4 Turbo, Veo 3.1 (+Fast) and
+         Seedance 2 (+Fast) are all hosted by Runway.
+     - Paid calls need a confirm every time. The clip is swapped in and marked AI-generated (QA
+       asks for YouTube's synthetic-content label).
+- Model ids and duration / ratio limits are copied from the official SDKs' type definitions
+  (`@google/genai` 2.30.0, `@runwayml/sdk` 4.22.0), because the doc sites were blocked in this
+  session.
+
+**Files**: `src/lib/videogen/{providers,generate,prompt}.ts`, `src/lib/agents/llm/engine.ts`,
+`src/server/routes/editorAPI.ts`, `src/server/server.ts`, `web/new.html`, `web/simple/studio.js`,
+`web/simple/simple.css`, `tests/videogen.test.ts` (9 tests).
+
+**Checks**
+- Typecheck passes. 390 tests: 383 pass, 1 skipped, 6 fail. The 6 failures are the same
+  `src/lib/models/` stand-in failures as before.
+- Browser:
+  - Engine switch: Local -> "Start Ollama, or switch to API"; Both.
+  - Editor: pick scene -> Make it with AI -> wish -> real product photo -> Orbit -> Write the
+    prompt -> Flow / Veo / Runway shown, each with the key it needs.
+- Found and fixed on the way: the prompt button waited up to 60 s for a stopped Ollama; the
+  "Start from" choice did not show as selected.
+
+**Not verified**
+- No real Veo or Runway call was made: no keys here. The calls are tested against fake SDK
+  clients; the first real run is on your PC.
+- Kling is not added: neither Kling's nor fal.ai's API docs could be read here, and nothing
+  is added unverified.
+
+**Not built yet (asked for)**
+- Screen Demo, Podcast, Cinematic and Explainer pipelines, local and API. Each is its own
+  pipeline (script shape, visuals, pacing).
+- Three.js: not used anywhere in ClipForge.
+- Remotion: 14 overlay compositions (rank / price / spec / pros-cons / compare / gauge /
+  callout / recap cards, hook title, captions, photo parallax) rendered as alpha clips, plus the
+  preview player. The final cut is assembled by FFmpeg.
+- HyperFrames: not added. It does the same job as Remotion (HTML -> video); a second engine
+  would double the maintenance for no new capability.
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
   then the pushed branch does not compile.
+- **Video API keys** (optional, paid): `GEMINI_API_KEY` for Veo, `RUNWAYML_API_SECRET` for Runway
+  (also Veo 3.1 and Seedance 2). Then `npm install` (3 new SDKs) and try one scene.
 - **German voice**: download a German Piper voice and set `PIPER_MODEL_DE` (see the
   OpenMontage-inspired entry).
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

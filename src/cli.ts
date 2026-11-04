@@ -98,6 +98,50 @@ program
   });
 
 program
+  .command("script")
+  .description("Script writer: outline -> one call per product -> +-3% word count, sourced facts only, originality check")
+  .requiredOption("-p, --project <name>", "project name (writes workspace/<name>/script.txt + script_report.json)")
+  .requiredOption("-t, --topic <topic>", "video topic")
+  .requiredOption("--products <list>", "comma-separated products, countdown order (last = #1)")
+  .option("-w, --words <n>", "target words (default features.json script.targetWords)")
+  .option("--sources <file>", "JSON {product: [page urls]} to read sourced facts from (default <project>/sources.json)")
+  .option("--facts <file>", "JSON [{product,label,value,url,title}] (default <project>/facts_sources.json)")
+  .option("--competitors <ids>", "comma-separated YouTube video ids whose transcripts the script must not copy")
+  .action(async (o) => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { projectDir } = await import("./lib/project.js");
+    const { writeScript } = await import("./lib/agents/script/index.js");
+    const dir = projectDir(String(o.project));
+    fs.mkdirSync(dir, { recursive: true });
+    const readJ = (f: string) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : undefined);
+    const competitors: string[] = [];
+    const cdir = path.join(dir, "competitors");
+    if (fs.existsSync(cdir)) for (const f of fs.readdirSync(cdir).filter((x) => x.endsWith(".txt"))) competitors.push(fs.readFileSync(path.join(cdir, f), "utf8"));
+    if (o.competitors) {
+      const { quickTranscript } = await import("./lib/agents/youtube/ytExtractor.js");
+      for (const id of String(o.competitors).split(",").map((x) => x.trim()).filter(Boolean)) {
+        const t = await quickTranscript(`https://www.youtube.com/watch?v=${id}`).catch(() => null);
+        if (t?.words.length) {
+          const text = t.words.map((w) => w.text).join(" ");
+          competitors.push(text);
+          fs.mkdirSync(cdir, { recursive: true });
+          fs.writeFileSync(path.join(cdir, `${id}.txt`), text);
+        } else console.warn(`[script] no transcript for ${id}`);
+      }
+    }
+    const { report } = await writeScript(dir, {
+      topic: String(o.topic),
+      products: String(o.products).split(",").map((x) => x.trim()).filter(Boolean),
+      targetWords: o.words ? Number(o.words) : undefined,
+      sources: readJ(o.sources ?? path.join(dir, "sources.json")),
+      factsFile: o.facts ?? path.join(dir, "facts_sources.json"),
+      competitors,
+    });
+    process.exitCode = report.withinTolerance && !report.claims.unsourced.length && (report.originality?.clean ?? true) ? 0 : 2;
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

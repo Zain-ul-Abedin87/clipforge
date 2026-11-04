@@ -66,8 +66,10 @@ export interface FeatureSettings {
     /** Allowed deviation from targetWords (0.03 = +-3%). */
     tolerance: number;
     products: number;
-    /** Fail / rewrite above this similarity to competitor transcripts (0-1). */
+    /** Rewrite above this embedding similarity to competitor transcripts (0-1, rescaled cosine). */
     maxSimilarity: number;
+    /** Rewrite when more than this share of a section's word n-grams appear in competitor transcripts. */
+    maxNgramOverlap: number;
     ngram: number;
     embedModel: string;
   };
@@ -121,7 +123,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   titles: { count: 10, maxSimilarity: 0.8, newsHooks: true, maxLength: 70 },
   captions: { enabled: true, preset: "", wordsPerLine: 3, punchIn: true, maxVisualSec: 4 },
   stock: { pexels: true, pixabay: true, imagegen: false, comfyUrl: "http://127.0.0.1:8188", comfyCheckpoint: "sd_xl_turbo_1.0_fp16.safetensors", perQuery: 15 },
-  script: { targetWords: 1500, tolerance: 0.03, products: 10, maxSimilarity: 0.8, ngram: 5, embedModel: "nomic-embed-text" },
+  script: { targetWords: 1500, tolerance: 0.03, products: 10, maxSimilarity: 0.8, maxNgramOverlap: 0.2, ngram: 5, embedModel: "nomic-embed-text" },
   tts: { engine: "kokoro", voice: "am_michael", speed: 1, lufs: -14, xttsSpeakerWav: "", pythonCmd: "python" },
   avatar: { enabled: false, engine: "musetalk", placements: ["intro", "outro"], layout: "pip", pipCorner: "br", pipScale: 0.32, maxClipSec: 15, engineDir: "", pythonCmd: "python" },
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },

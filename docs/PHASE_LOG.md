@@ -225,6 +225,77 @@ N should be ≤ 80.
 
 ---
 
+## Phase 3: Captions + edit polish
+
+**What changed**
+
+- **Word-highlight captions.** Two new presets:
+  - `highlight`: the spoken word turns yellow and grows 12%;
+  - `bold-pop`: capitals, 3 words per line, and the spoken word sits on a green box.
+- **ASS output.** The render writes one ASS event per word. Each event runs from that word's start
+  to the next word's start, so the events tile the line with no gap. Timing accuracy is 10 ms
+  (centiseconds).
+- `cards/src/Captions.tsx` is one caption component for every mode (line, karaoke, word,
+  highlight):
+  - the studio preview (`TimelinePreview`) now uses it;
+  - it is also registered as a transparent **`Captions`** composition (overlay for Shorts in
+    Phase 8);
+  - frames come from `src/lib/render/captionTiming.ts`.
+- **Sync.** The highlight is within **±17 ms** of the aligned word at 30 fps, well inside the
+  ±100 ms target. A test checks this on uneven, real-looking timings.
+- **Beat punch-in zoom** (`src/lib/render/beats.ts`): a quick 6% punch-in (4 frames in, 10 out)
+  on emphasised words: numbers and prices, superlatives, model names, words after a pause, CAPS.
+  Beats are at least 2.5 s apart.
+  - The render applies it with `zoompan`, on footage only. Cards and captions on top stay sharp.
+  - Checked with real ffmpeg 7.1: 1920×1080, 90 of 90 frames.
+- **Visual change every 3-5 s.** Any stretch longer than `captions.maxVisualSec` (default 4 s)
+  with no cut and no beat gets an extra punch-in. The render writes `render/beats.json`, and QA
+  adds a **"Visual change at least every N s"** check (warns above N + 1 s).
+- **Render cache.** A segment's hash only changes when it has punch-ins. Segments without them
+  keep their old hash, so an existing render cache stays valid.
+- **Toggle.** `features.json` → `captions.enabled` is the master switch (default on; channels
+  still opt in through `style.json` or the editor). `captions.preset` is the default style for
+  channels that have none (empty means classic, so existing channels look the same). Also
+  `captions.punchIn` and `captions.maxVisualSec`.
+
+**Files**: `src/lib/render/{captionPresets,captions,captionTiming,beats}.ts`,
+`src/commands/{render,timeline,qa}.ts`, `src/lib/compiler/incrementalCache.ts`,
+`src/lib/preview/previewModel.ts`, `src/lib/qaGate.ts`, `src/lib/settings/features.ts`,
+`cards/src/{Captions.tsx,Root.tsx,preview/TimelinePreview.tsx}`, `tests/polish.test.ts`,
+`tests/captions.test.ts` (its preset lists now include the 2 new presets).
+
+**Checks**:
+
+- typecheck passes, and so does `typecheck:cards`.
+- 308 tests: 307 pass, 0 fail, 1 skipped (the one skipped before this phase). That includes the
+  existing ffmpeg test that draws every preset's ASS file.
+- `build:preview` bundles.
+
+**How to verify on your PC**
+
+1. In the studio, open a project → Captions → pick **Word highlight** or **Bold pop**. The
+   preview should show the spoken word highlighted.
+2. Render:
+
+   ```bash
+   npm run cf -- render -p <project>
+   ```
+
+3. Check that the log has `[render] punch-ins: N on emphasised words + M ...` and that
+   `workspace/<project>/render/beats.json` exists. In the video, words should light up as they
+   are spoken, with short punch-ins on numbers and key words.
+4. To turn things off in `features.json`: `"captions": { "punchIn": false }`, or
+   `"enabled": false` for no captions at all.
+
+**Open risks**
+
+- `zoompan` on video costs some render time, and only on segments that have beats. Set
+  `punchIn: false` if renders get slow.
+- The ASS "box" for `bold-pop` is a thick accent-coloured border (ASS has no per-word
+  background), so it looks a little rounder than the preview's box.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

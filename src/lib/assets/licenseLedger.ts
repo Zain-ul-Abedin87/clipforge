@@ -71,6 +71,7 @@ export function ledgerCategory(provider: Source | "graphic", license = ""): Ledg
   const l = license.toLowerCase();
   switch (provider) {
     case "graphic":
+    case "imagegen":
       return "generated";
     case "local":
       return "own";

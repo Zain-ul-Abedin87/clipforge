@@ -86,6 +86,18 @@ program
   });
 
 program
+  .command("visuals")
+  .description("Visual plan: a unique visual per segment (product footage > product photo > stock > generated), source + licence logged")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--apply", "download stock / generate pictures and fill scenes that have no real picture")
+  .action(async (o) => {
+    const { projectDir } = await import("./lib/project.js");
+    const { runVisualPlan } = await import("./lib/assets/visualPlan.js");
+    const plan = await runVisualPlan(projectDir(String(o.project)), { apply: !!o.apply });
+    if (plan.summary.forcedReuse > 0) console.warn(`[visuals] ${plan.summary.forcedReuse} forced reuse(s): add footage or enable stock / image generation`);
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

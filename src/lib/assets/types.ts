@@ -1,5 +1,5 @@
 /** Where a clip or photo came from (tier order is decided by the niche rule set). */
-export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive" | "youtube_cc" | "web_cc" | "storyblocks" | "web_crawl" | "youtube_exact_model";
+export type Source = "local" | "presskit" | "wikimedia" | "pexels" | "pixabay" | "unsplash" | "archive" | "youtube_cc" | "web_cc" | "storyblocks" | "web_crawl" | "youtube_exact_model" | "imagegen";
 
 /** assets.json contract: {scene_id: {path,source,license,url}} plus what the renderer needs. */
 export interface Asset {

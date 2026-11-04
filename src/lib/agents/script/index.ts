@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadFeatures } from "../../settings/features.js";
+import { bannedIn, ChannelBrief, targetWords } from "../../channelBrief.js";
 import { writeJson } from "../../project.js";
 import { factsFromUrls, loadFactsFile, numbersIn, SourcedFact, unsourcedClaims } from "./facts.js";
 import { buildOutline, Outline } from "./outline.js";
@@ -25,6 +26,8 @@ export interface ScriptReport {
   sections: { kind: string; product?: string; target: number; words: number; attempts: number; unsourcedRemoved: number }[];
   originality: OriginalityReport | null;
   claims: { unsourced: { section: string; sentence: string; numbers: string[] }[]; factsUsed: SourcedFact[]; factsAvailable: number; facts: SourcedFact[] };
+  /** The channel brief used, and any banned phrase still in the final text (should be none). */
+  channel: { id: string; name: string; bannedFound: string[] } | null;
   outline: Outline;
 }
 
@@ -42,12 +45,15 @@ export interface ScriptInput {
   fetchPage?: typeof fetch;
   useEmbeddings?: boolean;
   log?: (m: string) => void;
+  /** The channel's brief (voice, audience, banned phrases, length). */
+  brief?: ChannelBrief | null;
 }
 
 export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: string; report: ScriptReport }> {
   const cfg = loadFeatures().script;
   const log = i.log ?? ((m: string) => console.log(m));
-  const target = i.targetWords ?? cfg.targetWords;
+  const target = i.targetWords ?? (i.brief ? targetWords(i.brief) : cfg.targetWords);
+  if (i.brief) log(`[script] channel brief: ${i.brief.name} (${i.brief.tone})`);
   const ask = i.ask === undefined ? llmWriter() : i.ask;
   if (!ask) log(`[script] no model available: rule-based sections (facts only)`);
   // 1. Sourced facts.
@@ -55,8 +61,8 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
   for (const [product, urls] of Object.entries(i.sources ?? {})) facts.push(...(await factsFromUrls(product, urls, log, i.fetchPage)));
   log(`[script] ${facts.length} sourced fact(s) for ${new Set(facts.map((f) => f.product)).size}/${i.products.length} product(s)`);
   // 2. Outline + sections.
-  const outline = await buildOutline(i.topic, i.products, target, facts, log);
-  let sections = await writeSections(outline, facts, ask, log);
+  const outline = await buildOutline(i.topic, i.products, target, facts, log, i.brief);
+  let sections = await writeSections(outline, facts, ask, log, i.brief);
   // 3. Originality: rewrite sections too close to a competitor (one round), then re-check.
   let originality: OriginalityReport | null = null;
   if (i.competitors?.length) {
@@ -67,7 +73,7 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
         const s = sections[p.index];
         log(`[script] ${s.section.product ?? s.section.kind}: too close to a competitor (5-gram ${p.ngram}, embedding ${p.embedding ?? "-"}); rewriting`);
         const own = s.section.kind === "product" ? facts.filter((f) => f.product === s.section.product) : [];
-        const re = await writeSection({ ...s.section, angle: `${s.section.angle} Use a completely different structure and wording than a typical review.` }, i.topic, own, "", ask, log);
+        const re = await writeSection({ ...s.section, angle: `${s.section.angle} Use a completely different structure and wording than a typical review.` }, i.topic, own, "", ask, log, i.brief);
         sections[p.index] = re;
       }
       originality = await originalityReport(sections.map((s) => s.text), i.competitors, opts);
@@ -95,6 +101,7 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
     sections: sections.map((s) => ({ kind: s.section.kind, product: s.section.product, target: s.section.words, words: s.words, attempts: s.attempts, unsourcedRemoved: s.unsourcedRemoved })),
     originality,
     claims: { unsourced, factsUsed: used, factsAvailable: facts.length, facts },
+    channel: i.brief ? { id: i.brief.id, name: i.brief.name, bannedFound: bannedIn(text, i.brief) } : null,
     outline,
   };
   fs.mkdirSync(dir, { recursive: true });

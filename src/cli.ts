@@ -79,9 +79,10 @@ program
   .command("titles")
   .description("10 original title options for a topic (patterns from outliers, Google News hooks, similarity check)")
   .requiredOption("-t, --topic <topic>", "video topic, e.g. \"best budget 9mm pistols\"")
+  .option("--channel <id>", "channel whose brief (voice, banned phrases) the titles follow")
   .action(async (o) => {
     const { runTitles } = await import("./lib/research/index.js");
-    const r = await runTitles(String(o.topic));
+    const r = await runTitles(String(o.topic), { channel: o.channel ? String(o.channel) : undefined });
     r.titles.forEach((t, i) => console.log(`${String(i + 1).padStart(2)}. ${t.title}  [${t.pattern}; closest competitor ${Math.round(t.similarity.score * 100)}%]`));
   });
 
@@ -153,6 +154,73 @@ program
     }
   });
 
+const channelCmd = program.command("channel").description("Channel brief: who the channel is for and how it sounds (channels/<id>/brief.json + brief.md)");
+channelCmd
+  .command("init <id>")
+  .description("Create or update a channel's brief. Missing answers are asked in the terminal (or kept / defaulted with --yes)")
+  .option("--name <text>", "channel name")
+  .option("--niche <text>", "niche, one line")
+  .option("--audience <text>", "who watches")
+  .option("--tone <text>", 'tone, e.g. "calm expert, no hype"')
+  .option("--pillars <list>", "content pillars, separated by ;")
+  .option("--banned <list>", "banned phrases, separated by ;")
+  .option("--cta <text>", "call-to-action style")
+  .option("--minutes <n>", "target length in minutes")
+  .option("--wpm <n>", "reading speed, words per minute (default 150)")
+  .option("--language <code>", "spoken language (en, de, ...)")
+  .option("--rules <list>", "content rules, separated by ;")
+  .option("-y, --yes", "do not ask; keep the saved / default value for anything not given")
+  .action(async (id: string, o) => {
+    const { createChannel } = await import("./lib/channels.js");
+    const { listChannels } = await import("./lib/style.js");
+    const { loadBrief, saveBrief, defaultBrief, targetWords } = await import("./lib/channelBrief.js");
+    try {
+      if (!listChannels().includes(id)) id = createChannel(id);
+      const cur = loadBrief(id) ?? defaultBrief(id);
+      const given: Record<string, unknown> = { name: o.name, niche: o.niche, audience: o.audience, tone: o.tone, pillars: o.pillars, bannedPhrases: o.banned, ctaStyle: o.cta, targetMinutes: o.minutes, wpm: o.wpm, language: o.language, rules: o.rules };
+      const questions: [string, string, unknown][] = [
+        ["name", "Channel name", cur.name],
+        ["niche", "Niche (one line)", cur.niche],
+        ["audience", "Who watches", cur.audience],
+        ["tone", 'Tone (e.g. "calm expert, no hype")', cur.tone],
+        ["pillars", "Content pillars (separate with ;)", cur.pillars.join("; ")],
+        ["bannedPhrases", "Banned phrases (separate with ;)", cur.bannedPhrases.join("; ")],
+        ["ctaStyle", "Call-to-action style", cur.ctaStyle],
+        ["targetMinutes", "Target length in minutes", cur.targetMinutes],
+        ["wpm", "Reading speed (words per minute)", cur.wpm],
+        ["language", "Language (en, de, ...)", cur.language],
+        ["rules", "Content rules (separate with ;)", cur.rules.join("; ")],
+      ];
+      if (!o.yes && process.stdin.isTTY) {
+        const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+        for (const [k, q, d] of questions) {
+          if (given[k] !== undefined) continue;
+          const a = (await rl.question(`${q} [${String(d ?? "")}]: `)).trim();
+          if (a) given[k] = a;
+        }
+        rl.close();
+      }
+      const b = saveBrief(id, Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined)));
+      console.log(`[channel] ${id}: brief saved (channels/${id}/brief.json + brief.md), ${targetWords(b)} words per video at ${b.wpm} wpm`);
+    } catch (err) {
+      console.error(`[channel] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+channelCmd
+  .command("show <id>")
+  .description("Print a channel's brief (brief.md)")
+  .action(async (id: string) => {
+    const { loadBrief, briefToMd } = await import("./lib/channelBrief.js");
+    const b = loadBrief(id);
+    if (!b) {
+      console.error(`[channel] "${id}" has no brief. Make one with: channel init ${id}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(briefToMd(b));
+  });
+
 program
   .command("clips")
   .description("Shorts from a long video (workspace/<project>/clips/): --find = the best moments, ranked; --render = cut, reframe, caption -> output/<project>_clip_<rank>.mp4")
@@ -220,6 +288,7 @@ program
   .option("--sources <file>", "JSON {product: [page urls]} to read sourced facts from (default <project>/sources.json)")
   .option("--facts <file>", "JSON [{product,label,value,url,title}] (default <project>/facts_sources.json)")
   .option("--competitors <ids>", "comma-separated YouTube video ids whose transcripts the script must not copy")
+  .option("--channel <id>", "channel whose brief (voice, audience, length) is used (default: the project's channel)")
   .action(async (o) => {
     const fs = await import("node:fs");
     const path = await import("node:path");
@@ -243,7 +312,15 @@ program
         } else console.warn(`[script] no transcript for ${id}`);
       }
     }
+    const { loadBrief } = await import("./lib/channelBrief.js");
+    const pj = path.join(dir, "project.json");
+    const proj = fs.existsSync(pj) ? (JSON.parse(fs.readFileSync(pj, "utf8")) as Record<string, unknown>) : {};
+    const channel = o.channel ? String(o.channel) : typeof proj.channel === "string" ? proj.channel : undefined;
+    if (o.channel) fs.writeFileSync(pj, JSON.stringify({ ...proj, channel }, null, 2));
+    const brief = loadBrief(channel);
+    if (channel && !brief) console.warn(`[script] channel "${channel}" has no brief (channels/${channel}/brief.json): writing without one. Make it with: channel init ${channel}`);
     const { report } = await writeScript(dir, {
+      brief,
       topic: String(o.topic),
       products: String(o.products).split(",").map((x) => x.trim()).filter(Boolean),
       targetWords: o.words ? Number(o.words) : undefined,

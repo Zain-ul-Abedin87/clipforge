@@ -1,0 +1,34 @@
+{
+  "id": "survival-legacy",
+  "name": "Survival Legacy",
+  "niche": "Firearms history and classic outdoor gear: where proven designs came from and whether they still hold up",
+  "audience": "US adults 35-65 who own or collect firearms and outdoor gear, trust proven designs over trends and buy to keep for decades",
+  "tone": "Calm expert. Plain facts, dry humour, no hype and no fear-selling",
+  "pillars": [
+    "The story behind a famous design",
+    "Classic vs modern: does the old one still hold up?",
+    "Published specs and real trade-offs",
+    "Gear that lasted decades, and why"
+  ],
+  "bannedPhrases": [
+    "game-changer",
+    "you won't believe",
+    "must-have",
+    "insane",
+    "without further ado",
+    "smash that like button",
+    "in today's video",
+    "tactical operator"
+  ],
+  "ctaStyle": "One low-key line at the very end: ask which one they would keep for twenty years",
+  "targetMinutes": 12,
+  "wpm": 150,
+  "language": "en",
+  "rules": [
+    "Reviews, history and published specs only",
+    "No instructions for modifying, converting or building firearms",
+    "No sales links for firearms",
+    "Never show or describe shooting at people or animals",
+    "Numbers only from sourced facts"
+  ]
+}

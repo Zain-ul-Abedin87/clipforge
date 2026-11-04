@@ -110,7 +110,7 @@
           <select id="length" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px">
             <option value="800">Short, about 5 minutes</option><option value="1500" selected>Medium, about 10 minutes</option><option value="2500">Long, about 17 minutes</option>
           </select></div>
-        <div><label class="lbl" for="channel">Channel</label><select id="channel" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"></select></div>
+        <div><label class="lbl" for="channel">Channel <a class="help" id="briefLink" href="/brief" style="float:right">Edit the brief</a></label><select id="channel" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"></select><p class="help" id="briefInfo" style="margin:6px 0 0"></p></div>
       </div>
       <div class="row" style="justify-content:space-between"><button class="btn ghost" data-go="1">&larr; Back</button><button class="btn primary big" id="create">Write my script &rarr;</button></div>
     </div>
@@ -260,10 +260,29 @@ function addProduct(name = "", link = "") {
   renumber();
 }
 $("addProd").onclick = () => addProduct();
+let channelList = [];
 async function loadChannels() {
   const list = await api("/api/channels").catch(() => []);
-  $("channel").innerHTML = (list.length ? list : [{ name: "default" }]).filter((c) => c.name !== "test").map((c) => `<option>${esc(c.name)}</option>`).join("");
+  channelList = (list.length ? list : [{ name: "default" }]).filter((c) => c.name !== "test");
+  $("channel").innerHTML = channelList.map((c) => `<option value="${esc(c.name)}">${esc(c.brief?.name || c.name)}</option>`).join("");
+  showBrief();
 }
+// The channel's brief: its voice is used for the titles and the script, and its length is offered.
+function showBrief() {
+  const c = channelList.find((x) => x.name === $("channel").value);
+  const b = c && c.brief;
+  $("briefLink").href = `/brief?ch=${encodeURIComponent($("channel").value)}`;
+  $("briefInfo").textContent = b ? `Voice: ${b.tone}` : "No brief yet: the script uses a neutral voice.";
+  const old = $("length").querySelector("option[data-brief]");
+  if (old) old.remove();
+  if (b) {
+    const o = document.createElement("option");
+    o.value = String(b.words); o.dataset.brief = "1"; o.textContent = `The channel's length, about ${b.targetMinutes} minutes (${b.words} words)`;
+    $("length").appendChild(o);
+    $("length").value = o.value;
+  }
+}
+$("channel").onchange = showBrief;
 // Script / voice choices: no script means the recording is the script (voice = own recording).
 const scriptMode = () => document.querySelector('input[name="sm"]:checked').value;
 const voiceMode = () => (scriptMode() === "none" ? "own" : document.querySelector('input[name="vm"]:checked').value);
@@ -544,8 +563,9 @@ async function start() {
   const c = info.config;
   $("topic").value = c.topic;
   $("titles").innerHTML = `<label class="opt"><input type="radio" name="title" value="${esc(info.title)}" checked><span>${esc(info.title)}</span></label>`;
-  $("length").value = String(c.words && [800, 1500, 2500].includes(c.words) ? c.words : 1500);
   $("channel").value = c.channel || "default";
+  showBrief();
+  $("length").value = String(c.words && [...$("length").options].some((o) => Number(o.value) === c.words) ? c.words : 1500);
   for (const r of document.querySelectorAll('input[name="sm"]')) r.checked = r.value === info.scriptMode;
   for (const r of document.querySelectorAll('input[name="vm"]')) r.checked = r.value === info.voiceMode;
   if (info.scriptMode === "own") $("ownScript").value = (await api(`/api/wizard/${project}/script`).catch(() => ({ text: "" }))).text;

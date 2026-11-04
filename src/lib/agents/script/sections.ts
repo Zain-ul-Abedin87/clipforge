@@ -6,6 +6,7 @@ import { withStage } from "../../models/loader.js";
 import { words } from "../../originality/similarity.js";
 import { dropUnsourced, numbersIn, SourcedFact, splitSentences, unsourcedClaims } from "./facts.js";
 import type { Outline, OutlineSection } from "./outline.js";
+import { bannedIn, briefPrompt, ChannelBrief, LANGUAGE_NAMES } from "../../channelBrief.js";
 
 /**
  * Section writer: one model call per section (intro, each product, outro), so every request is
@@ -92,7 +93,25 @@ export function fitWords(text: string, target: number): string {
 }
 
 /** Writes one section within +-3% (and +-3 words) of its budget: up to 3 model attempts, closest kept. */
-export async function writeSection(s: OutlineSection, topic: string, facts: SourcedFact[], prevLine: string, ask: Ask | null, log: (m: string) => void = () => {}): Promise<SectionText> {
+/** The writer's system prompt: the shared rules plus the channel's voice and language. */
+export function systemFor(brief?: ChannelBrief | null): string {
+  if (!brief) return STYLE;
+  const lang = brief.language !== "en" ? STYLE.replace("Plain spoken American English", `Plain spoken ${LANGUAGE_NAMES[brief.language] ?? brief.language}`) : STYLE;
+  return `${lang}\n${briefPrompt(brief)}`;
+}
+
+/** Drops sentences that contain a banned phrase (after the model was asked to avoid them). */
+export function dropBanned(text: string, brief?: ChannelBrief | null): string {
+  if (!brief?.bannedPhrases.length) return text;
+  const kept = splitSentences(text).filter((s) => !bannedIn(s, brief).length);
+  if (kept.length) return kept.join(" ");
+  // Every sentence has one: cut the phrases themselves rather than ship them.
+  let out = text;
+  for (const p of bannedIn(text, brief)) out = out.replace(new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/'/g, "['’]"), "giu"), "");
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+export async function writeSection(s: OutlineSection, topic: string, facts: SourcedFact[], prevLine: string, ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<SectionText> {
   const target = s.words;
   // Product names (and the outline's list of them) may contain numbers.
   const names = [s.product ?? "", ...(s.names ?? [])];
@@ -102,32 +121,45 @@ export async function writeSection(s: OutlineSection, topic: string, facts: Sour
     return { section: s, text, words: countWords(text), attempts: 0, unsourcedRemoved: 0 };
   }
   let best = "";
+  // A draft without unsourced numbers or banned phrases always beats one with them.
+  let bestClean = false;
   let attempts = 0;
   let extra = "";
+  const closer = (t: string) => !best || Math.abs(countWords(t) - target) < Math.abs(countWords(best) - target);
   for (; attempts < 3; ) {
     attempts++;
     let text = "";
     try {
-      text = await ask(STYLE, prompt(s, topic, facts, target, prevLine, extra));
+      text = await ask(systemFor(brief), prompt(s, topic, facts, target, prevLine, extra));
     } catch (err) {
       log(`[script] section ${s.product ?? s.kind} attempt ${attempts} failed: ${String((err as Error).message).slice(0, 100)}`);
       continue;
     }
     // Unsourced numbers: one rewrite round asking for the fix.
     const bad = unsourcedClaims(text, facts, names);
-    if (bad.length && attempts < 3) {
-      extra = `Your last draft stated numbers that are not in the facts (${bad.flatMap((b) => b.numbers).join(", ")}). Remove them; use only the listed facts.`;
-      best = !best || Math.abs(countWords(text) - target) < Math.abs(countWords(best) - target) ? text : best;
+    const banned = bannedIn(text, brief);
+    if (banned.length && attempts < 3) {
+      extra = `Your last draft used phrases this channel never uses (${banned.join(", ")}). Say it another way.`;
+      if (!bestClean && closer(text)) best = text;
       continue;
     }
-    if (!best || Math.abs(countWords(text) - target) < Math.abs(countWords(best) - target)) best = text;
+    if (bad.length && attempts < 3) {
+      extra = `Your last draft stated numbers that are not in the facts (${bad.flatMap((b) => b.numbers).join(", ")}). Remove them; use only the listed facts.`;
+      if (!bestClean && closer(text)) best = text;
+      continue;
+    }
+    const clean = !bad.length && !banned.length;
+    if ((clean && !bestClean) || ((clean || !bestClean) && closer(text))) {
+      best = text;
+      bestClean = clean;
+    }
     const n = countWords(text);
     if (Math.abs(n - target) <= tol) break;
     extra = `Your last draft had ${n} words; rewrite it to ${target} words (${n > target ? "shorter" : "longer"}).`;
   }
   if (!best) best = ruleSection(s, topic, facts);
   const before = splitSentences(best).length;
-  let text = dropUnsourced(best, facts, names);
+  let text = dropBanned(dropUnsourced(best, facts, names), brief);
   const removed = before - splitSentences(text).length;
   if (removed) log(`[script] ${s.product ?? s.kind}: removed ${removed} sentence(s) with unsourced numbers`);
   if (Math.abs(countWords(text) - target) > tol) text = fitWords(text, target);
@@ -135,12 +167,12 @@ export async function writeSection(s: OutlineSection, topic: string, facts: Sour
   return { section: s, text, words: countWords(text), attempts, unsourcedRemoved: removed };
 }
 
-export async function writeSections(outline: Outline, facts: SourcedFact[], ask: Ask | null, log: (m: string) => void = () => {}): Promise<SectionText[]> {
+export async function writeSections(outline: Outline, facts: SourcedFact[], ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<SectionText[]> {
   const out: SectionText[] = [];
   for (const s of outline.sections) {
     const own = s.kind === "product" ? facts.filter((f) => f.product === s.product) : [];
     const prev = out.length ? splitSentences(out[out.length - 1].text).at(-1) ?? "" : "";
-    out.push(await writeSection(s, outline.topic, own, prev, ask, log));
+    out.push(await writeSection(s, outline.topic, own, prev, ask, log, brief));
   }
   return out;
 }

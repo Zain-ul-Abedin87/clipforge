@@ -135,11 +135,11 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
   switch (stage) {
     case "research":
       if (version) return [];
-      return [["research", ...(cfg?.seeds?.length ? ["-s", cfg.seeds.join(",")] : [])], ...(cfg?.topic ? [["titles", "-t", cfg.topic]] : [])];
+      return [["research", ...(cfg?.seeds?.length ? ["-s", cfg.seeds.join(",")] : [])], ...(cfg?.topic ? [["titles", "-t", cfg.topic, ...(cfg.channel ? ["--channel", cfg.channel] : [])]] : [])];
     case "writing":
       if (version) return [["translate", "-p", project]];
       if (!cfg?.topic || !cfg.products.length) return [];
-      return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : [])]];
+      return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : []), ...(cfg.channel ?? p.channel ? ["--channel", String(cfg.channel ?? p.channel)] : [])]];
     case "voice": {
       // An uploaded recording (not a TTS one) is kept: only transcribe + align then. The upload
       // route sets no voiceMode, so the file name also counts (the AI voice is voiceover_tts.wav).

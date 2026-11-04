@@ -4,6 +4,7 @@ import { env } from "../../env.js";
 import { llm, llmAvailable } from "../llm/llm.js";
 import { withStage } from "../../models/loader.js";
 import type { SourcedFact } from "./facts.js";
+import { briefPrompt, ChannelBrief } from "../../channelBrief.js";
 
 /**
  * Script outline: intro (hook), one section per product (countdown order), outro. Word budgets add
@@ -40,7 +41,7 @@ export function splitBudget(total: number, weights: number[]): number[] {
 
 const Angles = z.object({ sections: z.array(z.object({ product: z.string(), angle: z.string() })), hook: z.string() });
 
-export async function buildOutline(topic: string, products: string[], targetWords: number, facts: SourcedFact[], log: (m: string) => void = () => {}): Promise<Outline> {
+export async function buildOutline(topic: string, products: string[], targetWords: number, facts: SourcedFact[], log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<Outline> {
   // Countdown: the last product in the list is #1.
   const weights = [0.08, ...products.map((_, i) => (i === products.length - 1 ? 1.2 : 1) * (0.87 / products.length)), 0.05];
   const budgets = splitBudget(targetWords, weights);
@@ -53,7 +54,7 @@ export async function buildOutline(topic: string, products: string[], targetWord
           model: env("LLM_MODEL", "claude-haiku-4-5"),
           max_tokens: 1500,
           output_config: { format: zodOutputFormat(Angles) },
-          system: "You plan a countdown YouTube script. For each product give a one-sentence angle (who it is for, what sets it apart) based only on the facts given. Also a one-sentence hook for the intro. Original wording, no hype words like 'game-changer'.",
+          system: `You plan a countdown YouTube script. For each product give a one-sentence angle (who it is for, what sets it apart) based only on the facts given. Also a one-sentence hook for the intro. Original wording, no hype words like 'game-changer'.${brief ? `\n${briefPrompt(brief)}` : ""}`,
           messages: [{ role: "user", content: JSON.stringify({ topic, products: products.map((p) => ({ product: p, facts: facts.filter((f) => f.product === p).map((f) => `${f.label}: ${f.value}`) })) }) }],
         }),
       );

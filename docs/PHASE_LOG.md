@@ -1366,6 +1366,65 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## S1: Channel brief (2026-11-04)
+
+Every channel can now have a brief: who it is for and how it sounds. Titles, the outline and every
+script section are written from it, so two channels on the same topic don't sound the same.
+
+**What changed**
+- `src/lib/channelBrief.ts`: `channels/<id>/brief.json` with an editable `brief.md` view. A
+  `brief.md` edited by hand (newer than the json) is read back on the next load. Fields:
+  - name, niche, audience, tone;
+  - content pillars, banned phrases, CTA style;
+  - target minutes and reading speed (wpm, default 150): target words = minutes x wpm;
+  - language, and content rules.
+
+  Validated with zod. The ids are checked, so a path like `../etc` is refused.
+- The prompts:
+  - **Titles** (`generateTitles`, `runTitles`): the brief goes into the prompt, and titles with a
+    banned phrase are dropped.
+  - **Outline**: the brief is added to the system prompt.
+  - **Section writer** (`systemFor`): the brief, plus the writing language when it isn't English.
+    A draft with a banned phrase is sent back once with "say it another way". If a phrase
+    survives, its sentence is cut.
+- **Fixed a bug the new test found:** a clean retry did not replace a first draft with a banned
+  phrase or an unsourced number when both had the same length, so the bad one was kept. A clean
+  draft now always wins. The facts-only rule, the originality check and +-3% are unchanged.
+- `script_report.json` has `channel: {id, name, bannedFound}`.
+- CLI:
+  - `channel init <id>` asks in the terminal, or takes flags (`--name --niche --audience --tone
+    --pillars --banned --cta --minutes --wpm --language --rules`, `-y` = don't ask);
+  - `channel show <id>`;
+  - `script --channel <id>` (saved in project.json);
+  - `titles --channel <id>`.
+
+  The pipeline passes the project's channel to `titles` and `script`.
+- Seeded briefs: `survival-legacy` (calm expert, 12 min at 150 wpm) and `survival-pulse` (fast and
+  direct, 8 min at 160 wpm). Both are YouTube-safe: reviews, history and published specs only; no
+  modification or conversion instructions; no sales links for firearms; numbers only from sourced
+  facts.
+- UI:
+  - `/brief` (nav: Channel): pick or create a channel and edit its brief.
+  - `/new`: the channel picker shows the brief's voice, links to the editor, and offers "the
+    channel's length".
+- API: `GET/PUT /api/channels/:ch/brief`; `GET /api/channels` includes a brief summary.
+
+**Tests**: `tests/brief.test.ts`, 8. They cover:
+- cleaning;
+- the md round trip and a hand edit winning;
+- banned-phrase matching (curly apostrophes, whole words only);
+- the seeds;
+- the brief in every section prompt, with the banned phrase rewritten;
+- length from the brief;
+- language;
+- pipeline args;
+- the real CLI.
+
+Full suite: 443 tests: 442 pass, 0 fail, 1 skipped. Checked in Chromium: `/brief` saves, and
+`/new` shows the brief and its length.
+
+---
+
 ## Script engine v3: branch + baseline (2026-11-04)
 
 New branch `feature/script-engine-v3`, made from `feature/full-pipeline-v2-cwi1sx` at `25e1655`

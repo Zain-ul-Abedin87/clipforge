@@ -54,7 +54,7 @@ export function lastResearch(db = new ResearchDb()): ResearchResult | null {
  * Titles for a topic: competitor titles from the last scan's outliers plus a topic search (when a
  * YouTube key is set and quota allows; cached), Google News hooks, then the title agent.
  */
-export async function runTitles(topic: string, o: { db?: ResearchDb; api?: YouTubeApi; log?: (m: string) => void; fetchNews?: typeof fetch } = {}) {
+export async function runTitles(topic: string, o: { db?: ResearchDb; api?: YouTubeApi; log?: (m: string) => void; fetchNews?: typeof fetch; channel?: string } = {}) {
   const { generateTitles } = await import("../agents/titles.js");
   const { newsHooks } = await import("./news.js");
   const feats = loadFeatures();
@@ -72,7 +72,8 @@ export async function runTitles(topic: string, o: { db?: ResearchDb; api?: YouTu
     }
   }
   const news = feats.titles.newsHooks ? await newsHooks(topic, { db, log, fetch: o.fetchNews }) : [];
-  const result = await generateTitles(topic, [...comp.entries()].map(([title, views]) => ({ title, views })), { news, log });
+  const { loadBrief } = await import("../channelBrief.js");
+  const result = await generateTitles(topic, [...comp.entries()].map(([title, views]) => ({ title, views })), { news, log, brief: loadBrief(o.channel) });
   db.saveScan("titles", [topic], result);
   return result;
 }

@@ -45,6 +45,7 @@ import { makeRoute } from "./routes/make.js";
 import { aistyleRoute } from "./routes/aistyle.js";
 import { saveRef } from "../lib/assets/aiStyle.js";
 import { setRecording, tutorialDir, VIDEO_EXT } from "../lib/formats/tutorial.js";
+import { defaultBrief, hasBrief, loadBrief, saveBrief, targetWords } from "../lib/channelBrief.js";
 import { clipsDir, LONG_VIDEO_EXT, readClipsInput, setClipsSource } from "../lib/shorts/longform.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
@@ -481,7 +482,7 @@ function streamFile(req: http.IncomingMessage, res: http.ServerResponse, file: s
 
 // ---------- Routes ----------
 
-const FULL_PAGES = ["new", "make", "research", "pipeline", "dashboard", "tools", "chat"];
+const FULL_PAGES = ["new", "make", "brief", "research", "pipeline", "dashboard", "tools", "chat"];
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -708,7 +709,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   if (parts[1] === "channels" && method === "GET" && !parts[2]) {
-    return send(res, 200, listChannels().map((c) => ({ name: c, style: loadStyle(c) })));
+    return send(res, 200, listChannels().map((c) => {
+      const b = loadBrief(c);
+      return { name: c, style: loadStyle(c), brief: b ? { name: b.name, tone: b.tone, targetMinutes: b.targetMinutes, wpm: b.wpm, words: targetWords(b) } : null };
+    }));
   }
 
   // ----- channel profiles -----
@@ -726,6 +730,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!listChannels().includes(ch)) return send(res, 404, { error: "unknown channel" });
     const what = parts[3];
     if (what === "style" && method === "PUT") return send(res, 200, updateStyle(ch, JSON.parse((await readBody(req)) || "{}")));
+    if (what === "brief" && method === "GET") return send(res, 200, { brief: loadBrief(ch) ?? defaultBrief(ch), saved: hasBrief(ch) });
+    if (what === "brief" && method === "PUT") {
+      try {
+        return send(res, 200, { brief: saveBrief(ch, JSON.parse((await readBody(req, 64 * 1024)) || "{}")), saved: true });
+      } catch (err) {
+        return send(res, 400, { error: String((err as Error).message ?? err) });
+      }
+    }
     if (what === "logo" && method === "POST") {
       try {
         return send(res, 200, { ok: true, path: await saveLogo(req, ch, decodeURIComponent(String(req.headers["x-filename"] ?? ""))) });

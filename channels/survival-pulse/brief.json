@@ -1,0 +1,34 @@
+{
+  "id": "survival-pulse",
+  "name": "Survival Pulse",
+  "niche": "New survival and everyday-carry gear checked against its spec sheet: what is worth the money this year",
+  "audience": "18-40, budget-aware, new to prepping and the outdoors, mostly watching on a phone",
+  "tone": "Fast, direct and friendly. Short sentences, one clear verdict per product, no hype words",
+  "pillars": [
+    "Best X under a price, ranked",
+    "Two popular picks head to head",
+    "Myth vs reality of viral gear",
+    "Every type of X explained"
+  ],
+  "bannedPhrases": [
+    "game-changer",
+    "you won't believe",
+    "must-have",
+    "insane",
+    "crazy",
+    "literally",
+    "without further ado",
+    "smash that like button"
+  ],
+  "ctaStyle": "Mid-video, one line pointing to the comparison at the end; at the end, ask which match-up to test next",
+  "targetMinutes": 8,
+  "wpm": 160,
+  "language": "en",
+  "rules": [
+    "Reviews, specs and legal use only",
+    "No instructions for modifying, converting or building firearms",
+    "No sales links for firearms",
+    "Never show or describe shooting at people or animals",
+    "Numbers only from sourced facts"
+  ]
+}

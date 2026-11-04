@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channel brief - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media (max-width:700px){.grid2,.grid3{grid-template-columns:1fr}}
+  textarea{width:100%;min-height:0!important;height:auto}
+  select{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px;color:var(--text)}
+  .field{margin-top:12px}
+  .saved{color:var(--good);font-size:var(--fs-sm)}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1>Channel brief</h1><p class="sub">Who the channel is for and how it sounds. Titles, outlines and every script section are written from this, so two channels never sound the same.</p></div>
+    <p class="error" id="err"></p>
+    <div class="card">
+      <div class="grid2">
+        <div><label class="lbl" for="ch">Channel</label><select id="ch"></select></div>
+        <div><label class="lbl" for="newName">New channel</label><div class="row" style="margin:0"><input id="newName" placeholder="e.g. Survival Pulse" style="flex:1"><button class="btn" id="newGo">Create</button></div></div>
+      </div>
+      <p class="help" id="state"></p>
+      <div class="field"><label class="lbl" for="name">Channel name</label><input id="name"></div>
+      <div class="field"><label class="lbl" for="niche">Niche (one line)</label><input id="niche" placeholder="e.g. new survival gear checked against its spec sheet"></div>
+      <div class="field"><label class="lbl" for="audience">Who watches</label><textarea id="audience" rows="2" placeholder="Age, what they already know, why they watch"></textarea></div>
+      <div class="field"><label class="lbl" for="tone">Tone</label><input id="tone" placeholder="e.g. calm expert, dry humour, no hype"></div>
+      <div class="grid2">
+        <div class="field"><label class="lbl" for="pillars">Content pillars (one per line)</label><textarea id="pillars" rows="5"></textarea></div>
+        <div class="field"><label class="lbl" for="banned">Phrases the channel never says (one per line)</label><textarea id="banned" rows="5"></textarea></div>
+      </div>
+      <div class="field"><label class="lbl" for="cta">Call-to-action style</label><input id="cta" placeholder="e.g. one question at the end, no begging for likes"></div>
+      <div class="field"><label class="lbl" for="rules">Content rules (one per line)</label><textarea id="rules" rows="4" placeholder="e.g. Reviews, history and published specs only"></textarea></div>
+      <div class="grid3">
+        <div class="field"><label class="lbl" for="minutes">Target length (minutes)</label><input id="minutes" type="number" min="1" max="120"></div>
+        <div class="field"><label class="lbl" for="wpm">Voice speed (words per minute)</label><input id="wpm" type="number" min="80" max="260"></div>
+        <div class="field"><label class="lbl" for="language">Language</label><select id="language"><option value="en">English</option><option value="de">German</option><option value="es">Spanish</option><option value="fr">French</option><option value="it">Italian</option><option value="pt">Portuguese</option><option value="hi">Hindi</option><option value="ur">Urdu</option></select></div>
+      </div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-top:16px"><span class="help" id="words"></span><span><span class="saved" id="saved"></span> <button class="btn primary" id="save">Save the brief</button></span></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+const err = (m) => ($("err").textContent = m || "");
+const lines = (id) => $(id).value.split("\n").map((x) => x.trim()).filter(Boolean);
+function words() { $("words").textContent = `${Math.round(Number($("minutes").value || 0) * Number($("wpm").value || 0))} words per video`; }
+async function loadList(pick) {
+  const list = (await api("/api/channels")).filter((c) => c.name !== "test");
+  $("ch").innerHTML = list.map((c) => `<option value="${esc(c.name)}">${esc(c.brief?.name || c.name)}${c.brief ? "" : " (no brief yet)"}</option>`).join("");
+  $("ch").value = pick && list.some((c) => c.name === pick) ? pick : list[0]?.name || "default";
+  await load();
+}
+async function load() {
+  err(""); $("saved").textContent = "";
+  const ch = $("ch").value;
+  history.replaceState(null, "", `/brief?ch=${encodeURIComponent(ch)}`);
+  const { brief: b, saved } = await api(`/api/channels/${encodeURIComponent(ch)}/brief`);
+  $("state").textContent = saved ? `Saved in channels/${ch}/brief.json (and brief.md, which you can also edit by hand).` : "This channel has no brief yet: the defaults are shown. Save to create it.";
+  $("name").value = b.name; $("niche").value = b.niche; $("audience").value = b.audience; $("tone").value = b.tone;
+  $("pillars").value = b.pillars.join("\n"); $("banned").value = b.bannedPhrases.join("\n"); $("cta").value = b.ctaStyle; $("rules").value = b.rules.join("\n");
+  $("minutes").value = b.targetMinutes; $("wpm").value = b.wpm; $("language").value = b.language;
+  words();
+}
+$("ch").onchange = () => load().catch((e) => err(e.message));
+$("minutes").oninput = words; $("wpm").oninput = words;
+$("save").onclick = async () => {
+  err("");
+  try {
+    await api(`/api/channels/${encodeURIComponent($("ch").value)}/brief`, { method: "PUT", body: { name: $("name").value, niche: $("niche").value, audience: $("audience").value, tone: $("tone").value, pillars: lines("pillars"), bannedPhrases: lines("banned"), ctaStyle: $("cta").value, rules: lines("rules"), targetMinutes: Number($("minutes").value), wpm: Number($("wpm").value), language: $("language").value } });
+    $("saved").textContent = "Saved.";
+    const cur = $("ch").value;
+    await loadList(cur);
+    $("saved").textContent = "Saved.";
+  } catch (e) { err(e.message); }
+};
+$("newGo").onclick = async () => {
+  err("");
+  try { const r = await api("/api/channels", { method: "POST", body: { name: $("newName").value } }); $("newName").value = ""; await loadList(r.name); } catch (e) { err(e.message); }
+};
+loadList(qs.get("ch")).catch((e) => err(e.message));
+</script>
+</body>
+</html>

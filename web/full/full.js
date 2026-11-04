@@ -6,6 +6,7 @@ export const PAGES = [
   ["/research", "Research"],
   ["/pipeline", "Pipeline"],
   ["/dashboard", "Dashboard"],
+  ["/brief", "Channel"],
   ["/tools", "Tools"],
   ["/chat", "Chat"],
   ["/", "Classic"],

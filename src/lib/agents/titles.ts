@@ -1,5 +1,6 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import { bannedIn, briefPrompt, ChannelBrief } from "../channelBrief.js";
 import { env } from "../env.js";
 import { llm, llmAvailable } from "./llm/llm.js";
 import { withStage } from "../models/loader.js";
@@ -70,7 +71,7 @@ export function templateTitles(topic: string, templates: string[], n: number, ye
 export async function generateTitles(
   topic: string,
   competitors: { title: string; views?: number }[],
-  o: { news?: NewsItem[]; log?: (m: string) => void; count?: number; maxSimilarity?: number; useEmbeddings?: boolean } = {},
+  o: { news?: NewsItem[]; log?: (m: string) => void; count?: number; maxSimilarity?: number; useEmbeddings?: boolean; brief?: ChannelBrief | null } = {},
 ): Promise<TitleResult> {
   const cfg = loadFeatures().titles;
   const log = o.log ?? (() => {});
@@ -108,12 +109,13 @@ export async function generateTitles(
 
   const avoid = compTitles.slice(0, 25).map((t) => `- ${t}`).join("\n");
   const hooks = (o.news ?? []).slice(0, 6).map((h) => `- ${h.title}`).join("\n");
-  const base = `Topic: ${topic}\nWrite ${n + 4} title options.\nStructures that work in this niche (best first):\n${templates.map((t) => `- ${t}`).join("\n")}\nTypical length: ~${style.avgLength || 55} characters; ${Math.round(style.numberShare * 100)}% use a number, ${Math.round(style.yearShare * 100)}% a year.${hooks ? `\nRecent news you MAY use as an angle (do not copy headlines):\n${hooks}` : ""}${avoid ? `\nCompetitor titles (do NOT reuse their wording):\n${avoid}` : ""}`;
+  const voice = briefPrompt(o.brief);
+  const base = `${voice ? `${voice}\n\n` : ""}Topic: ${topic}\nWrite ${n + 4} title options.\nStructures that work in this niche (best first):\n${templates.map((t) => `- ${t}`).join("\n")}\nTypical length: ~${style.avgLength || 55} characters; ${Math.round(style.numberShare * 100)}% use a number, ${Math.round(style.yearShare * 100)}% a year.${hooks ? `\nRecent news you MAY use as an angle (do not copy headlines):\n${hooks}` : ""}${avoid ? `\nCompetitor titles (do NOT reuse their wording):\n${avoid}` : ""}`;
 
   const accepted: TitleOption[] = [];
   const seen = new Set<string>();
   const take = async (cands: { title: string; pattern: string; hook?: string }[], source: TitleOption["source"]) => {
-    const clean = cands.map((c) => ({ ...c, title: c.title.trim().replace(/^["']|["']$/g, "").slice(0, cfg.maxLength + 20) })).filter((c) => c.title && !seen.has(c.title.toLowerCase()));
+    const clean = cands.map((c) => ({ ...c, title: c.title.trim().replace(/^["']|["']$/g, "").slice(0, cfg.maxLength + 20) })).filter((c) => c.title && !seen.has(c.title.toLowerCase()) && !bannedIn(c.title, o.brief).length);
     const sims = await check(clean.map((c) => c.title));
     const tooClose: typeof clean = [];
     clean.forEach((c, i) => {

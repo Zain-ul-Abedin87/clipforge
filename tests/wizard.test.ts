@@ -79,7 +79,8 @@ describe("wizard", () => {
     await wizardRoute(["api", "wizard", project, "approve"], "POST", body({ what: "voice", on: true }));
     assert.equal(W.wizardStep(project), 5, "script and voice approved: next is the footage");
     await wizardRoute(["api", "wizard", project, "script"], "PUT", body({ text: "A changed script." }));
-    assert.deepEqual(W.readApprovals(project), {}, "a changed script needs approving (and a new voice) again");
+    const ap = W.readApprovals(project);
+    assert.deepEqual([ap.script, ap.voice], [undefined, undefined], "a changed script needs approving (and a new voice) again");
     const empty = await wizardRoute(["api", "wizard", project, "script"], "PUT", body({ text: "  " }));
     assert.equal(empty!.status, 400);
   });
@@ -92,5 +93,72 @@ describe("wizard", () => {
     assert.equal(ok!.file, path.join(paths.output, `${project}_short_1.mp4`));
     const evil = await wizardRoute(["api", "wizard", project, "short", "..%2F..%2F.env"], "GET", body({}));
     assert.equal(evil!.status, 404);
+  });
+});
+
+describe("wizard: own script and own recording", () => {
+  const OWN = "Number three is the Taurus G3C. It is a solid budget pick for new shooters who want a full size grip. Number two is the Glock 43X, slim and simple. Number one is the Sig P365.";
+
+  test("own script: saved as written, no AI writing, no source warnings; the voice step waits for the upload", async () => {
+    const r = await wizardRoute(["api", "wizard"], "POST", body({ topic: "zz wizard test own", products: ["Taurus G3C", "Glock 43X", "Sig P365"], scriptMode: "own", voiceMode: "own", script: OWN }));
+    const project = (r!.body as { project: string }).project;
+    made.push(project);
+    const dir = path.join(paths.workspace, project);
+    assert.equal(fs.readFileSync(path.join(dir, "script.txt"), "utf8").trim(), OWN);
+    const v = W.scriptView(project);
+    assert.equal(v.own, true);
+    assert.deepEqual(v.unsourced, [], "the creator's numbers are not flagged");
+    const info = (await wizardRoute(["api", "wizard", project], "GET", body({})))!.body as { scriptMode: string; voiceMode: string; recording: string | null; step: number };
+    assert.deepEqual([info.scriptMode, info.voiceMode, info.recording, info.step], ["own", "own", null, 3]);
+    const short = await wizardRoute(["api", "wizard"], "POST", body({ topic: "zz wizard test own short", products: ["A", "B"], scriptMode: "own", script: "too short" }));
+    assert.equal(short!.status, 400);
+  });
+
+  test("no script: the recording is the script, so the voice is always own and step 3 is skipped", async () => {
+    const r = await wizardRoute(["api", "wizard"], "POST", body({ topic: "zz wizard test recording", products: ["A", "B"], scriptMode: "none", voiceMode: "ai" }));
+    const project = (r!.body as { project: string }).project;
+    made.push(project);
+    assert.deepEqual(W.modesOf(project), { scriptMode: "none", voiceMode: "own" });
+    assert.equal(W.wizardStep(project), 4);
+    assert.equal(fs.existsSync(path.join(paths.workspace, project, "script.txt")), false);
+  });
+
+  test("an uploaded recording is never replaced by the AI voice (voice step = transcribe + align)", () => {
+    const project = "zz-wizard-test-own";
+    const dir = path.join(paths.workspace, project);
+    const rec = path.join(dir, "voiceover.mp3");
+    fs.writeFileSync(rec, "x");
+    const pf = path.join(dir, "project.json");
+    // The upload route stores the file without a voiceMode.
+    fs.writeFileSync(pf, JSON.stringify({ ...JSON.parse(fs.readFileSync(pf, "utf8")), audio: rec }));
+    assert.deepEqual(P.stageSteps("voice", project, P.readConfig(project)).map((a) => a[0]), ["transcribe", "align"]);
+    assert.equal(W.ownRecording(project), rec);
+    // The AI voice file is never mistaken for an own recording.
+    fs.writeFileSync(pf, JSON.stringify({ ...JSON.parse(fs.readFileSync(pf, "utf8")), audio: path.join(dir, "voiceover_tts.wav") }));
+    fs.writeFileSync(path.join(dir, "voiceover_tts.wav"), "x");
+    assert.deepEqual(P.stageSteps("voice", project, P.readConfig(project)).map((a) => a[0]), ["tts", "transcribe", "align"]);
+  });
+
+  test("differences between script and recording: listed, and 'keep what I said' resolves them all", async () => {
+    const project = "zz-wizard-test-own";
+    const dir = path.join(paths.workspace, project);
+    fs.writeFileSync(path.join(dir, "discrepancies.json"), JSON.stringify({ items: [
+      { id: "d1", type: "substitution", severity: "significant", script: "Glock 43X", heard: "Glock 48", start: 7.2 },
+      { id: "d2", type: "omission", severity: "minor", script: "simple", heard: "", start: 9 },
+    ] }));
+    let d = W.differences(project);
+    assert.deepEqual(d.map((x) => [x.id, x.resolution]), [["d1", null]], "minor ones are not shown");
+    const r = await wizardRoute(["api", "wizard", project, "keep-recording"], "POST", body({}));
+    assert.deepEqual(r!.body, { resolved: 1 });
+    d = W.differences(project);
+    assert.equal(d[0].resolution, "keep_audio");
+  });
+});
+
+describe("friendly errors for recordings", () => {
+  test("missing Whisper / Python part gets setup steps", () => {
+    const h = friendlyHint(["Project venv missing. Run `clipforge doctor`."], "transcribe exited with code 1")!;
+    assert.equal(h.title, "Speech recognition (Whisper) is not set up");
+    assert.match(h.fix, /pip install -r python\/requirements.txt/);
   });
 });

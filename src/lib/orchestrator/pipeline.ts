@@ -101,8 +101,9 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
       if (!cfg?.topic || !cfg.products.length) return [];
       return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : [])]];
     case "voice": {
-      // An uploaded voiceover (not a TTS one) is kept: only transcribe + align then.
-      const own = !!p.audio && p.voiceMode && p.voiceMode !== "tts";
+      // An uploaded recording (not a TTS one) is kept: only transcribe + align then. The upload
+      // route sets no voiceMode, so the file name also counts (the AI voice is voiceover_tts.wav).
+      const own = !!p.audio && fs.existsSync(p.audio) && p.voiceMode !== "tts" && !/voiceover_tts\.wav$/i.test(p.audio);
       const script = path.join(dir, "script.txt");
       return [...(own ? [] : [["tts", "-p", project]]), ["transcribe", "-p", project, "--audio", "{audio}"], ["align", "-p", project, ...(fs.existsSync(script) ? ["--script", script] : ["--no-script-mode"])]];
     }

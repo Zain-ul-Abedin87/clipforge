@@ -20,6 +20,7 @@ const RULES: [RegExp, Hint][] = [
   [/script\.txt missing|Mode B needs a script/i, { title: "No script yet", fix: "Write and approve the script first (step 3)." }],
   [/no avatar photo/i, { title: "No avatar photo", fix: "Add one photo of the presenter as channels/<channel>/avatar.png, or switch the avatar off in Tools > AI avatar.", where: "/tools" }],
   [/avatar.*(engine exit|failed)/i, { title: "The avatar engine failed", fix: "Check the MuseTalk folder and Python in Tools > AI avatar, or switch the avatar off for this video.", where: "/tools" }],
+  [/venv missing|No module named ['"]?(faster_whisper|whisper|torch)/i, { title: "Speech recognition (Whisper) is not set up", fix: "ClipForge needs its Python part to listen to a recording. In the ClipForge folder run: python -m venv .venv, then .venv\\Scripts\\pip install -r python/requirements.txt, then press Retry." }],
   [/ffmpeg not found/i, { title: "FFmpeg is missing", fix: "Install FFmpeg (winget install Gyan.FFmpeg) and restart ClipForge." }],
   [/aligned\.json missing/i, { title: "Voice timings missing", fix: "Run the Voice step again; it creates the word timings." }],
   [/voiceover not found|upload audio first/i, { title: "No voiceover", fix: "Run the Voice step, or upload your own voiceover on the Create page." }],

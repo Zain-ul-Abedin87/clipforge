@@ -866,6 +866,56 @@ recorded and plays (0:41). The footage step was not run here, because it would d
 
 ---
 
+## Follow-up: own script and own recording in the wizard
+
+**What changed**
+
+- **Step 2 now asks how the script and the voice are made.**
+  - Script, one of three:
+    - **Write it for me**: the AI writes it (as before).
+    - **I have my own script**: paste box; the AI never runs and never changes a word.
+    - **No script, I have a recording**: the recording is the script, and its words become the
+      captions.
+  - Voice: **AI voice** or **My own recording**. Choosing "No script" switches the voice to
+    "My own recording" and disables "AI voice".
+- **Own script**:
+  - Step 3 shows "This is your script" and hides "Write it again".
+  - It does not flag numbers without a source (they are the creator's call).
+  - The approve button says "Approve script & upload my recording" when the voice is
+    the creator's own.
+- **Own recording (step 4 "Your recording")**:
+  - Upload box for MP3 / WAV / M4A. It uses the existing upload route.
+  - After the upload, the voice step runs **transcribe + align only**: no AI voice. With a
+    script, the recording is checked against it (Mode C).
+  - The places where the creator said something different are listed (script vs "you said").
+    "Keep what I said & find the footage" resolves them all to `keep_audio` and re-times the
+    words.
+  - On a failed run, Retry and "Upload a different recording" both stay available.
+- **Bug fixed**: an uploaded recording could be replaced by the AI voice. The upload route sets
+  no `voiceMode`, so the voice stage now treats any audio that is not `voiceover_tts.wav` as the
+  creator's own recording.
+- If an own script is too short, the request is refused before anything is written (no empty
+  project folder).
+- A new plain-English hint: "Speech recognition (Whisper) is not set up", with the setup
+  commands.
+
+**Files**: `src/lib/orchestrator/{wizard,pipeline,friendly}.ts`, `src/server/routes/wizard.ts`,
+`web/new.html`, `tests/wizard.test.ts`.
+
+**Checks**: typecheck passes. 353 tests, 352 pass, 0 fail, 1 skipped (the one skipped before this
+work).
+
+Browser check:
+
+- "No script" + own recording → straight to step 4 "Your recording".
+- A test WAV uploaded → the voice step ran transcribe. In this checkout there is no Python
+  `.venv`, so it failed, and the wizard showed the Whisper setup hint with Retry and the upload
+  box.
+- The choice cards were checked for layout (radio buttons kept small, the selected card
+  highlighted).
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

@@ -15,7 +15,10 @@
   .stp.on{color:var(--text);border-color:var(--accent)}.stp.on b{background:var(--accent);color:#fff}
   .pane[hidden]{display:none}
   .opt{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-top:8px}
-  .opt:hover{border-color:var(--dim)} .opt input{margin-top:4px}
+  .opt:hover{border-color:var(--dim)}
+  /* simple.css makes every non-checkbox input full width: radios must stay small */
+  .opt input[type=radio]{width:auto;flex:none;margin-top:4px;accent-color:var(--accent)}
+  .opt:has(input:checked){border-color:var(--accent);background:rgba(81,130,239,.08)}
   .prod{display:grid;grid-template-columns:34px 1fr 1fr 34px;gap:8px;align-items:center;margin-top:8px}
   .prod .rank{font-weight:700;color:var(--muted);text-align:center}
   .xbtn{height:40px;border-radius:var(--r-sm);border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:pointer}
@@ -31,6 +34,12 @@
   .shorts video{width:100%;aspect-ratio:9/16;border-radius:10px;background:#000}
   .bigvideo{width:100%;border-radius:12px;background:#000;aspect-ratio:16/9}
   .continue a{display:block;padding:8px 0;border-bottom:1px solid var(--border)}
+  .choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
+  .choices .opt{margin-top:0}
+  .opt.off{opacity:.45;cursor:default}
+  .note{border:1px solid var(--border2);background:var(--surface2);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+  .diff{font-size:var(--fs-sm);padding:8px 0;border-bottom:1px solid var(--border)}
+  .diff b{color:var(--muted);font-weight:600}
   .prod-head{display:grid;grid-template-columns:34px 1fr 1fr 34px;gap:8px;font-size:var(--fs-xs);color:var(--muted);font-weight:600;margin-top:12px}
   @media (max-width:640px){.prod,.prod-head{grid-template-columns:28px 1fr 34px}.prod .link,.prod-head .link{display:none}}
 </style>
@@ -62,8 +71,20 @@
       <div class="prod-head"><span></span><span>Product name</span><span class="link">Product page link (optional)</span><span></span></div>
       <div id="products"></div>
       <div class="row"><button class="btn small" id="addProd">+ Add product</button></div>
+      <label class="lbl" style="margin-top:20px">Script</label>
+      <div class="choices">
+        <label class="opt"><input type="radio" name="sm" value="ai" checked><span><b>Write it for me</b><br><span class="hint">The AI writes the script from your products.</span></span></label>
+        <label class="opt"><input type="radio" name="sm" value="own"><span><b>I have my own script</b><br><span class="hint">Paste it. The AI does not change a word.</span></span></label>
+        <label class="opt"><input type="radio" name="sm" value="none"><span><b>No script, I have a recording</b><br><span class="hint">Your recording is the script; its words become the captions.</span></span></label>
+      </div>
+      <textarea id="ownScript" hidden placeholder="Paste your whole script here" style="margin-top:10px;min-height:220px"></textarea>
+      <label class="lbl" style="margin-top:20px">Voice</label>
+      <div class="choices">
+        <label class="opt" id="vmAi"><input type="radio" name="vm" value="ai" checked><span><b>AI voice</b><br><span class="hint">ClipForge reads the script (free, on this PC).</span></span></label>
+        <label class="opt"><input type="radio" name="vm" value="own"><span><b>My own recording</b><br><span class="hint">You upload an MP3 / WAV in step 4.</span></span></label>
+      </div>
       <div class="grid2 tight" style="margin-top:16px">
-        <div><label class="lbl" for="length">Video length</label>
+        <div id="lengthBox"><label class="lbl" for="length">Video length</label>
           <select id="length" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px">
             <option value="800">Short, about 5 minutes</option><option value="1500" selected>Medium, about 10 minutes</option><option value="2500">Long, about 17 minutes</option>
           </select></div>
@@ -78,6 +99,7 @@
       <div id="scriptBusy"></div>
       <div id="scriptEdit" hidden>
         <div class="failbox" id="noModel" hidden style="border-color:rgba(245,184,74,.4);background:rgba(245,184,74,.08);margin-bottom:12px"><h3 style="color:var(--warn)">This is only a skeleton</h3><p style="margin:0">The local AI (Ollama) was not running, so ClipForge only listed your products and their facts. Start Ollama and press "Write it again", or write the script yourself in the box below.</p></div>
+        <div class="note" id="ownNote" hidden>This is <b>your</b> script: ClipForge does not change it. Edit it here if you like, then approve it.</div>
         <div class="bar" id="scriptStats"></div>
         <textarea class="script" id="script"></textarea>
         <ul class="warnlist" id="unsourced"></ul>
@@ -91,11 +113,17 @@
 
     <!-- 4 VOICE -->
     <div class="pane card" data-pane="4" hidden>
-      <h2>4. Listen to the voice</h2>
+      <h2 id="voiceTitle">4. Listen to the voice</h2>
       <div id="voiceBusy"></div>
+      <div id="voiceUpload" hidden>
+        <p class="help" style="margin-top:-8px" id="uploadHelp">Upload your recording (MP3, WAV or M4A).</p>
+        <label class="drop" style="margin-top:8px"><input type="file" id="recFile" accept=".mp3,.wav,.m4a,audio/*" hidden><span class="drop-icon">&#8679;</span><span id="recText">Click to choose your recording</span></label>
+        <div class="row"><button class="btn ghost" data-go="3" id="backToScript">&larr; Script</button></div>
+      </div>
       <div id="voiceDone" hidden>
         <audio id="audio" controls style="width:100%"></audio>
-        <p class="help">Listen to the start and a part in the middle. Want different words? Go back to the script, change it and record again.</p>
+        <p class="help" id="voiceHelp">Listen to the start and a part in the middle. Want different words? Go back to the script, change it and record again.</p>
+        <div id="diffs"></div>
         <div class="row" style="justify-content:space-between">
           <div class="row" style="margin:0"><button class="btn ghost" data-go="3">&larr; Script</button><button class="btn" id="revoice">Record again</button></div>
           <button class="btn primary big" id="approveVoice">Sounds good: find the footage &rarr;</button>
@@ -206,21 +234,40 @@ async function loadChannels() {
   const list = await api("/api/channels").catch(() => []);
   $("channel").innerHTML = (list.length ? list : [{ name: "default" }]).filter((c) => c.name !== "test").map((c) => `<option>${esc(c.name)}</option>`).join("");
 }
+// Script / voice choices: no script means the recording is the script (voice = own recording).
+const scriptMode = () => document.querySelector('input[name="sm"]:checked').value;
+const voiceMode = () => (scriptMode() === "none" ? "own" : document.querySelector('input[name="vm"]:checked').value);
+function syncChoices() {
+  const sm = scriptMode();
+  $("ownScript").hidden = sm !== "own";
+  $("lengthBox").hidden = sm !== "ai";
+  const aiVoice = document.querySelector('input[name="vm"][value="ai"]');
+  aiVoice.disabled = sm === "none";
+  $("vmAi").classList.toggle("off", sm === "none");
+  if (sm === "none") document.querySelector('input[name="vm"][value="own"]').checked = true;
+  $("create").innerHTML = sm === "ai" ? "Write my script &rarr;" : sm === "own" ? "Next: check my script &rarr;" : "Next: upload my recording &rarr;";
+}
+for (const r of document.querySelectorAll('input[name="sm"], input[name="vm"]')) r.onchange = syncChoices;
+
 $("create").onclick = async () => {
   const rows = [...$("products").children].map((r) => ({ name: r.querySelector(".pn").value.trim(), link: r.querySelector(".pl").value.trim() })).filter((r) => r.name);
   if (rows.length < 2) return err("Add at least 2 products.");
+  const sm = scriptMode();
+  if (sm === "own" && $("ownScript").value.trim().split(/\s+/).length < 20) return err("Paste your script first (at least a few sentences).");
   const sources = Object.fromEntries(rows.filter((r) => r.link).map((r) => [r.name, [r.link]]));
   $("create").disabled = true;
   try {
-    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, sources, project: project || undefined } });
+    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, sources, project: project || undefined, scriptMode: sm, voiceMode: voiceMode(), script: sm === "own" ? $("ownScript").value : undefined } });
     project = r.project;
     history.replaceState(null, "", `/new?v=${project}`);
     localStorage.setItem("cf.project", project);
-    await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "script", on: false } });
-    await run({ stage: "writing" });
     scriptLoaded = false;
+    if (sm === "ai") {
+      await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "script", on: false } });
+      await run({ stage: "writing" });
+    }
     await refresh();
-    showStep(3);
+    showStep(sm === "none" ? 4 : 3);
   } catch (e) { err(e.message); }
   $("create").disabled = false;
 };
@@ -255,11 +302,14 @@ function showScriptChecks(s) {
   const pill = (ok, text) => `<span class="pill ${ok ? "p" : "w"}">${text}</span>`;
   $("scriptStats").innerHTML = [
     pill(s.onTarget, `${s.words} words${s.target ? ` (target ${s.target})` : ""} &middot; about ${Math.round(s.words / 150)} min`),
-    pill(!s.unsourced.length, s.unsourced.length ? `${s.unsourced.length} number(s) without a source` : "every number has a source"),
+    s.own ? "" : pill(!s.unsourced.length, s.unsourced.length ? `${s.unsourced.length} number(s) without a source` : "every number has a source"),
     s.originality ? pill(s.originality.clean, s.originality.clean ? "original wording" : `${s.originality.flagged} part(s) close to a competitor`) : "",
     s.approved ? '<span class="pill p">approved</span>' : "",
   ].join("");
   $("noModel").hidden = s.writer !== "rules";
+  $("ownNote").hidden = !s.own;
+  $("rewrite").hidden = s.own;
+  $("approveScript").innerHTML = info?.voiceMode === "own" ? "Approve script &amp; upload my recording &rarr;" : "Approve script &amp; record voice &rarr;";
   $("unsourced").innerHTML = s.unsourced.map((u) => `<li>"${esc(u.sentence)}" (${esc(u.numbers.join(", "))} not in the product facts)</li>`).join("");
   $("facts").innerHTML = s.facts.length ? s.facts.map((f) => `${esc(f.product)}: ${esc(f.label)} ${esc(f.value)} &middot; <a href="${esc(f.source.url)}" target="_blank" rel="noopener">${esc(f.source.title || f.source.url)}</a>`).join("<br>") : "No product links were given, so the script states no specs or prices.";
 }
@@ -277,18 +327,42 @@ $("approveScript").onclick = async () => {
   try {
     await saveScript(true);
     await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "voice", on: false } });
-    await run({ stage: "voice" });
+    // AI voice: record it now. Own recording: the creator uploads it on the next step.
+    if (info.voiceMode !== "own") await run({ stage: "voice" });
     await refresh();
     showStep(4);
   } catch (e) { err(e.message); }
 };
 
 // ---------- step 4 / 5 / 6 ----------
-$("revoice").onclick = async () => { try { await run({ stage: "voice" }); await refresh(); } catch (e) { err(e.message); } };
+$("revoice").onclick = async () => {
+  if (info.voiceMode === "own") return $("recFile").click();
+  try { await run({ stage: "voice" }); await refresh(); } catch (e) { err(e.message); }
+};
+$("recFile").onchange = async () => {
+  const f = $("recFile").files[0];
+  if (!f) return;
+  if (!/\.(mp3|wav|m4a)$/i.test(f.name)) return err("Please choose an MP3, WAV or M4A file.");
+  err("");
+  $("recText").textContent = `Uploading ${f.name} (${(f.size / 1048576).toFixed(1)} MB)...`;
+  try {
+    const res = await fetch(`/api/projects/${project}/audio`, { method: "POST", headers: { "x-filename": f.name }, body: f });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `upload failed (${res.status})`);
+    await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "voice", on: false } });
+    $("audio").removeAttribute("src");
+    await run({ stage: "voice" });
+    await refresh();
+  } catch (e) { err(e.message); }
+  $("recText").textContent = "Click to choose your recording";
+  $("recFile").value = "";
+};
 $("approveVoice").onclick = async () => {
   try {
     await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "voice", on: true } });
-    await run({ from: "visuals", until: "edit" });
+    // Differences between the script and the recording: keep what was said, re-time the words.
+    const open = (info.differences || []).filter((d) => !d.resolution).length;
+    if (open) await api(`/api/wizard/${project}/keep-recording`, { method: "POST" });
+    await run({ from: open ? "voice" : "visuals", until: "edit" });
     await refresh();
     showStep(5);
   } catch (e) { err(e.message); }
@@ -300,18 +374,37 @@ $("rerender").onclick = async () => { try { await run({ stage: "render" }); awai
 function render() {
   if (!info) return;
   if (view === 3) {
-    const b = stageBox(["writing"], "Writing your script, one product at a time (a few minutes)...");
+    // The creator's own script needs no writing step.
+    const b = info.scriptMode === "own" ? { state: "done", html: "" } : stageBox(["writing"], "Writing your script, one product at a time (a few minutes)...");
     $("scriptBusy").innerHTML = b.html;
     bindRetry($("scriptBusy"));
     $("scriptEdit").hidden = b.state !== "done";
     if (b.state === "done" && !scriptLoaded) loadScript();
   }
   if (view === 4) {
-    const b = stageBox(["voice"], "Recording the voice, sentence by sentence...");
-    $("voiceBusy").innerHTML = b.html;
+    const own = info.voiceMode === "own";
+    $("voiceTitle").textContent = own ? "4. Your recording" : "4. Listen to the voice";
+    const b = stageBox(["voice"], own ? "Listening to your recording and timing every word (a few minutes)..." : "Recording the voice, sentence by sentence...");
+    // Own recording: upload first; the step runs right after the upload.
+    // A failed run keeps the upload box too, so another recording can be tried.
+    const needUpload = own && (!info.recording || b.state === "idle" || b.state === "failed");
+    $("voiceUpload").hidden = !needUpload || b.state === "running";
+    $("uploadHelp").textContent = info.scriptMode === "none"
+      ? "Upload your recording (MP3, WAV or M4A). Its words become the script and the captions."
+      : "Upload your recording of the script (MP3, WAV or M4A). Small differences from the script are fine: you choose what to keep.";
+    $("backToScript").dataset.go = info.scriptMode === "none" ? "2" : "3";
+    $("backToScript").innerHTML = info.scriptMode === "none" ? "&larr; Products" : "&larr; Script";
+    $("voiceBusy").innerHTML = needUpload && b.state === "idle" ? "" : b.html;
     bindRetry($("voiceBusy"));
-    $("voiceDone").hidden = b.state !== "done";
-    if (b.state === "done" && !$("audio").src.includes(project)) $("audio").src = `/api/projects/${project}/audio?t=${Date.now()}`;
+    $("voiceDone").hidden = b.state !== "done" || needUpload;
+    $("revoice").innerHTML = own ? "Upload a different recording" : "Record again";
+    $("voiceHelp").textContent = own ? `Your recording${info.recording ? ` (${info.recording})` : ""}. Captions and cuts follow your words.` : "Listen to the start and a part in the middle. Want different words? Go back to the script, change it and record again.";
+    const open = (info.differences || []).filter((d) => !d.resolution);
+    $("diffs").innerHTML = own && info.differences?.length
+      ? `<div class="note"><b>${info.differences.length} place(s) where you said something different from the script.</b> ${open.length ? "When you continue, ClipForge keeps what you said (the captions show your words)." : "Kept as you said them."}${info.differences.slice(0, 12).map((d) => `<div class="diff"><b>Script:</b> ${esc(d.script || "(nothing)")} &nbsp; <b>You said:</b> ${esc(d.heard || "(nothing)")}</div>`).join("")}</div>`
+      : "";
+    $("approveVoice").innerHTML = open.length ? "Keep what I said &amp; find the footage &rarr;" : "Sounds good: find the footage &rarr;";
+    if (b.state === "done" && !needUpload && !$("audio").src.includes(project)) $("audio").src = `/api/projects/${project}/audio?t=${Date.now()}`;
   }
   if (view === 5) {
     const b = stageBox(["visuals", "avatar", "edit"], "Finding footage and building the edit (this is the longest step)...");
@@ -345,6 +438,7 @@ async function refresh() {
 }
 
 async function start() {
+  syncChoices();
   await Promise.all([loadChannels(), loadContinue()]);
   if (!project) return showStep(1);
   try {
@@ -359,6 +453,10 @@ async function start() {
   $("titles").innerHTML = `<label class="opt"><input type="radio" name="title" value="${esc(info.title)}" checked><span>${esc(info.title)}</span></label>`;
   $("length").value = String(c.words && [800, 1500, 2500].includes(c.words) ? c.words : 1500);
   $("channel").value = c.channel || "default";
+  for (const r of document.querySelectorAll('input[name="sm"]')) r.checked = r.value === info.scriptMode;
+  for (const r of document.querySelectorAll('input[name="vm"]')) r.checked = r.value === info.voiceMode;
+  if (info.scriptMode === "own") $("ownScript").value = (await api(`/api/wizard/${project}/script`).catch(() => ({ text: "" }))).text;
+  syncChoices();
   $("products").innerHTML = "";
   for (const p of c.products) addProduct(p, (info.sources[p] || [])[0] || "");
   showStep(Math.min(info.step, 6));

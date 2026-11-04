@@ -296,6 +296,76 @@ N should be ≤ 80.
 
 ---
 
+## Phase 4: Stock visuals + Prompt Mapper
+
+**What changed**
+
+- `src/lib/assets/prompt-mapper.ts`: for every segment, a stock **query** (2-5 filmable words) and
+  an **image prompt**.
+  - Comes from the local model (stage `assets`), split on the GPU when too big; rule-based
+    fallback when there is no model.
+  - Queries are made unique across segments, so two segments never search the same thing.
+  - Product segments get `allowGenerated: false` (exact-model policy).
+- `src/lib/assets/stock/pexels.ts`, `stock/pixabay.ts`: search and download through the existing
+  `stock.ts` (24 h cache, rate limits, 1080p file pick). Each download saves a
+  **`<file>.license.json`** sidecar: source, id, page URL, author, licence, licence URL, query,
+  date.
+- `src/lib/assets/imagegen.ts` (optional, **off** by default, `features.json` →
+  `stock.imagegen`): ComfyUI API client.
+  - SDXL-Turbo checkpoint workflow (4 steps, cfg 1), or Flux.1 schnell GGUF (ComfyUI-GGUF nodes).
+  - One picture at a time, cached by prompt, licence sidecar with model and prompt.
+  - The text model is unloaded first.
+- `src/lib/assets/visualPlan.ts`: ranking **product footage (0) > product photo (1) > stock (2) >
+  generated (3)**.
+  - Greedy unique assignment: the most constrained segment chooses first, and each picks its best
+    unused candidate.
+  - Nothing unused left: a generated picture when allowed, otherwise a **counted** forced reuse.
+  - Product lines never take stock or generated pictures.
+  - Writes `visual_plan.json` and one log line per asset: tier, source, licence, query.
+- `npm run cf -- visuals -p <project> [--apply]`. `--apply` downloads or generates, then **only**
+  fills scenes that had no real picture (missing, or a fallback card on a footage scene), and
+  rewrites `licenses.json`. Real product footage is never replaced.
+- The ledger knows the new `imagegen` source (category `generated`).
+
+**Policy note**: your saved preference is "exact-model footage only". Stock is therefore limited to
+**non-product** lines (hook, transitions, generic sentences), and only when
+`PEXELS_API_KEY` / `PIXABAY_API_KEY` are set. `GENERIC_STOCK=off` still controls the old assets
+step, which is unchanged.
+
+**Files**: `src/lib/assets/{prompt-mapper,imagegen,visualPlan}.ts`,
+`src/lib/assets/stock/{pexels,pixabay,license}.ts`, `src/lib/assets/{types,licenseLedger}.ts`,
+`src/lib/models/loader.ts`, `src/cli.ts`, `tests/visuals.test.ts`.
+
+**Checks**: typecheck passes. 315 tests, 314 pass, 0 fail, 1 skipped (the one skipped before this
+phase). In the end-to-end test project (fake ComfyUI), the 3 footage segments got 3 unique visuals,
+forced reuse 0, and all 3 have a licence logged.
+
+**How to verify on your PC**
+
+1. Optional: add `PEXELS_API_KEY` / `PIXABAY_API_KEY` to `.env`.
+2. Optional, image generation:
+   - Start ComfyUI.
+   - Put `sd_xl_turbo_1.0_fp16.safetensors` in its `models/checkpoints`.
+   - In `features.json`, set `"stock": { "imagegen": true }`.
+3. Run:
+
+   ```bash
+   npm run cf -- visuals -p <project>
+   ```
+
+   This is a dry plan. Check the `[visuals] N segment(s): N unique visual(s), forced reuse 0`
+   line.
+4. Run `npm run cf -- visuals -p <project> --apply`, then `timeline` and `render`.
+
+**Open risks**
+
+- **SDXL-Turbo licence**: Stability AI Community License (free under $1M a year). Check the
+  current terms. Flux schnell (Apache-2.0) is the safer choice for commercial use.
+- The plan does not show stock thumbnails to the vision model (the old assets step does). Stock is
+  ranked by the provider's own relevance.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

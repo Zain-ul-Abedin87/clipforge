@@ -1366,6 +1366,85 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## S2: Competitor SOP extractor (2026-11-04)
+
+The core of "copy the structure, never the wording". 5-10 transcripts of one competitor become a
+reusable SOP: hook formula, beat sheet with target positions, rules, do / don't. No sentence of
+theirs is kept.
+
+**What changed**
+- `src/lib/agents/llm/json.ts`: the shared helper for every model answer that feeds code.
+  - Zod schema, then a content check, then 2 retries that say what was wrong, then a
+    deterministic fallback.
+  - Before sending, the prompt is checked against the stage's context (8192 by default, minus
+    the answer and a margin). An oversized prompt is never sent or cut: it goes to the fallback.
+  - `chunkByTokens()` is used for map -> reduce. The model calls go through the existing stage
+    settings (stage `script`: qwen3:8b, numCtx 8192, one model at a time).
+- `src/lib/agents/sop/transcript.ts`:
+  - transcripts become numbered units: sentences, or 18-word pieces for auto-captions without
+    punctuation;
+  - word counts, wpm (only when the duration is known; otherwise marked as estimated) and
+    sentence length are measured;
+  - rule-based cue detectors (hook type, re-hook, CTA, section start, but / therefore, planted
+    question);
+  - 5-gram leak tools: `corpusOf`, `quotes`, `stripQuoted`.
+- `src/lib/agents/sop/extract.ts`:
+  - **Map**: each transcript in chunks of about 2,600 tokens. The model returns the hook (type,
+    technique, promise), re-hooks, open loops (planted -> paid off), section openings and
+    closings, how facts are introduced, transitions, but / therefore turns, CTAs and the ending.
+    It names *line numbers*; the code turns them into % of the runtime.
+  - The map answer is refused when a line number is outside the chunk, a loop is paid off before
+    it is planted, or a description repeats 6+ words of the transcript.
+  - **Reduce**: the compact per-video analyses (techniques and positions, no quotes) become one
+    SOP. If they don't fit one request they are reduced in groups, then the group drafts are
+    reduced again.
+  - **Stats are computed, not asked**: words, wpm, re-hook spacing (% and seconds), CTA
+    positions, sections per video, section share, loops per video, share of loops paid off,
+    hook-type counts.
+  - **Leak strip**: every 5-word run that matches any transcript is cut from every SOP text. An
+    item that keeps too little is dropped. The originality checker then runs on the SOP and
+    records the 5-gram overlap (0 = clean).
+  - Without a model, a rule-based SOP is built from the cues and the stats (labelled "by rules").
+- `src/lib/agents/sop/sources.ts`: transcripts come from a folder (`*.txt`, optional
+  `<id>.json` with `durationSec`), from a project's `competitors/`, or from a channel id (`UC...`).
+  For a channel id it takes the most viewed of the last 50 uploads that are 3+ min long, with
+  transcripts cached in `channels/<ch>/sop/<id>/`. That needs `YOUTUBE_API_KEY`; without it,
+  the error says to use a folder.
+- CLI: `sop build --channel <id> --competitor <folder|project|UC...> [--videos N]`,
+  `sop show --channel <id> [--competitor <id>]`. Saved as `channels/<ch>/sop/<competitor>.json`.
+
+**Fixed while testing**: the rule-based beat sheet was cut at 20 beats *after* sorting, which
+dropped the 95% payoff beat on list-heavy videos. Sections are now capped at 8 and re-hooks at 6,
+so the hook, the promise and the payoff always stay.
+
+**Tests**: `tests/sop.test.ts`, 7. The fixtures are synthetic transcripts made in the test, not
+any real channel's words. They cover:
+- units, positions and wpm;
+- auto-captions without punctuation;
+- hook types;
+- the leak tools;
+- a rules-only SOP: valid, saved, measured, zero 5-gram overlap, payoff kept;
+- a fake model:
+  - a quoted answer is refused and retried;
+  - an out-of-range line is refused and retried;
+  - the long transcript is split;
+  - a small context makes the reduce run in groups;
+  - every prompt was under its budget;
+  - a 5-word copy in a rule is stripped while the rest of the rule is kept;
+- `askJson`: 3 tries, then the fallback; an oversized prompt is never sent;
+- the real CLI from a folder.
+
+Full suite: 450 tests: 449 pass, 0 fail, 1 skipped.
+
+**Limits**
+- Not run here against qwen3:8b (no Ollama in the cloud). How good the technique descriptions are
+  depends on the model: judge the first real SOP on your PC.
+- The rule fallback finds English cue phrases only, and its descriptions are fixed texts: it is a
+  skeleton, not an analysis.
+- Positions are by word share, not by seconds. They match the runtime when the pace is steady.
+
+---
+
 ## S1: Channel brief (2026-11-04)
 
 Every channel can now have a brief: who it is for and how it sounds. Titles, the outline and every

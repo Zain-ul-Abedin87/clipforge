@@ -221,6 +221,41 @@ channelCmd
     console.log(briefToMd(b));
   });
 
+const sopCmd = program.command("sop").description("Competitor SOP: learn a competitor's structure (hook, beats, rules) from 5-10 transcripts, never their wording");
+sopCmd
+  .command("build")
+  .description("Build channels/<channel>/sop/<competitor>.json from transcripts")
+  .requiredOption("--channel <id>", "our channel (the SOP is saved under it)")
+  .requiredOption("--competitor <spec>", "a folder of .txt transcripts, a project with competitors/*.txt, or a YouTube channel id (UC..., needs YOUTUBE_API_KEY)")
+  .option("--videos <n>", "how many transcripts (5-10 recommended)", "8")
+  .action(async (o) => {
+    const { competitorTranscripts } = await import("./lib/agents/sop/sources.js");
+    const { buildSop, sopText } = await import("./lib/agents/sop/extract.js");
+    try {
+      const src = await competitorTranscripts(String(o.competitor), String(o.channel), Math.max(1, Math.min(20, Number(o.videos) || 8)));
+      const sop = await buildSop({ channel: String(o.channel), competitor: src.competitor, transcripts: src.transcripts });
+      console.log(sopText(sop));
+    } catch (err) {
+      console.error(`[sop] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+sopCmd
+  .command("show")
+  .description("Print a channel's SOP (the newest, or --competitor)")
+  .requiredOption("--channel <id>", "our channel")
+  .option("--competitor <id>", "which SOP (default: the newest)")
+  .action(async (o) => {
+    const { listSops, loadSop, sopText } = await import("./lib/agents/sop/extract.js");
+    const s = loadSop(String(o.channel), o.competitor ? String(o.competitor) : undefined);
+    if (!s) {
+      console.error(`[sop] no SOP for ${o.channel}${o.competitor ? ` / ${o.competitor}` : ""}. Saved: ${listSops(String(o.channel)).join(", ") || "none"}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(sopText(s));
+  });
+
 program
   .command("clips")
   .description("Shorts from a long video (workspace/<project>/clips/): --find = the best moments, ranked; --render = cut, reframe, caption -> output/<project>_clip_<rank>.mp4")

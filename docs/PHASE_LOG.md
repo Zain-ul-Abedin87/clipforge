@@ -1418,10 +1418,9 @@ before v3).
 **Blocked / needs you:**
 - `YOUTUBE_API_KEY`: `sop build --competitor UC...`, comment mining and outlier scans need it.
   Without it, give `sop build` a folder of transcripts.
-- **Unverified:** I set the quota cost of `commentThreads.list` to 1 unit from Google's quota
-  table, but I could not open developers.google.com from the build machine. Check it at
-  developers.google.com/youtube/v3/determine_quota_cost. If it differs, change `UNIT_COST` in
-  `src/lib/research/youtube-api.ts`.
+- ~~Unverified `commentThreads.list` cost~~ **verified** later the same day on Google's quota
+  table (developers.google.com/youtube/v3/determine_quota_cost): `commentThreads list` = 1 unit,
+  and `search.list` = 100. The default quota is 10,000 units/day.
 - `ollama pull qwen2.5vl:3b` for the thumbnail descriptions.
 
 ---

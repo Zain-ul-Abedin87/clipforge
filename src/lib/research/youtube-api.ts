@@ -12,8 +12,9 @@ import { ResearchDb } from "./db.js";
  * Key: YOUTUBE_API_KEY in .env (Google Cloud console -> YouTube Data API v3 -> API key; free).
  */
 
-// commentThreads: 1 unit per call per Google's quota table (determine_quota_cost); not re-checked
-// from the build machine (developers.google.com was unreachable there): confirm it in the console.
+// Costs from Google's quota table (developers.google.com/youtube/v3/determine_quota_cost, read
+// 2026-11-04): search.list 100, videos / channels / playlistItems / commentThreads list 1 each;
+// 10,000 units per day by default.
 export const UNIT_COST = { search: 100, videos: 1, channels: 1, playlistItems: 1, commentThreads: 1 } as const;
 type Endpoint = keyof typeof UNIT_COST;
 

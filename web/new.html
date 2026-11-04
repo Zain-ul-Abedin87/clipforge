@@ -67,6 +67,7 @@
         <button data-e="local" title="Only the AI on this PC (Ollama): free and private">Local</button>
         <button data-e="api" title="Only a cloud AI (needs an API key; costs money per use)">API</button>
         <button data-e="both" title="The AI on this PC first; the cloud AI only when the local one fails">Both</button>
+        <button data-e="hybrid" title="The script on Claude Sonnet 5.5 (about $0.37 for a 16-minute video), everything else on this PC (free)">Hybrid</button>
       </div>
       <div class="chips" id="engineChips"></div>
       <span class="hint" id="engineHint"></span>
@@ -574,7 +575,7 @@ async function refresh() {
   timer = setTimeout(() => refresh().catch(() => {}), busy ? 2500 : 10000);
 }
 
-// ---------- AI engine switch (local / API / both) ----------
+// ---------- AI engine switch (local / API / both / hybrid) ----------
 async function showEngine(e) {
   e = e || (await api("/api/engine").catch(() => null));
   if (!e) return ($("engineBar").hidden = true);
@@ -586,7 +587,7 @@ async function showEngine(e) {
     chip(e.api.claude || e.api.qwenCloud, "API key", e.api.claude ? "ANTHROPIC_API_KEY is set" : e.api.qwenCloud ? "QWEN_API_KEY is set" : "No AI API key in .env"),
     ...vid.map((v) => chip(v.ready, v.label.replace(/ \(.*\)$/, ""), v.ready ? "Key found: scenes can be generated (paid, asked each time)" : v.why)),
   ].join("");
-  const need = e.engine === "local" && !e.local.running ? "Start Ollama, or switch to API." : e.engine === "api" && !(e.api.claude || e.api.qwenCloud) ? "Add an API key to .env, or switch to Local." : e.engine === "custom" ? "Custom settings (Classic page). Pick one to simplify." : "";
+  const need = e.engine === "hybrid" ? [!e.local.running && "Start Ollama (everything but the script runs on it).", !e.api.claude && "Add ANTHROPIC_API_KEY to .env, or the script is written locally too."].filter(Boolean).join(" ") || "Script on Claude Sonnet 5.5, everything else on this PC." : e.engine === "local" && !e.local.running ? "Start Ollama, or switch to API." : e.engine === "api" && !(e.api.claude || e.api.qwenCloud) ? "Add an API key to .env, or switch to Local." : e.engine === "custom" ? "Custom settings (Classic page). Pick one to simplify." : "";
   $("engineHint").textContent = need;
 }
 for (const b of document.querySelectorAll("#engineToggle button")) b.onclick = async () => {

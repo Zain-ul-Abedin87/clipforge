@@ -535,14 +535,17 @@ async function callQwen(kind: Kind, params: Params): Promise<unknown> {
 // ---------------------------------------------------------------------------------------------
 
 async function route(kind: Kind, beta: boolean, params: Params): Promise<unknown> {
-  const order = providerOrder();
+  const stage = currentStage();
+  const order = providerOrder(undefined, undefined, stage);
   if (!order.length) throw apiError(503, "no AI model is available (Settings -> AI model: all off, out of budget or missing keys)");
   const need = needsOf(params);
   let lastErr: unknown = null;
   for (const p of order) {
     if (p === "qwen" && need.tools) continue;
     try {
-      return p === "claude" ? await callClaude(kind, beta, params) : await callQwen(kind, params);
+      // A stage may name its own Claude model (hybrid: the script on Sonnet, whatever LLM_MODEL says).
+      const cm = stage ? (loadLlmSettings().stages as Record<string, { claudeModel?: string } | undefined>)[stage]?.claudeModel : undefined;
+      return p === "claude" ? await callClaude(kind, beta, cm ? { ...params, model: cm } : params) : await callQwen(kind, params);
     } catch (err) {
       lastErr = err;
       if (isCreditError(err)) {

@@ -53,6 +53,13 @@ export type Stage = (typeof STAGES)[number];
 export interface StageModel {
   model?: string;
   numCtx?: number;
+  /**
+   * This stage asks this provider first (then the global order as backup). The "hybrid" engine
+   * sets script = claude: the script on Claude, every other stage on the local model.
+   */
+  provider?: ProviderName;
+  /** The Claude model this stage uses (instead of LLM_MODEL), e.g. claude-sonnet-5-5 for the script. */
+  claudeModel?: string;
 }
 
 /** Model loader / VRAM guard settings (local Ollama only). */
@@ -178,6 +185,10 @@ export function saveLlmSettings(patch: Record<string, unknown>, file = settingsF
     else if (text(v.model, 80)) cur.model = text(v.model, 80)!;
     if (v.numCtx === null) delete cur.numCtx;
     else cur.numCtx = num(v.numCtx, 2048, 131072) ?? cur.numCtx;
+    if (v.provider === "" || v.provider === null) delete cur.provider;
+    else if (v.provider === "claude" || v.provider === "qwen") cur.provider = v.provider;
+    if (v.claudeModel === "" || v.claudeModel === null) delete cur.claudeModel;
+    else if (text(v.claudeModel, 80) && /^claude-[a-z0-9.-]+$/.test(String(v.claudeModel))) cur.claudeModel = text(v.claudeModel, 80)!;
     next.stages[k] = cur;
   }
   const mo = (patch.models ?? {}) as Record<string, unknown>;
@@ -288,9 +299,14 @@ export function providerStatus(p: ProviderName, s = loadLlmSettings(), u = readU
   return { provider: p, configured, blocked, spentUsd: u[p].spentUsd, remainingUsd: remaining, calls: u[p].calls, disabled: u[p].disabled ?? null };
 }
 
-/** Providers to try, in order: primary, then fallback, skipping blocked ones. */
-export function providerOrder(s = loadLlmSettings(), u = readUsage()): ProviderName[] {
+/**
+ * Providers to try, in order: the stage's own provider (when it has one), then primary, then
+ * fallback, skipping blocked ones. A stage without its own provider never reaches a provider that
+ * is not in the global order (hybrid: only the script stage can use Claude).
+ */
+export function providerOrder(s = loadLlmSettings(), u = readUsage(), stage?: Stage | string): ProviderName[] {
   if (s.primary === "off") return [];
-  const want = [s.primary, ...(s.fallback !== "none" && s.fallback !== s.primary ? [s.fallback] : [])] as ProviderName[];
-  return want.filter((p) => !providerStatus(p, s, u).blocked);
+  const own = stage ? s.stages[stage as Stage]?.provider : undefined;
+  const want = [...(own ? [own] : []), s.primary, ...(s.fallback !== "none" ? [s.fallback] : [])] as ProviderName[];
+  return [...new Set(want)].filter((p) => !providerStatus(p, s, u).blocked);
 }

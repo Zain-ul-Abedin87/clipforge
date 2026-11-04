@@ -7,15 +7,22 @@ import { loadLlmSettings, LlmSettings, QWEN_PRESETS, qwenKey, saveLlmSettings } 
  *   local = the local model only (Ollama on this PC; free, private)
  *   api   = a cloud API only (Claude, else Qwen cloud when only its key is set)
  *   both  = local first, the API when the local model fails or is not running
+ *   hybrid = the script (outline, beats, sections; also the SOP extractor, stage "script") on
+ *            Claude Sonnet 5.5, every other stage on the local model only. If the Claude key is
+ *            missing or its budget is used up, the script falls back to the local model.
  * It only writes llm_settings.json primary / fallback / qwen.mode, the same settings the Classic
  * page edits, so both pages always agree. Video generation (Veo / Runway) is separate: it runs
  * only when its key is set and the creator confirms a paid call.
  */
-export type Engine = "local" | "api" | "both";
+export type Engine = "local" | "api" | "both" | "hybrid";
+
+/** Hybrid: the script stage on this Claude model, everything else on the local model. */
+export const HYBRID_SCRIPT_MODEL = "claude-sonnet-5-5";
 
 export function currentEngine(s: LlmSettings = loadLlmSettings()): Engine | "custom" | "off" {
   if (s.primary === "off") return "off";
   const local = (p: string) => p === "qwen" && s.qwen.mode === "local";
+  if (local(s.primary) && s.fallback === "none" && s.stages.script?.provider === "claude") return "hybrid";
   if (local(s.primary) && s.fallback === "none") return "local";
   if (local(s.primary) && s.fallback === "claude") return "both";
   if (!local(s.primary) && (s.fallback === "none" || (s.fallback === "qwen" && s.qwen.mode === "cloud"))) return "api";
@@ -23,7 +30,10 @@ export function currentEngine(s: LlmSettings = loadLlmSettings()): Engine | "cus
 }
 
 export function setEngine(e: Engine, file?: string): LlmSettings {
-  if (e === "local") return saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local" } }, file);
+  // Only "hybrid" gives the script stage its own provider; the other engines clear it.
+  const script = e === "hybrid" ? { provider: "claude", claudeModel: HYBRID_SCRIPT_MODEL } : { provider: "", claudeModel: "" };
+  saveLlmSettings({ stages: { script } }, file);
+  if (e === "local" || e === "hybrid") return saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local" } }, file);
   if (e === "both") return saveLlmSettings({ primary: "qwen", fallback: "claude", qwen: { mode: "local" } }, file);
   // API: Claude when its key is set; with only a Qwen cloud key, Qwen cloud.
   if (!hasKey("ANTHROPIC_API_KEY") && qwenKey()) return saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "cloud" } }, file);

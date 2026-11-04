@@ -586,7 +586,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     reloadEnv();
     if (method === "PUT") {
       const e = JSON.parse((await readBody(req)) || "{}").engine;
-      if (e !== "local" && e !== "api" && e !== "both") return send(res, 400, { error: "engine must be local, api or both" });
+      if (e !== "local" && e !== "api" && e !== "both" && e !== "hybrid") return send(res, 400, { error: "engine must be local, api, both or hybrid" });
       setEngine(e);
     }
     if (method === "GET" || method === "PUT") return send(res, 200, await engineStatus());

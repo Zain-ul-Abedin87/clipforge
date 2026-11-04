@@ -128,7 +128,10 @@ v3 they are optional: a missing package only stops the paid Veo / Gemini / Runwa
 npm.cmd run serve
 ```
 
-Open **http://localhost:4173/new**. At the top, set the **AI engine to Local** (Ollama must show ✓).
+Open **http://localhost:4173/new**. At the top, set the **AI engine**:
+- **Local**: everything on this PC (Ollama must show ✓), free.
+- **Hybrid** (recommended): the script on Claude Sonnet 5.5 (`ANTHROPIC_API_KEY` in `.env`, about
+  $0.37 for a 16-minute video), everything else on this PC. Ollama must still run.
 
 Keep a second PowerShell open with this, to watch the GPU during a run:
 

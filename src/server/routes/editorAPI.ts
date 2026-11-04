@@ -450,7 +450,7 @@ export function createEditorAPI(deps: EditorDeps) {
         // A button must answer fast: with the local AI first and Ollama not running, the shared LLM
         // code would wait up to a minute for it, so the simple prompt is made at once instead.
         const eng = await engineStatus();
-        const localFirst = eng.engine === "local" || eng.engine === "both";
+        const localFirst = eng.engine === "local" || eng.engine === "both" || eng.engine === "hybrid";
         const ask = localFirst && !eng.local.running ? null : undefined;
         const w = await writeScenePrompt({ wish: typeof p.wish === "string" ? p.wish : "", product: req.product, category: deps.categoryOf(project), spec: subject?.spec?.spec ?? null, sceneText: scene?.text ?? "", angle, seconds: req.seconds, realPhoto: frame !== req.frame }, { ask });
         return { prompt: w.prompt, writer: w.writer, frame, frameUrl: `/api/editor/flow-file?project=${encodeURIComponent(project)}&name=${encodeURIComponent(frame)}`, seconds: req.seconds, product: req.product, flowUrl: req.flowUrl };

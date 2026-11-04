@@ -1366,6 +1366,41 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Hybrid AI engine: script on Claude Sonnet 5.5, the rest local (2026-11-04)
+
+The cheapest setup that still gets a strong script: about $0.37 of Claude for a 16-minute video
+(estimate). Everything else runs on this PC for free.
+
+- **Per-stage provider** (`llm_settings.json` `stages.<stage>.provider` / `claudeModel`): a stage
+  can ask its own provider first, then the global order as backup.
+  - `providerOrder(..., stage)` adds the stage's own provider first.
+  - A stage without one never reaches a provider outside the global order.
+  - `route()` uses the current stage, and sends that stage's `claudeModel` in place of
+    `LLM_MODEL`.
+- **Engine "hybrid"** (`setEngine` / `currentEngine`, `PUT /api/engine {engine: "hybrid"}`, and a
+  "Hybrid" button on `/new`):
+  - primary = local qwen, no global fallback;
+  - `stages.script = {provider: "claude", claudeModel: "claude-sonnet-5-5"}`.
+
+  So the outline, beats, sections and the SOP extractor (stage `script`) use Sonnet, and titles,
+  plan, labels, footage checks, ideas and QA stay local. Without the key, or with the budget used
+  up, the script is written locally instead of failing. Choosing Local / API / Both clears the
+  script override.
+- The page hint says what is missing (Ollama, `ANTHROPIC_API_KEY`). "Hybrid" counts as local-first
+  in the fast-fail checks (`requireAi`, the editor's prompt writer).
+- Cost is recorded at Sonnet's price in `cache/llm_usage.json`.
+- **Tests** (`tests/hybrid.test.ts`, 4). They send real requests through the routing layer to a
+  stand-in Claude server (`ANTHROPIC_BASE_URL`) and a fake local model:
+  - the script stage goes to Claude as `claude-sonnet-5-5` even with `LLM_MODEL=claude-opus-5-5`;
+  - plan and titles go local;
+  - the cost is recorded at the Sonnet rate;
+  - with no key, the script is written locally;
+  - invalid stage settings are refused.
+- Full suite: 486 tests: 485 pass, 0 fail, 1 skipped. Checked in Chromium: Hybrid button ->
+  settings saved, hint shown.
+
+---
+
 ## Gemini image model: 3.1 Flash Lite Image (2026-11-04)
 
 Google's Gemini API pricing page says `gemini-2.5-flash-image` is deprecated and shuts down on

@@ -48,7 +48,8 @@ export async function runTool(command: string, args: string[], o: { timeoutMs?: 
 export async function requireAi(): Promise<void> {
   const { engineStatus } = await import("../agents/llm/engine.js");
   const e = await engineStatus();
-  const localFirst = e.engine === "local" || e.engine === "both";
+  // Hybrid needs the local AI too: only the script stage goes to Claude.
+  const localFirst = e.engine === "local" || e.engine === "both" || e.engine === "hybrid";
   const apiBackup = e.engine === "both" && (e.api.claude || e.api.qwenCloud);
   if (localFirst && !e.local.running && !apiBackup) throw new Error("Qwen not reachable: the local AI (Ollama) is not running. Start Ollama, or switch the AI engine to API.");
 }

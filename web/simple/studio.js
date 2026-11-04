@@ -614,7 +614,7 @@ async function loadGenOptions(clipId) {
   try {
     const o = await rpc("editor.genOptions", { clipId });
     st.gen = { clipId, ...o };
-    const eng = { local: "the AI on this PC", api: "the cloud AI", both: "the AI on this PC (cloud as backup)" }[o.engine] || "your AI settings";
+    const eng = { local: "the AI on this PC", api: "the cloud AI", both: "the AI on this PC (cloud as backup)", hybrid: "the AI on this PC" }[o.engine] || "your AI settings";
     if ($("genEngine")) $("genEngine").textContent = `Written by ${eng}${o.engine !== "api" && !o.local.running ? " - Ollama is not running, so a simple prompt is made" : ""}.`;
     if (st.flow?.clipId === clipId) renderFlowBox();
   } catch (e) {

@@ -101,7 +101,7 @@ export function ttsCacheKey(c: TtsConfig, payload: string): string {
         : c.provider === "piper"
           ? { model: path.basename(c.model), size: fileSize(c.model) }
           : c.provider === "kokoro"
-            ? { voice: c.voice, speed: c.speed, model: c.url ? "server" : path.basename(c.model) }
+            ? { voice: c.voice, speed: c.speed, model: c.url ? "server" : path.basename(c.model), ...(c.lang ? { lang: c.lang } : {}) }
             : c.provider === "xtts"
               ? { speaker: path.basename(c.speakerWav), size: fileSize(c.speakerWav), language: c.language }
               : { rate: c.rate };

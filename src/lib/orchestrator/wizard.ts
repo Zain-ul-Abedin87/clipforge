@@ -5,6 +5,7 @@ import { projectDir, readJson, writeJson } from "../project.js";
 import { countWords } from "../agents/script/sections.js";
 import { SourcedFact, unsourcedClaims } from "../agents/script/facts.js";
 import { readConfig, readState, saveConfig } from "./pipeline.js";
+import { translationView, TranslationView } from "../localize/versions.js";
 
 /**
  * "New video" wizard (one guided path for a creator): topic -> title -> products (+ product page
@@ -135,6 +136,8 @@ export interface ScriptView {
   writer: "model" | "rules" | null;
   /** The creator pasted this script (not written by the AI). */
   own: boolean;
+  /** A language version: what to check in the translation (null for an original video). */
+  translation: TranslationView | null;
 }
 
 interface ReportLike {
@@ -152,7 +155,9 @@ export function scriptView(project: string): ScriptView {
   const report = fs.existsSync(path.join(dir, "script_report.json")) ? readJson<ReportLike>(path.join(dir, "script_report.json")) : {};
   const cfg = readConfig(project);
   const facts = report.claims?.facts ?? report.claims?.factsUsed ?? [];
-  const own = modesOf(project).scriptMode === "own";
+  const translation = translationView(project);
+  // A translation is checked through its own report (the original's facts were checked there).
+  const own = modesOf(project).scriptMode === "own" && !translation;
   const target = report.targetWords ?? cfg?.words ?? null;
   const words = countWords(text);
   return {
@@ -161,12 +166,13 @@ export function scriptView(project: string): ScriptView {
     target,
     onTarget: target ? Math.abs(words - target) <= target * 0.03 : true,
     // The creator's own script: its numbers are the creator's call (no AI-sourced facts to check).
-    unsourced: text && !own ? unsourcedClaims(text, facts, cfg?.products ?? []).map((c) => ({ sentence: c.sentence, numbers: c.numbers })) : [],
+    unsourced: text && !own && !translation ? unsourcedClaims(text, facts, cfg?.products ?? []).map((c) => ({ sentence: c.sentence, numbers: c.numbers })) : [],
     facts,
     originality: report.originality ? { clean: report.originality.clean, flagged: report.originality.flagged } : null,
     approved: readApprovals(project).script ?? null,
-    writer: own ? null : report.writer ?? null,
+    writer: own || translation ? null : report.writer ?? null,
     own,
+    translation,
   };
 }
 

@@ -5,6 +5,9 @@ import { readJson } from "../../lib/project.js";
 import { PIPELINE_STAGES, readConfig, readState, STAGE_LABELS } from "../../lib/orchestrator/pipeline.js";
 import { createVideo, differences, modesOf, ownRecording, readApprovals, saveScript, scriptView, setApproval, shortsOf, wizardStep } from "../../lib/orchestrator/wizard.js";
 import { saveResolution } from "../../commands/align.js";
+import { createLanguageVersion, versionInfo } from "../../lib/localize/versions.js";
+import { LANGUAGES } from "../../lib/localize/languages.js";
+import { loadFeatures } from "../../lib/settings/features.js";
 
 /**
  * "New video" wizard API (web/new.html). Steps run through /api/pipeline/:project/run.
@@ -16,6 +19,8 @@ import { saveResolution } from "../../commands/align.js";
  *   POST /api/wizard/:project/keep-recording  every difference between script and recording: keep what was said
  * Own recordings are uploaded with POST /api/projects/:project/audio (x-filename header).
  *   GET  /api/wizard/:project/short/:file   a finished Short (video)
+ *   POST /api/wizard/:project/translate     {language} -> {project, needsTranslation}: a language version
+ *                                           (new project; then run its "writing" stage = translate)
  */
 
 export type RouteResult = { status: number; body: unknown; file?: string } | null;
@@ -75,6 +80,9 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
         recording: ownRecording(project) ? path.basename(ownRecording(project)!) : null,
         differences: differences(project),
         stages: PIPELINE_STAGES.map((s) => ({ id: s, label: STAGE_LABELS[s], status: st.stages[s].status, ms: st.stages[s].ms ?? 0, gpuMs: st.stages[s].gpuMs ?? 0, hint: st.stages[s].hint ?? null, last: (st.stages[s].log ?? []).slice(-1)[0] ?? "" })),
+        ...versionInfo(project),
+        hasScript: fs.existsSync(path.join(dir, "script.txt")),
+        languages: loadFeatures().localize.languages.filter((c) => c in LANGUAGES).map((c) => ({ code: c, name: LANGUAGES[c].name, native: LANGUAGES[c].native })),
         hasVoice: fs.existsSync(path.join(dir, "voiceover_tts.wav")) || !!readJson<{ audio?: string }>(path.join(dir, "project.json")).audio,
         hasVideo: fs.existsSync(path.join(paths.output, `${project}.mp4`)),
         shorts: shortsOf(project),
@@ -105,6 +113,15 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
     const open = differences(project).filter((d) => !d.resolution);
     for (const d of open) saveResolution(dir, d.id, "keep_audio");
     return { status: 200, body: { resolved: open.length } };
+  }
+
+  if (parts[3] === "translate" && method === "POST") {
+    const b = await json();
+    try {
+      return { status: 200, body: createLanguageVersion(project, String(b.language ?? "")) };
+    } catch (err) {
+      return { status: 400, body: { error: (err as Error).message } };
+    }
   }
 
   if (parts[3] === "short" && parts[4] && method === "GET") {

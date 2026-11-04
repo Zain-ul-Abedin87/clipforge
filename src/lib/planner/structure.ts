@@ -12,7 +12,13 @@ export interface Span {
 
 // "Number 5", "number #10" (spoken "number" + the script's "#10"), "No. 10", "No 3", "#4", "at number two".
 // "No" needs a digit after it, so "Not a drone" / "Normal" never read as headers.
-const HEADER_RE = /^(?:and\s+)?(?:(?:coming\s+in\s+)?at\s+|our\s+)?(?:number\s*#?\s*|no\.\s*#?\s*|no\s+(?=#?\s*\d)#?\s*|#\s*)([a-z0-9-]+)\b/i;
+// Language versions (src/lib/localize) keep ranks as digits: "Platz 3", "Nummer 3", "número 3",
+// "numéro 3", "numero 3", "posição 3", "auf Platz 3", "en el número 3", "al numero 3".
+const RANK_WORD = "number|nummer|platz|n[uú]mero|num[eé]ro|puesto|posto|posi[cç][aã]o";
+const HEADER_RE = new RegExp(
+  `^(?:and\\s+|und\\s+|y\\s+|et\\s+|e\\s+)?(?:(?:coming\\s+in\\s+)?at\\s+|our\\s+|auf\\s+|en\\s+el\\s+|al\\s+|em\\s+|en\\s+)?(?:(?:${RANK_WORD})\\s*#?\\s*(?=[a-z0-9])|no\\.\\s*#?\\s*|no\\s+(?=#?\\s*\\d)#?\\s*|#\\s*)([a-z0-9-]+)\\b`,
+  "i",
+);
 
 /** A ranked heading written in the script ("#10 — Name", "No. 3: Name", "Number 2 - Name"). */
 export interface ScriptHeading {
@@ -20,7 +26,7 @@ export interface ScriptHeading {
   name: string;
 }
 
-const HEADING_LINE_RE = /^\s*(?:#|no\.?\s*#?|number\s*#?)\s*(\d{1,2})\s*(?:[\u2014\u2013:\-.)]+\s*)?(.+?)\s*$/i;
+const HEADING_LINE_RE = new RegExp(`^\\s*(?:#|no\\.?\\s*#?|(?:${RANK_WORD})\\s*#?)\\s*(\\d{1,2})\\s*(?:[\\u2014\\u2013:\\-.)]+\\s*)?(.+?)\\s*$`, "i");
 
 /**
  * Ranked product headings from a plain-text / docx script: lines of their own that start with a

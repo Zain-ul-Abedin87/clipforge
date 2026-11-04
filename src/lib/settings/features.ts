@@ -109,6 +109,15 @@ export interface FeatureSettings {
     /** Ask before every step in chat mode. */
     approveEachStep: boolean;
   };
+  localize: {
+    /** Languages offered for a language version of a video (codes from src/lib/localize/languages.ts). */
+    languages: string[];
+    /** A translated paragraph shorter / longer than this ratio of the original (in words) is flagged. */
+    minRatio: number;
+    maxRatio: number;
+    /** Write decimals with a comma (4.5 -> 4,5) in languages that use one. */
+    localNumbers: boolean;
+  };
 }
 
 export const FEATURE_DEFAULTS: FeatureSettings = {
@@ -132,6 +141,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   avatar: { enabled: false, engine: "musetalk", placements: ["intro", "outro"], layout: "pip", pipCorner: "br", pipScale: 0.32, maxClipSec: 15, engineDir: "", pythonCmd: "python", command: "", drivingVideo: "" },
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
+  localize: { languages: ["de", "es", "fr", "it", "pt", "hi"], minRatio: 0.6, maxRatio: 1.7, localNumbers: true },
 };
 
 export const featuresFile = () => env("FEATURE_SETTINGS_FILE", "") || path.join(paths.root, "features.json");

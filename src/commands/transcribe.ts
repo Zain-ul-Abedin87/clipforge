@@ -8,12 +8,15 @@ import { venvPythonPath } from "../lib/tools.js";
 import { localModelDir } from "./fetchModel.js";
 import { ttsTimingsFor } from "../lib/ttsChunks.js";
 import { writeModeBTimings } from "./tts.js";
+import { languageSpec } from "../lib/localize/languages.js";
 
 export interface TranscribeOpts {
   audio?: string;
   project?: string;
   glossary?: string;
   model?: string;
+  /** Whisper language (default: the project's language, English for old projects). */
+  language?: string;
   force?: boolean;
 }
 
@@ -52,7 +55,11 @@ export async function transcribe(opts: TranscribeOpts): Promise<number> {
   // Prefer the curl-downloaded local copy (see fetch-model); fall back to Hugging Face download.
   const localDir = localModelDir(modelName);
   const model = fs.existsSync(path.join(localDir, "model.bin")) ? localDir : modelName;
+  const pj = path.join(dir, "project.json");
+  const whisperLang = opts.language || languageSpec(fs.existsSync(pj) ? JSON.parse(fs.readFileSync(pj, "utf8")).language : "en").whisper;
   const inputs = {
+    // Only a non-English run adds the language, so existing English caches stay valid.
+    ...(whisperLang !== "en" ? { language: whisperLang } : {}),
     audio: fingerprint(audio),
     glossary: fingerprint(glossary),
     model: modelName,
@@ -83,6 +90,7 @@ export async function transcribe(opts: TranscribeOpts): Promise<number> {
     "--device", env("WHISPER_DEVICE", "auto"),
     "--compute-type", env("WHISPER_COMPUTE_TYPE", "int8_float16"),
     "--models-dir", path.join(paths.root, "models"),
+    "--language", whisperLang,
   ];
 
   // The GPU on this laptop sporadically hits cudaErrorIllegalInstruction. Each crash costs at most

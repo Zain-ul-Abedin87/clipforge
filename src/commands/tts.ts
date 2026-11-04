@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { paths } from "../lib/paths.js";
 import { fingerprint, projectDir, readJson, writeJson } from "../lib/project.js";
-import { resolveTtsConfig, TtsConfigError } from "../lib/tts.js";
+import { resolveTtsConfigFor, TtsConfigError } from "../lib/tts.js";
+import { languageSpec } from "../lib/localize/languages.js";
 import { alignedFromChunks, synthesizeUnits } from "../lib/ttsChunks.js";
 import { applyWordEdits } from "../lib/wordEdits.js";
 import { closeEngines, loudnorm } from "../lib/tts/index.js";
@@ -30,9 +31,12 @@ export async function tts(opts: TtsOpts, log: (m: string) => void = console.log)
     log(`[tts] ${scriptFile} missing. Mode B needs a script.`);
     return 1;
   }
+  // A language version speaks its own language with its own voice (resolveTtsConfigFor).
+  const pjFile = path.join(dir, "project.json");
+  const lang = languageSpec(fs.existsSync(pjFile) ? readJson<{ language?: string }>(pjFile).language : "en");
   let config;
   try {
-    config = resolveTtsConfig();
+    config = resolveTtsConfigFor(lang.code);
   } catch (err) {
     if (err instanceof TtsConfigError) {
       log(`[tts] CONFIGURATION ERROR: ${err.message}`);
@@ -40,7 +44,9 @@ export async function tts(opts: TtsOpts, log: (m: string) => void = console.log)
     }
     throw err;
   }
-  const glossaryFile = opts.glossary ? path.resolve(opts.glossary) : path.join(paths.inputs, "glossary.txt");
+  // Pronunciations are per language: English spoken forms must not end up in a German voiceover.
+  const glossaryFile = opts.glossary ? path.resolve(opts.glossary) : path.join(paths.inputs, lang.code === "en" ? "glossary.txt" : `glossary.${lang.code}.txt`);
+  if (lang.code !== "en") log(`[tts] ${lang.name} voice (${config.provider}); pronunciations from ${path.basename(glossaryFile)}${fs.existsSync(glossaryFile) ? "" : " (none yet)"}`);
   const script = fs.readFileSync(scriptFile, "utf8");
   const scriptHash = crypto.createHash("sha256").update(script).digest("hex");
   const out = path.join(dir, "voiceover_tts.wav");

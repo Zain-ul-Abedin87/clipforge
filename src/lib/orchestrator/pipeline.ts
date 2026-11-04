@@ -93,11 +93,16 @@ function writeState(project: string, st: PipelineState): void {
 /** CLI steps of a stage (argv after `clipforge`). */
 export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineConfig | null): string[][] {
   const dir = projectDir(project);
-  const p = fs.existsSync(path.join(dir, "project.json")) ? readJson<{ audio?: string; voiceMode?: string; channel?: string }>(path.join(dir, "project.json")) : {};
+  const p = fs.existsSync(path.join(dir, "project.json")) ? readJson<{ audio?: string; voiceMode?: string; channel?: string; sourceProject?: string }>(path.join(dir, "project.json")) : {};
+  // A language version (src/lib/localize/versions.ts): no research of its own, and its script is
+  // translated from the original instead of written.
+  const version = !!p.sourceProject;
   switch (stage) {
     case "research":
+      if (version) return [];
       return [["research", ...(cfg?.seeds?.length ? ["-s", cfg.seeds.join(",")] : [])], ...(cfg?.topic ? [["titles", "-t", cfg.topic]] : [])];
     case "writing":
+      if (version) return [["translate", "-p", project]];
       if (!cfg?.topic || !cfg.products.length) return [];
       return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : [])]];
     case "voice": {
@@ -170,7 +175,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
   };
   if (!steps.length) {
     s.status = "skipped";
-    line(`[pipeline] ${STAGE_LABELS[stage]}: nothing to do (set topic and products first)`);
+    line(`[pipeline] ${STAGE_LABELS[stage]}: nothing to do${stage === "research" ? "" : " (set topic and products first)"}`);
   } else {
     s.status = "done";
     for (const argv of steps) {
@@ -179,8 +184,8 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
       const real = argv.map((a) => (a === "{audio}" ? audio : a));
       line(`=== ${real[0]} ===`);
       const code = await runner(real, line);
-      // Exit 2 from script/visuals = finished with warnings (report written); anything else non-zero fails.
-      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts"))) {
+      // Exit 2 from script/shorts/translate = finished with warnings (report written); anything else non-zero fails.
+      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate"))) {
         s.status = "failed";
         s.error = `${real[0]} exited with code ${code}`;
         s.hint = friendlyHint(s.log ?? [], s.error);

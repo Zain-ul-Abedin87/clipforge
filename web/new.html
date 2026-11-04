@@ -27,7 +27,8 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .failbox{border:1px solid rgba(227,81,81,.4);background:rgba(227,81,81,.08);border-radius:var(--r);padding:16px}
   .failbox h3{margin:0 0 6px;color:var(--bad);font-size:var(--fs-md)}
-  .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0 12px}
+  /* simple.css .bar is an 8px progress bar (overflow hidden): reset it for the pill row */
+  .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0 12px;flex:none;height:auto;overflow:visible;background:none;border-radius:0}
   textarea.script{min-height:420px;font-size:15px;line-height:1.7}
   .warnlist{margin:8px 0 0;padding-left:18px;color:var(--warn);font-size:var(--fs-xs)}
   .shorts{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
@@ -39,6 +40,13 @@
   .opt.off{opacity:.45;cursor:default}
   .note{border:1px solid var(--border2);background:var(--surface2);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
   .diff{font-size:var(--fs-sm);padding:8px 0;border-bottom:1px solid var(--border)}
+  .lang{margin-top:16px}
+  .lang .row{margin:8px 0 0}
+  .lang select{width:auto;max-width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:9px 12px}
+  .tcheck{font-size:var(--fs-sm);padding:10px 0;border-bottom:1px solid var(--border)}
+  .tcheck p{margin:2px 0}
+  .tcheck .orig{color:var(--muted)}
+  .tcheck ul{margin:4px 0 0;padding-left:18px;color:var(--warn);font-size:var(--fs-xs)}
   .diff b{color:var(--muted);font-weight:600}
   .prod-head{display:grid;grid-template-columns:34px 1fr 1fr 34px;gap:8px;font-size:var(--fs-xs);color:var(--muted);font-weight:600;margin-top:12px}
   @media (max-width:640px){.prod,.prod-head{grid-template-columns:28px 1fr 34px}.prod .link,.prod-head .link{display:none}}
@@ -100,13 +108,21 @@
       <div id="scriptEdit" hidden>
         <div class="failbox" id="noModel" hidden style="border-color:rgba(245,184,74,.4);background:rgba(245,184,74,.08);margin-bottom:12px"><h3 style="color:var(--warn)">This is only a skeleton</h3><p style="margin:0">The local AI (Ollama) was not running, so ClipForge only listed your products and their facts. Start Ollama and press "Write it again", or write the script yourself in the box below.</p></div>
         <div class="note" id="ownNote" hidden>This is <b>your</b> script: ClipForge does not change it. Edit it here if you like, then approve it.</div>
+        <div class="note" id="versionNote" hidden></div>
         <div class="bar" id="scriptStats"></div>
         <textarea class="script" id="script"></textarea>
         <ul class="warnlist" id="unsourced"></ul>
-        <details style="margin-top:12px"><summary class="help" style="cursor:pointer">Facts the script may use (with sources)</summary><div id="facts" class="help"></div></details>
+        <details style="margin-top:12px" id="factsBox"><summary class="help" style="cursor:pointer">Facts the script may use (with sources)</summary><div id="facts" class="help"></div></details>
+        <details style="margin-top:12px" id="checksBox" hidden open><summary class="help" style="cursor:pointer" id="checksTitle">Check these parts of the translation</summary><div id="checks"></div></details>
         <div class="row" style="justify-content:space-between">
           <div class="row" style="margin:0"><button class="btn ghost" data-go="2">&larr; Products</button><button class="btn" id="rewrite">Write it again</button><button class="btn" id="saveScript">Save changes</button></div>
           <button class="btn primary big" id="approveScript">Approve script &amp; record voice &rarr;</button>
+        </div>
+        <div class="note lang" id="langBox" hidden>
+          <b>Another language</b>
+          <p class="help" style="margin:4px 0 0">Make a second video from this script in another language. This video stays as it is. The new one gets its own translated script (product names and numbers kept exactly), its own voice and its own render.</p>
+          <div class="row"><select id="langPick"></select><button class="btn" id="makeVersion">Make this version &rarr;</button></div>
+          <div id="versionList" class="help" style="margin-top:8px"></div>
         </div>
       </div>
     </div>
@@ -302,17 +318,54 @@ function showScriptChecks(s) {
   const pill = (ok, text) => `<span class="pill ${ok ? "p" : "w"}">${text}</span>`;
   $("scriptStats").innerHTML = [
     pill(s.onTarget, `${s.words} words${s.target ? ` (target ${s.target})` : ""} &middot; about ${Math.round(s.words / 150)} min`),
-    s.own ? "" : pill(!s.unsourced.length, s.unsourced.length ? `${s.unsourced.length} number(s) without a source` : "every number has a source"),
+    s.translation ? pill(!s.translation.checks.length, s.translation.checks.length ? `${s.translation.checks.length} part(s) to check` : "nothing to check") : s.own ? "" : pill(!s.unsourced.length, s.unsourced.length ? `${s.unsourced.length} number(s) without a source` : "every number has a source"),
     s.originality ? pill(s.originality.clean, s.originality.clean ? "original wording" : `${s.originality.flagged} part(s) close to a competitor`) : "",
     s.approved ? '<span class="pill p">approved</span>' : "",
   ].join("");
   $("noModel").hidden = s.writer !== "rules";
   $("ownNote").hidden = !s.own;
   $("rewrite").hidden = s.own;
+  $("rewrite").textContent = s.translation ? "Translate again" : "Write it again";
+  showTranslation(s.translation);
+  showLanguages();
   $("approveScript").innerHTML = info?.voiceMode === "own" ? "Approve script &amp; upload my recording &rarr;" : "Approve script &amp; record voice &rarr;";
   $("unsourced").innerHTML = s.unsourced.map((u) => `<li>"${esc(u.sentence)}" (${esc(u.numbers.join(", "))} not in the product facts)</li>`).join("");
   $("facts").innerHTML = s.facts.length ? s.facts.map((f) => `${esc(f.product)}: ${esc(f.label)} ${esc(f.value)} &middot; <a href="${esc(f.source.url)}" target="_blank" rel="noopener">${esc(f.source.title || f.source.url)}</a>`).join("<br>") : "No product links were given, so the script states no specs or prices.";
 }
+function showTranslation(t) {
+  const lang = (code) => (info.languages || []).find((l) => l.code === code)?.name || { en: "English" }[code] || code;
+  $("versionNote").hidden = !t;
+  $("checksBox").hidden = !t || !t.checks.length;
+  $("factsBox").hidden = !!t;
+  if (!t) return;
+  $("versionNote").innerHTML = `This is the <b>${esc(lang(t.to))} version</b> of <a href="/new?v=${encodeURIComponent(t.sourceProject)}">the ${esc(lang(t.from))} video</a>. Product names and numbers were kept exactly as in the original. Read it once like a viewer would, fix anything that sounds translated, then approve it.`
+    + (t.stale ? `<br><b style="color:var(--warn)">The original script changed after this translation.</b> Press "Translate again" to bring the changes over (your edits here will be replaced).` : "")
+    + (t.notTranslated ? `<br><b style="color:var(--warn)">${t.notTranslated} part(s) could not be translated</b> and are still in ${esc(lang(t.from))}: translate them by hand below.` : "");
+  $("checksTitle").textContent = `Check ${t.checks.length} part(s) of the translation`;
+  $("checks").innerHTML = t.checks.map((c) => `<div class="tcheck"><p class="orig">${esc(c.source)}</p><p>${esc(c.text)}</p><ul>${c.issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></div>`).join("");
+}
+function showLanguages() {
+  // Versions are made from the original only (a translation of a translation drifts).
+  const box = $("langBox");
+  box.hidden = !!info.sourceProject || !(info.languages || []).length;
+  if (box.hidden) return;
+  const have = info.versions || {};
+  $("langPick").innerHTML = info.languages.filter((l) => l.code !== info.language).map((l) => `<option value="${l.code}">${esc(l.name)} (${esc(l.native)})${have[l.code] ? " - update" : ""}</option>`).join("");
+  $("versionList").innerHTML = Object.keys(have).length ? "Versions: " + Object.entries(have).map(([c, p]) => `<a href="/new?v=${encodeURIComponent(p)}">${esc(info.languages.find((l) => l.code === c)?.name || c)}</a>`).join(" &middot; ") : "";
+}
+$("makeVersion").onclick = async () => {
+  const language = $("langPick").value;
+  if (!language) return;
+  $("makeVersion").disabled = true;
+  try {
+    // The version is made from the script as saved: save the editor first.
+    await saveScript(false);
+    const r = await api(`/api/wizard/${project}/translate`, { method: "POST", body: { language } });
+    if (r.needsTranslation) await api(`/api/pipeline/${r.project}/run`, { method: "POST", body: { stage: "writing" } });
+    location.href = `/new?v=${encodeURIComponent(r.project)}`;
+  } catch (e) { err(e.message); }
+  $("makeVersion").disabled = false;
+};
 async function saveScript(approve) {
   const s = await api(`/api/wizard/${project}/script`, { method: "PUT", body: { text: $("script").value, approve } });
   showScriptChecks(s);
@@ -320,7 +373,7 @@ async function saveScript(approve) {
 }
 $("saveScript").onclick = () => saveScript(false).catch((e) => err(e.message));
 $("rewrite").onclick = async () => {
-  if (!confirm("Write the whole script again? Your edits will be replaced.")) return;
+  if (!confirm(info.sourceProject ? "Translate the original script again? Your edits here will be replaced." : "Write the whole script again? Your edits will be replaced.")) return;
   try { await run({ stage: "writing" }); scriptLoaded = false; await refresh(); } catch (e) { err(e.message); }
 };
 $("approveScript").onclick = async () => {
@@ -375,7 +428,13 @@ function render() {
   if (!info) return;
   if (view === 3) {
     // The creator's own script needs no writing step.
-    const b = info.scriptMode === "own" ? { state: "done", html: "" } : stageBox(["writing"], "Writing your script, one product at a time (a few minutes)...");
+    const lang = (info.languages || []).find((l) => l.code === info.language);
+    const b = info.sourceProject
+      ? stageBox(["writing"], `Translating the script into ${lang ? lang.name : info.language}, paragraph by paragraph (a few minutes)...`)
+      : info.scriptMode === "own" ? { state: "done", html: "" } : stageBox(["writing"], "Writing your script, one product at a time (a few minutes)...");
+    // A language version: translated already (e.g. from the CLI) = ready; not yet = one button to start it.
+    if (info.sourceProject && b.state === "idle" && info.hasScript) Object.assign(b, { state: "done", html: "" });
+    if (info.sourceProject && b.state === "idle") b.html = `<div class="note">The script is not translated yet.</div><button class="btn primary" data-retry="writing">Translate the script</button>`;
     $("scriptBusy").innerHTML = b.html;
     bindRetry($("scriptBusy"));
     $("scriptEdit").hidden = b.state !== "done";

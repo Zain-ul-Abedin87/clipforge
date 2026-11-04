@@ -98,6 +98,23 @@ program
   });
 
 program
+  .command("translate")
+  .description("Language version: translate <project>/script_source.txt into the version's language (product names and numbers kept) -> script.txt + translation_report.json")
+  .option("-p, --project <name>", "the language version project (made from the original in the wizard, or with --from)")
+  .option("--from <project>", "make (or refresh) the language version of this original video first")
+  .option("-l, --language <code>", "with --from: the language (de, es, fr, it, pt, hi, ur)")
+  .action(async (o) => {
+    const { createLanguageVersion, translateProject } = await import("./lib/localize/versions.js");
+    if (!o.project && !o.from) {
+      console.error("Pass -p <language version> or --from <original> -l <language>.");
+      process.exitCode = 1;
+      return;
+    }
+    const project = o.from ? createLanguageVersion(String(o.from), String(o.language ?? "")).project : String(o.project);
+    process.exitCode = await translateProject(project);
+  });
+
+program
   .command("script")
   .description("Script writer: outline -> one call per product -> +-3% word count, sourced facts only, originality check")
   .requiredOption("-p, --project <name>", "project name (writes workspace/<name>/script.txt + script_report.json)")
@@ -193,6 +210,7 @@ program
   .option("-p, --project <name>", "project name (default: audio file name)")
   .option("-g, --glossary <file>", "product-name glossary (default inputs/glossary.txt)")
   .option("-m, --model <name>", "whisper model (default WHISPER_MODEL or large-v3-turbo)")
+  .option("-l, --language <code>", "spoken language (default: the project's language, else en)")
   .option("-f, --force", "ignore cache and redo")
   .action(async (o) => {
     process.exitCode = await transcribe(o);

@@ -158,7 +158,7 @@ export function compactSpoken(words: string[]): string {
     .join(" ")
     .replace(/(\d+) ?hundred(s?)/g, (_m, n: string, pl: string) => `${n}00${pl}`)
     .replace(/(\d+) ?thousand(s?)/g, (_m, n: string, pl: string) => `${n}000${pl}`)
-    .replace(/[^a-z0-9]/g, "");
+    .replace(/[^\p{L}\p{Nd}]/gu, "");
 }
 
 /** Why a difference matters. Empty = minor (filler, spelling). */

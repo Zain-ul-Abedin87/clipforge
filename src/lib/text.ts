@@ -20,11 +20,20 @@ function wordToNumber(w: string): string | null {
 }
 
 /**
- * Comparison key for a token: lowercase alphanumerics only, number words as digits.
+ * Comparison key for a token: lowercase letters and digits only (accents dropped), English number
+ * words as digits.
  * "Number" / "number", "five" / "5", "M&P" / "m and p" all compare equal-ish.
  */
 export function norm(token: string): string {
-  const base = token.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+  // Letters of any language survive (für -> fur, größer -> grosser): an ASCII-only filter would cut
+  // German / Spanish / French words down to fragments. ASCII text gives exactly the old keys.
+  const base = token
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/ß/g, "ss")
+    .replace(/[^\p{L}\p{Nd}]/gu, "");
   return wordToNumber(base) ?? base;
 }
 

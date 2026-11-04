@@ -10,7 +10,9 @@ export interface Hint {
   where?: string;
 }
 
-const RULES: [RegExp, Hint][] = [
+const RULES: [RegExp, Hint | ((m: RegExpMatchArray) => Hint)][] = [
+  // Language versions (src/lib/tts.ts resolveTtsConfigFor): the message itself names the setting.
+  [/(No (?!TTS\b)(\w[\w ()]*?) voice is set up\.[^\n]*|Kokoro has no (\w[\w ()]*?) voice\.[^\n]*|Set (?:KOKORO_VOICE|PIPER_MODEL|ELEVENLABS_VOICE_ID)_[A-Z]{2}[^\n]*)/, (m) => ({ title: `No ${m[2] ?? m[3] ?? "voice"} voice set up for this language version`, fix: `${m[1].replace(/^\[tts\]\s*(CONFIGURATION ERROR:\s*)?/, "")}${/German|_DE\b/.test(m[1]) ? " Free option: download the Piper voice de_DE-thorsten (high), put the .onnx and .onnx.json in models/piper/, add PIPER_MODEL_DE=models/piper/de_DE-thorsten-high.onnx to .env," : ""} Then press Retry.`, where: "/tools" })],
   [/YOUTUBE_API_KEY is not set/i, { title: "YouTube API key missing", fix: "Add your free YouTube Data API v3 key as YOUTUBE_API_KEY in the .env file, then try again. Research is optional: you can also skip it and type your topic.", where: "/research" }],
   [/quota/i, { title: "YouTube quota used up for today", fix: "The free daily YouTube quota is used up. It resets at midnight Pacific time; results already found stay available." }],
   [/Qwen not reachable|Ollama|ECONNREFUSED.*11434/i, { title: "The local AI (Ollama) is not running", fix: "Start Ollama from the Start menu, wait a few seconds, then press Retry." }],
@@ -32,7 +34,10 @@ const RULES: [RegExp, Hint][] = [
 /** Hint for a failed step from its log (null when nothing is recognised). */
 export function friendlyHint(log: string[], error?: string): Hint | null {
   const text = [...log.slice(-60), error ?? ""].join("\n");
-  for (const [re, h] of RULES) if (re.test(text)) return h;
+  for (const [re, h] of RULES) {
+    const m = text.match(re);
+    if (m) return typeof h === "function" ? h(m) : h;
+  }
   if (!error) return null;
   const last = [...log].reverse().find((l) => /error|failed|missing|not found/i.test(l));
   return { title: "This step did not finish", fix: last ? `The last message was: "${last.slice(0, 200)}". Press Retry; if it fails again, open the Pipeline page for the full log.` : "Press Retry; if it fails again, open the Pipeline page for the full log." };

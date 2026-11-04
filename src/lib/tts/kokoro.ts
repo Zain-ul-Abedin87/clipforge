@@ -19,6 +19,8 @@ export interface KokoroConfig {
   voices: string;
   voice: string;
   speed: number;
+  /** kokoro-onnx language code for a language version (es, fr-fr, it, pt-br, hi); unset = English. */
+  lang?: string;
 }
 
 export const KOKORO_DEFAULTS = {
@@ -55,7 +57,7 @@ export async function kokoroSpeak(c: KokoroConfig, text: string, fetchImpl: type
   }
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "clipforge-kokoro-")), "s.wav");
   try {
-    await worker.w.request({ text, out, voice: c.voice, speed: c.speed });
+    await worker.w.request({ text, out, voice: c.voice, speed: c.speed, ...(c.lang ? { lang: c.lang } : {}) });
     return fs.readFileSync(out);
   } finally {
     fs.rmSync(path.dirname(out), { recursive: true, force: true });

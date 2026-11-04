@@ -9,6 +9,7 @@ import { ffmpegPath, findOnPath } from "./tools.js";
 import { loadFeatures } from "./settings/features.js";
 import { KOKORO_DEFAULTS, KokoroConfig, kokoroInstalled, kokoroSpeak } from "./tts/kokoro.js";
 import { ownVoiceSample, XttsConfig, xttsSpeak } from "./tts/xtts.js";
+import { languageSpec } from "./localize/languages.js";
 
 /**
  * Mode B (script only): the approved script is read by a real TTS engine. The script text is never
@@ -96,6 +97,46 @@ export function resolveTtsConfig(get: EnvGet = env): TtsConfig {
   if (!fs.existsSync(binary)) throw new TtsConfigError(`PIPER_PATH does not exist: ${binary}`);
   if (!fs.existsSync(model)) throw new TtsConfigError(`PIPER_MODEL does not exist: ${model}`);
   return { provider: "piper", binary, model };
+}
+
+/** Settings that pick a voice: a language version never falls back to the English one. */
+const VOICE_KEYS = new Set(["PIPER_MODEL", "KOKORO_VOICE", "ELEVENLABS_VOICE_ID", "OPENAI_TTS_INSTRUCTIONS"]);
+
+/**
+ * The voice for a script in `language` (a language version, src/lib/localize). English = the normal
+ * settings. Other languages read <NAME>_<CODE> first (TTS_PROVIDER_DE, PIPER_MODEL_DE, KOKORO_VOICE_ES,
+ * ELEVENLABS_VOICE_ID_DE ...); the voice settings above have no English fallback, so an English voice
+ * never reads a German script. Without TTS_PROVIDER_<CODE>: Piper when PIPER_MODEL_<CODE> is set, else
+ * Kokoro when the language has one and KOKORO_VOICE_<CODE> is set, else ElevenLabs / OpenAI (multilingual).
+ */
+export function resolveTtsConfigFor(language: string | undefined | null, get: EnvGet = env): TtsConfig {
+  const spec = languageSpec(language);
+  if (spec.code === "en") return resolveTtsConfig(get);
+  const L = spec.code.toUpperCase();
+  const lget: EnvGet = (name, fallback) => {
+    const own = get(`${name}_${L}`);
+    if (own) return own;
+    if (name === "XTTS_LANGUAGE") return spec.code;
+    if (VOICE_KEYS.has(name)) return fallback ?? "";
+    return get(name, fallback);
+  };
+  let provider = get(`TTS_PROVIDER_${L}`).toLowerCase();
+  if (!provider) {
+    if (lget("PIPER_MODEL")) provider = "piper";
+    else if (spec.kokoro && lget("KOKORO_VOICE") && kokoroInstalled(get)) provider = "kokoro";
+    else if (get("ELEVENLABS_API_KEY") && lget("ELEVENLABS_VOICE_ID")) provider = "elevenlabs";
+    else if (get("OPENAI_API_KEY")) provider = "openai";
+    else {
+      const local = spec.kokoro ? `KOKORO_VOICE_${L}=<a ${spec.name} Kokoro voice> or PIPER_MODEL_${L}=<a ${spec.name} Piper .onnx voice>` : `PIPER_MODEL_${L}=<a ${spec.name} Piper .onnx voice> (Kokoro has no ${spec.name})`;
+      throw new TtsConfigError(`No ${spec.name} voice is set up. Add ${local} to .env, or set TTS_PROVIDER_${L}.`);
+    }
+  }
+  if (provider === "kokoro" && !spec.kokoro) throw new TtsConfigError(`Kokoro has no ${spec.name} voice. Set TTS_PROVIDER_${L}=piper and PIPER_MODEL_${L}=<a ${spec.name} Piper .onnx voice>.`);
+  if (provider === "kokoro" && !lget("KOKORO_VOICE")) throw new TtsConfigError(`Set KOKORO_VOICE_${L} to a ${spec.name} Kokoro voice (an English voice would read the ${spec.name} script with an English accent).`);
+  if (provider === "piper" && !lget("PIPER_MODEL")) throw new TtsConfigError(`Set PIPER_MODEL_${L} to a ${spec.name} Piper .onnx voice.`);
+  if (provider === "elevenlabs" && !lget("ELEVENLABS_VOICE_ID")) throw new TtsConfigError(`Set ELEVENLABS_VOICE_ID_${L} (a voice for ${spec.name}; ELEVENLABS_MODEL must be multilingual).`);
+  const c = resolveTtsConfig((name, fallback) => (name === "TTS_PROVIDER" ? provider : lget(name, fallback)));
+  return c.provider === "kokoro" ? { ...c, lang: spec.kokoro! } : c;
 }
 
 /** Cross-platform default when TTS_PROVIDER is empty: the first provider that is set up. */

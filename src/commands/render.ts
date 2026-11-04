@@ -11,6 +11,7 @@ import { buildAss, captionLines, CaptionLine, CaptionStyle, remapWords } from ".
 import { captionMaxWords, captionPreset } from "../lib/render/captionPresets.js";
 import { beatTimes, fillVisualGaps, longestStill, punchFilter } from "../lib/render/beats.js";
 import { loadFeatures } from "../lib/settings/features.js";
+import { polishStill } from "../lib/assets/stillPolish.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
 import { duckGraph } from "../audio/duck.js";
@@ -349,9 +350,22 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
   // PRODUCT_PARALLAX=off falls back to one baked blurred-background still with a Ken Burns move.
   const parallaxOn = env("PRODUCT_PARALLAX", "on").toLowerCase() !== "off";
   const showcases = new Map<number, Showcase>();
+  // Product photo polish (features.json "stills", off by default): upscale small photos, cut the
+  // product out so the showcase below puts it on its studio backdrop (src/lib/assets/stillPolish.ts).
+  const stills = loadFeatures().stills;
+  const polished = new Map<string, string>();
   for (const s of scenes) {
-    const a = s.asset;
+    let a = s.asset;
     if (a.kind !== "image" || a.source === "graphic" || a.shots?.length) continue;
+    if ((stills.cutout || stills.upscale) && stills.sources.includes(String(a.source ?? ""))) {
+      if (!polished.has(a.path)) {
+        const info = (await run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,pix_fmt", "-of", "csv=p=0", a.path])).stdout.trim().split(",");
+        const alpha = /a|^pal8$/.test((info[2] ?? "").replace(/^gray$/, ""));
+        const r = await polishStill(a.path, { w: Number(info[0]), h: Number(info[1]), alpha }, { settings: stills, log });
+        polished.set(a.path, r.path);
+      }
+      s.asset = a = { ...a, path: polished.get(a.path)! };
+    }
     const probe = await run(fp, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", a.path]);
     const [w, h] = probe.stdout.trim().split(",").map(Number);
     if (!w || !h || Math.abs(w / h - 16 / 9) <= 0.15) continue;

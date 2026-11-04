@@ -37,6 +37,8 @@ import { findVaultFor, harvestListingVideos, listVaults, VaultItem, vaultCandida
 import { autoFetchEnabled, diagramPoolShots, ensureFootage, readDiagrams } from "../lib/agents/autoFetch.js";
 import { readMicroPlan } from "../lib/planner/activeSubject.js";
 import type { SpecVisualTag } from "../domain/product.types.js";
+import { decideScene, SceneDecision, ScoredCandidate } from "../lib/assets/decisions.js";
+import { loadFeatures } from "../lib/settings/features.js";
 
 export interface AssetsOpts {
   project: string;
@@ -675,10 +677,15 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   }
   if (vetted.size) log(`[editor] ${rejectedAll} scene(s) had no acceptable stock thumbnail (a nearby good clip is reused)`);
 
+  // Decision log (idea from OpenMontage's decision audit trail): per scene, the winner and the next
+  // best candidates with every score part, so "why this clip?" has an answer (decisions.json).
+  const decisions: Record<string, SceneDecision> = {};
+  const keepAlternatives = loadFeatures().stock.decisionAlternatives;
   for (const p of stockPools) {
     let best: Candidate | null = null;
     let bestScore = -Infinity;
     let bestClip: number | undefined;
+    const scored: ScoredCandidate[] = [];
     p.cands.forEach((c, i) => {
       const clip = clipScores?.get(`${p.scene.id}|${c.id}`);
       // Without CLIP, fall back to the stock site's own ranking.
@@ -689,10 +696,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
       const visionPenalty = verdicts.get(`${p.scene.id}|${c.id}`) === false ? 1 : 0;
       // Strict exact-model niches: a title naming another generation / variant / model loses.
       const modelPenalty = modelCheckOf(p.scene, c)?.verdict === "conflict" ? (niche.productMatch?.onConflict === "manual_review" ? 0.3 : 1) : 0;
-      const s = base - stillPenalty - visionPenalty - modelPenalty - reusePenalty(useCount.get(c.id) ?? 0);
+      const reuse = reusePenalty(useCount.get(c.id) ?? 0);
+      const s = base - stillPenalty - visionPenalty - modelPenalty - reuse;
+      scored.push({ id: c.id, source: c.source, kind: c.kind, url: c.pageUrl, query: p.queryOf.get(c.id) ?? null, total: s, parts: { match: base, matchFrom: clip !== undefined ? "clip" : "site rank", still: -stillPenalty, vision: -visionPenalty, model: -modelPenalty, reuse: -reuse } });
       if (s > bestScore) [best, bestScore, bestClip] = [c, s, clip];
     });
     const c = best!;
+    decisions[String(p.scene.id)] = decideScene(p.scene.id, c.id, scored, keepAlternatives);
     const asset = fromCandidate(p.scene, c, p.queryOf.get(c.id) ?? p.scene.queries[0]);
     if (bestClip !== undefined) asset.match = bestClip;
     const mc = modelCheckOf(p.scene, c);
@@ -901,6 +911,13 @@ export async function assets(opts: AssetsOpts, log: (m: string) => void = consol
   log(`[licenses] ${ledger.records.length} record(s) in licenses.json, ${ledger.summary.reused.length} clip(s) shown in more than one scene, ${ledger.summary.unknownLicense.length} unknown licence(s)`);
   saveCandidates(dir, candidateFile);
   writeJson(path.join(dir, "assets.json"), result);
+  // The final pick can differ from the scored winner (download fallback, nearby-clip reuse): noted.
+  for (const [id, d] of Object.entries(decisions)) {
+    const a = result[id];
+    if (a && a.url !== d.chosen.url) d.final = { url: a.url, source: a.source, note: a.note ?? "replaced after scoring (download fallback or a nearby scene's clip reused)" };
+  }
+  writeJson(path.join(dir, "decisions.json"), { createdAt: new Date().toISOString(), scenes: decisions });
+  log(`[decisions] ${Object.keys(decisions).length} scene pick(s) with the ${keepAlternatives} next-best alternative(s) each -> decisions.json`);
 
   // M3 gate: every scene has an existing file and a license entry.
   const problems = scenes.filter((s) => {

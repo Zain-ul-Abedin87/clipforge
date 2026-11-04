@@ -53,7 +53,7 @@ const CLI = path.join(paths.root, "src", "cli.ts");
 const STEPS = ["transcribe", "align", "plan", "assets", "timeline", "render", "qa"] as const;
 type Step = (typeof STEPS)[number];
 const STEP_OUTPUT: Record<Step, string> = { transcribe: "words.json", align: "aligned.json", plan: "scenes.json", assets: "assets.json", timeline: "timeline.json", render: "render_report.json", qa: "qa_report.json" };
-const READABLE = new Set(["licenses.json", "discrepancies.json", "product_research.json", "preflight.json", "tts.json", "model_verifications.json", "chapters.json", "facts.json", "candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
+const READABLE = new Set(["decisions.json", "translation_report.json", "licenses.json", "discrepancies.json", "product_research.json", "preflight.json", "tts.json", "model_verifications.json", "chapters.json", "facts.json", "candidates.json", "qa_report.json", "approval.json", "words.json", "aligned.json", "scenes.json", "sections.json", "plan_report.json", "drift_report.json", "assets.json", "assets_report.json", "timeline.json", "render_report.json"]);
 const AUDIO_EXT = new Set([".mp3", ".wav", ".m4a"]);
 const MANUAL_EXT = new Set([".mp4", ".mov", ".m4v", ".webm", ".mkv", ".jpg", ".jpeg", ".png", ".webp"]);
 /** "tts" (Mode B narration) runs before transcribe; it is not one of the 7 stepper steps. */

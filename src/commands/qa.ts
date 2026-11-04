@@ -17,6 +17,7 @@ import { sourceKey } from "../lib/pacing.js";
 import { readFacts } from "../lib/facts.js";
 import { readChapters, youtubeChapters } from "../lib/chapters.js";
 import { buildPublishPack } from "../lib/publish.js";
+import { withoutAvatar } from "../lib/avatar/index.js";
 import { checkForcedReuse, checkMusicLicenses, checkRepeatCounts, checkVisualChange, preflightChecks, REPEAT_LIMITS } from "../lib/qaGate.js";
 import { trackLicense } from "../lib/music.js";
 import { readLedger } from "../lib/assets/licenseLedger.js";
@@ -106,8 +107,13 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
       const st = renderedStats(q, cardAt);
       add("Shots", "Cut rhythm", "pass", `${st.shots} shots, avg ${st.avgShot.toFixed(2)} s, ${st.cutsPerMin.toFixed(1)} cuts/min`);
       add("Shots", "Close-up share", st.closeupShare >= 0.2 ? "pass" : "warn", `${pct(st.closeupShare)} of footage time is close-ups (aim 20 %+)`);
-      add("Shots", "Talking heads on screen", st.talking.length ? "fail" : "pass",
-        st.talking.length ? `${st.talking.length} shot(s): ${st.talking.slice(0, 8).map((x) => `${fmt(x.start)} (p ${x.p.toFixed(2)})`).join(", ")}` : "none");
+      // The channel's own avatar (source "own-avatar", avatar_plan.json) is a talking head on purpose.
+      const avatarFile = path.join(dir, "avatar_plan.json");
+      const avatarRanges = fs.existsSync(avatarFile) ? readJson<{ clips: { start: number; end: number; file?: string }[] }>(avatarFile).clips.filter((c) => c.file) : [];
+      const talking = withoutAvatar(st.talking, avatarRanges);
+      const exempt = st.talking.length - talking.length;
+      add("Shots", "Talking heads on screen", talking.length ? "fail" : "pass",
+        (talking.length ? `${talking.length} shot(s): ${talking.slice(0, 8).map((x) => `${fmt(x.start)} (p ${x.p.toFixed(2)})`).join(", ")}` : "none") + (exempt ? ` (${exempt} own-avatar shot(s) not counted)` : ""));
       add("Shots", "Static shots (2 s+ without motion)", st.statics.length > 3 ? "warn" : "pass", st.statics.length ? st.statics.slice(0, 8).map((x) => `${fmt(x.start)}-${fmt(x.end)}`).join(", ") : "none");
       {
         // Identical-scene pairs: fail above 20 (REPEAT_LIMITS), warn below.

@@ -94,6 +94,10 @@ export interface FeatureSettings {
     /** Folder of the engine's checkout (python repo) on this PC. */
     engineDir: string;
     pythonCmd: string;
+    /** Override of the engine command template (placeholders: see src/lib/avatar/engines.ts); "" = built-in. */
+    command: string;
+    /** LivePortrait only: the driving video (head motion). */
+    drivingVideo: string;
   };
   shorts: {
     count: number;
@@ -125,7 +129,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   stock: { pexels: true, pixabay: true, imagegen: false, comfyUrl: "http://127.0.0.1:8188", comfyCheckpoint: "sd_xl_turbo_1.0_fp16.safetensors", perQuery: 15 },
   script: { targetWords: 1500, tolerance: 0.03, products: 10, maxSimilarity: 0.8, maxNgramOverlap: 0.2, ngram: 5, embedModel: "nomic-embed-text" },
   tts: { engine: "kokoro", voice: "am_michael", speed: 1, lufs: -14, xttsSpeakerWav: "", pythonCmd: "python" },
-  avatar: { enabled: false, engine: "musetalk", placements: ["intro", "outro"], layout: "pip", pipCorner: "br", pipScale: 0.32, maxClipSec: 15, engineDir: "", pythonCmd: "python" },
+  avatar: { enabled: false, engine: "musetalk", placements: ["intro", "outro"], layout: "pip", pipCorner: "br", pipScale: 0.32, maxClipSec: 15, engineDir: "", pythonCmd: "python", command: "", drivingVideo: "" },
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
 };

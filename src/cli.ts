@@ -142,6 +142,16 @@ program
   });
 
 program
+  .command("avatar")
+  .description("AI avatar clips (intro / outro / bridges) from channels/<id>/avatar.png into timeline.json (features.json avatar)")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--force", "run even when features.json avatar.enabled is false")
+  .action(async (o) => {
+    const { avatar } = await import("./commands/avatar.js");
+    process.exitCode = await avatar({ project: String(o.project), force: !!o.force });
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

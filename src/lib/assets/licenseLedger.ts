@@ -74,6 +74,7 @@ export function ledgerCategory(provider: Source | "graphic", license = ""): Ledg
     case "imagegen":
       return "generated";
     case "local":
+    case "own-avatar":
       return "own";
     case "wikimedia":
       return "wikimedia";

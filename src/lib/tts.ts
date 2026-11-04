@@ -6,6 +6,9 @@ import { env } from "./env.js";
 import { run } from "./exec.js";
 import { applyPronunciations, loadPronunciations } from "./glossary.js";
 import { ffmpegPath, findOnPath } from "./tools.js";
+import { loadFeatures } from "./settings/features.js";
+import { KOKORO_DEFAULTS, KokoroConfig, kokoroInstalled, kokoroSpeak } from "./tts/kokoro.js";
+import { ownVoiceSample, XttsConfig, xttsSpeak } from "./tts/xtts.js";
 
 /**
  * Mode B (script only): the approved script is read by a real TTS engine. The script text is never
@@ -18,7 +21,7 @@ import { ffmpegPath, findOnPath } from "./tools.js";
  * PIPER_MODEL voice and the piper program), else the Windows built-in voice on Windows only.
  * "windows" = System.Speech via PowerShell (robotic, for drafts; not available on Linux/Docker).
  */
-export const TTS_PROVIDERS = ["elevenlabs", "openai", "piper", "windows"] as const;
+export const TTS_PROVIDERS = ["elevenlabs", "openai", "piper", "windows", "kokoro", "xtts"] as const;
 export type TtsProvider = (typeof TTS_PROVIDERS)[number];
 
 export class TtsConfigError extends Error {
@@ -32,7 +35,9 @@ export type TtsConfig =
   | { provider: "elevenlabs"; apiKey: string; voiceId: string; model: string }
   | { provider: "openai"; apiKey: string; voice: string; model: string; instructions?: string }
   | { provider: "piper"; binary: string; model: string }
-  | { provider: "windows"; rate: number };
+  | { provider: "windows"; rate: number }
+  | KokoroConfig
+  | XttsConfig;
 
 type EnvGet = (name: string, fallback?: string) => string;
 
@@ -52,6 +57,22 @@ export function resolveTtsConfig(get: EnvGet = env): TtsConfig {
     if (!v) throw new TtsConfigError(`TTS_PROVIDER=${provider} needs ${name} in .env (${why}).`);
     return v;
   };
+  const feats = loadFeatures().tts;
+  if (provider === "kokoro") {
+    const model = get("KOKORO_MODEL") || KOKORO_DEFAULTS.model;
+    const voices = get("KOKORO_VOICES") || KOKORO_DEFAULTS.voices;
+    const url = get("KOKORO_URL") || undefined;
+    if (!url && (!fs.existsSync(model) || !fs.existsSync(voices))) {
+      throw new TtsConfigError(`Kokoro needs its model files (${model}, ${voices}) - pip install kokoro-onnx soundfile and download kokoro-v1.0.onnx + voices-v1.0.bin into models/kokoro/ - or a Kokoro-FastAPI server in KOKORO_URL.`);
+    }
+    return { provider, url, python: get("KOKORO_PYTHON") || feats.pythonCmd, model, voices, voice: get("KOKORO_VOICE") || feats.voice, speed: Number(get("KOKORO_SPEED") || feats.speed) || 1 };
+  }
+  if (provider === "xtts") {
+    const speakerWav = get("XTTS_SPEAKER_WAV") || feats.xttsSpeakerWav;
+    const own = ownVoiceSample(speakerWav);
+    if (!own.ok) throw new TtsConfigError(own.reason!);
+    return { provider, python: get("XTTS_PYTHON") || feats.pythonCmd, speakerWav, language: get("XTTS_LANGUAGE", "en") };
+  }
   if (provider === "elevenlabs") {
     return {
       provider,
@@ -79,6 +100,10 @@ export function resolveTtsConfig(get: EnvGet = env): TtsConfig {
 
 /** Cross-platform default when TTS_PROVIDER is empty: the first provider that is set up. */
 export function autoProvider(get: EnvGet = env, platform: NodeJS.Platform = process.platform): TtsProvider {
+  // Local and free first: Kokoro when it is installed and features.json tts.engine prefers it.
+  const pref = loadFeatures().tts.engine;
+  if (pref === "kokoro" && kokoroInstalled(get)) return "kokoro";
+  if (pref === "xtts" && ownVoiceSample(get("XTTS_SPEAKER_WAV") || loadFeatures().tts.xttsSpeakerWav).ok) return "xtts";
   if (get("ELEVENLABS_API_KEY") && get("ELEVENLABS_VOICE_ID")) return "elevenlabs";
   if (get("OPENAI_API_KEY")) return "openai";
   if (get("PIPER_MODEL") && (get("PIPER_PATH") || findOnPath("piper"))) return "piper";
@@ -99,7 +124,7 @@ export function ttsStatus(get: EnvGet = env): { configured: boolean; provider: s
 }
 
 /** Per-request character limits (with margin) of each engine. */
-export const CHUNK_CHARS: Record<TtsProvider, number> = { elevenlabs: 2400, openai: 3800, piper: 20000, windows: 20000 };
+export const CHUNK_CHARS: Record<TtsProvider, number> = { elevenlabs: 2400, openai: 3800, piper: 20000, windows: 20000, kokoro: 2400, xtts: 240 };
 
 /** Splits text into chunks at sentence (then word) boundaries, each at most `max` characters. */
 export function chunkText(text: string, max: number): string[] {
@@ -181,6 +206,8 @@ export async function synthesize(opts: SynthesizeOpts): Promise<SynthesizeResult
 }
 
 export async function speakChunk(c: TtsConfig, text: string, fetchImpl: typeof fetch = fetch): Promise<Buffer> {
+  if (c.provider === "kokoro") return kokoroSpeak(c, text, fetchImpl);
+  if (c.provider === "xtts") return xttsSpeak(c, text);
   if (c.provider === "piper") return piperChunk(c, text);
   if (c.provider === "windows") return windowsChunk(c, text);
   const req: { url: string; headers: Record<string, string>; body: Record<string, unknown> } =

@@ -100,7 +100,11 @@ export function ttsCacheKey(c: TtsConfig, payload: string): string {
         ? { voice: c.voice, model: c.model, instructions: c.instructions ?? null }
         : c.provider === "piper"
           ? { model: path.basename(c.model), size: fileSize(c.model) }
-          : { rate: c.rate };
+          : c.provider === "kokoro"
+            ? { voice: c.voice, speed: c.speed, model: c.url ? "server" : path.basename(c.model) }
+            : c.provider === "xtts"
+              ? { speaker: path.basename(c.speakerWav), size: fileSize(c.speakerWav), language: c.language }
+              : { rate: c.rate };
   return crypto.createHash("sha256").update(canonicalJson({ v: FORMAT_VERSION, provider: c.provider, voice, payload })).digest("hex");
 }
 

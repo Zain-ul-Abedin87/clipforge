@@ -6,6 +6,8 @@ import { fingerprint, projectDir, readJson, writeJson } from "../lib/project.js"
 import { resolveTtsConfig, TtsConfigError } from "../lib/tts.js";
 import { alignedFromChunks, synthesizeUnits } from "../lib/ttsChunks.js";
 import { applyWordEdits } from "../lib/wordEdits.js";
+import { closeEngines, loudnorm } from "../lib/tts/index.js";
+import { loadFeatures } from "../lib/settings/features.js";
 
 export interface TtsOpts {
   project: string;
@@ -44,7 +46,17 @@ export async function tts(opts: TtsOpts, log: (m: string) => void = console.log)
   const out = path.join(dir, "voiceover_tts.wav");
   if (config.provider === "windows") log("[tts] using the computer's built-in voice (set TTS_PROVIDER for a natural voice)");
   // --force re-synthesises every sentence of this script (its shared cache entries are replaced).
-  const m = await synthesizeUnits({ script, outFile: out, config, glossaryFile, cacheDir: path.join(paths.root, "cache", "tts"), force: opts.force, log });
+  const t0 = Date.now();
+  let m;
+  try {
+    m = await synthesizeUnits({ script, outFile: out, config, glossaryFile, cacheDir: path.join(paths.root, "cache", "tts"), force: opts.force, log });
+  } finally {
+    closeEngines(); // the Kokoro / XTTS Python workers keep their model loaded until here
+  }
+  const secs = (Date.now() - t0) / 1000;
+  log(`[tts] ${config.provider}: ${(m.duration / 60).toFixed(1)} min of voice in ${(secs / 60).toFixed(1)} min (${(m.duration / Math.max(secs, 0.001)).toFixed(1)}x real time)`);
+  // Loudness: the whole voiceover to features.json tts.lufs (default -14 LUFS); timings unchanged.
+  await loudnorm(out, loadFeatures().tts.lufs, log);
   const { synthesized, reused, ...manifest } = m;
   writeJson(path.join(dir, "tts_chunks.json"), manifest);
   writeModeBTimings(dir, manifest);

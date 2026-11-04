@@ -1230,6 +1230,75 @@ screen recording with a voice-over.
 
 ---
 
+## Documentary video type with a fact checker
+
+The format both studied competitors (vidrush, Kutly) are built around: long-form narration about
+any topic (history, science, places). Page: /make > Documentary.
+
+**How it works**
+1. Inputs: the topic and the length (5-20 min), plus optionally:
+   - source links;
+   - your own facts;
+   - your own script (not rewritten, only checked).
+2. Research: your links + your notes + Wikipedia (MediaWiki API, free, no key).
+   - Parameters were checked against MediaWiki's own API message files: `list=search`
+     (`srsearch`, `srlimit`, `srnamespace`), TextExtracts (`explaintext`, `exsectionformat`),
+     `prop=info` with `inprop=url`.
+   - Saved in `research.json`.
+3. The AI plans 4-8 chapters (the first one is the hook), then writes each chapter only from the
+   source passages about it.
+4. **Fact checker** (`src/lib/factcheck`):
+   - What counts as a claim: every sentence with a number or date (a small number counts only
+     with a unit: "5 kilometres"), a superlative, or a named thing ("Strait of Malacca").
+   - Verified only when a passage about the same thing holds every number. Or when the AI
+     quotes a passage that says it: the quote must be in the source word for word, with the
+     claim's numbers. An AI "yes" with an invented quote counts for nothing.
+   - A superlative riding along ("more than any other waterway") must be in the source too.
+   - "Only" and rhetoric ("a door that must never close") are not claims.
+   - Contradicted claims are always removed; unconfirmed ones too (`factcheck.removeUnverified`,
+     default on).
+   - Every verified claim links its source and quote.
+5. Review: the script, plus a table of claims (verified / wrong / no source, with the source link
+   and quote) and the sentences taken out. Saving re-checks the edit (numbers against the saved
+   sources).
+6. Make the video: the normal pipeline from the voice (voice, footage, edit, render, QA) with
+   `niches/documentary.json` (no countdown, longer shots, archive / public-domain footage first).
+   - QA adds "Every claim checked against a source": fail when a contradicted claim is still in
+     the script.
+
+**Files**: `src/lib/research/wiki.ts`, `src/lib/factcheck/factcheck.ts`,
+`src/lib/formats/documentary.ts`, `src/lib/orchestrator/pipeline.ts`, `src/cli.ts`,
+`src/commands/qa.ts`, `src/server/routes/make.ts`, `src/lib/settings/features.ts`,
+`web/make.html`, `web/tools.html`, `tests/factcheck.test.ts` (8).
+
+**Checks**
+- Typecheck passes. 416 tests: 409 pass, 1 skipped, 6 fail. The 6 failures are the same
+  `src/lib/models/` stand-in failures as before.
+- Browser run (own script, your facts as the source):
+  - "900 km" and "2.8 km" were verified with their quote;
+  - the invented "first ship in 1405" was taken out;
+  - "more than any other waterway" was taken out (its number was right, the comparison is in no
+    source);
+  - rhetoric was kept.
+- Two real faults were found by that run and fixed: a number match verified a superlative riding
+  along in the same sentence, and "only" / "never" made rhetoric into claims.
+
+**How to verify on your PC**: /make > Documentary, a topic with Wikipedia coverage, 5 minutes.
+Read the claim table, open two "verified" sources and check them by hand, then Make the video.
+
+**Open risks**
+- The writer and judge are a small local model by default. It may write thin chapters; API mode
+  writes better. The fact checker does not depend on its honesty (quotes are checked).
+- Facts written in words ("nine hundred kilometres") or in other units ("1.5 million" vs
+  "1,500,000") are not matched by the number check: they show as "no source". Check them by hand.
+- Claims without numbers are only verified with an AI quote; with no AI running they show as
+  "not checked".
+- Wikipedia is a starting point, not the final authority. For money, health or legal topics,
+  add primary sources as links.
+- No YouTube chapters for documentaries yet (ClipForge's chapters follow products).
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until

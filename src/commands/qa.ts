@@ -28,6 +28,7 @@ import { analysePicture, CAPTION_FLOOR_PX, frameStats, grabCrop, measureText, MI
 import { captionPreset } from "../lib/render/captionPresets.js";
 import { checkSoundEffects, earshotAvailable } from "../lib/audio/earshot.js";
 import { loadFeatures } from "../lib/settings/features.js";
+import { qaLite } from "./qaLite.js";
 
 export type Status = "pass" | "warn" | "fail";
 export interface Check {
@@ -61,6 +62,12 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   if (!fs.existsSync(video) || !ff || !fp) {
     log(`[qa] ${video} missing. Run render first.`);
     return 1;
+  }
+  // Explainer / tutorial videos (no ClipForge timeline): the checks on the finished file only.
+  if (!fs.existsSync(path.join(dir, "timeline.json"))) {
+    const cfgFile = path.join(dir, "pipeline.json");
+    const kind = fs.existsSync(cfgFile) ? (readJson<{ type?: string }>(cfgFile).type ?? "this") : "this";
+    return qaLite(opts.project, dir, video, ff, fp, log, kind);
   }
   const project = readJson<{ name?: string; channel?: string; niche?: string }>(path.join(dir, "project.json"));
   if (!project.name) project.name = opts.project;

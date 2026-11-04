@@ -98,6 +98,44 @@ program
   });
 
 program
+  .command("explainer")
+  .description("Explainer video (explainroo): --write = AI script + drawing code + check/fix loop; --render = voice, render, verify -> output/<project>.mp4")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--write", "write script.md + scenes.js and run explainroo check")
+  .option("--keep-script", "with --write: keep the creator's edited script.md, redo only the pictures")
+  .option("--render", "voice + render + verify")
+  .action(async (o) => {
+    const { writeExplainer, renderExplainer } = await import("./lib/formats/explainer.js");
+    try {
+      if (o.write) {
+        const r = await writeExplainer(String(o.project), { keepScript: !!o.keepScript });
+        process.exitCode = r.open.some((i) => i.level === "error") ? 2 : 0;
+      }
+      if (o.render) await renderExplainer(String(o.project));
+    } catch (err) {
+      console.error(`[explainer] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("tutorial")
+  .description("Tutorial from a screen recording (argo): --write = scenes + AI voice-over; --render = argo import, tts, export -> output/<project>.mp4")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--write", "find the scenes and write the voice-over")
+  .option("--render", "make the video with argo")
+  .action(async (o) => {
+    const { writeTutorial, renderTutorial } = await import("./lib/formats/tutorial.js");
+    try {
+      if (o.write) await writeTutorial(String(o.project));
+      if (o.render) await renderTutorial(String(o.project));
+    } catch (err) {
+      console.error(`[tutorial] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command("translate")
   .description("Language version: translate <project>/script_source.txt into the version's language (product names and numbers kept) -> script.txt + translation_report.json")
   .option("-p, --project <name>", "the language version project (made from the original in the wizard, or with --from)")

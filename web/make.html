@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explainer & tutorial - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .pane[hidden]{display:none}
+  .types{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-bottom:16px}
+  .type{display:block;padding:14px 16px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);color:var(--text);text-decoration:none}
+  .type:hover{border-color:var(--dim)}
+  .type.on{border-color:var(--accent);background:rgba(81,130,239,.08)}
+  .type b{display:block;margin-bottom:2px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+  textarea{width:100%}
+  textarea.script{min-height:360px;font-family:ui-monospace,Consolas,monospace;font-size:14px;line-height:1.6}
+  select{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px;color:var(--text)}
+  .busy{display:flex;gap:14px;align-items:center;padding:18px;border:1px dashed var(--border2);border-radius:var(--r)}
+  .spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--surface2);border-top-color:var(--accent);animation:sp 1s linear infinite;flex:none}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .failbox{border:1px solid rgba(227,81,81,.4);background:rgba(227,81,81,.08);border-radius:var(--r);padding:16px}
+  .failbox h3{margin:0 0 6px;color:var(--bad);font-size:var(--fs-md)}
+  .note{border:1px solid var(--border2);background:var(--surface2);border-radius:var(--r);padding:12px 14px;margin:12px 0}
+  .issues{margin:8px 0 0;padding-left:18px;font-size:var(--fs-xs);color:var(--warn)}
+  .scene{border-top:1px solid var(--border);padding:12px 0}
+  .scene .when{font-size:var(--fs-xs);color:var(--muted);font-weight:600}
+  .scene.long textarea{border-color:var(--warn)}
+  .bigvideo{width:100%;border-radius:12px;background:#000}
+  .checks{font-size:var(--fs-sm);margin-top:8px}
+  .checks div{padding:4px 0;border-bottom:1px solid var(--border)}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1 id="pageTitle">Explainer &amp; tutorial videos</h1><p class="sub">Two more kinds of video. Each runs on free tools on this PC; you read and fix the words before anything is recorded.</p></div>
+    <div class="types">
+      <a class="type" href="/new"><b>Ranked products</b><span class="hint">Countdown of products with footage (the New video page)</span></a>
+      <a class="type" data-type="explainer" href="/make?type=explainer"><b>Explainer</b><span class="hint">Animated diagrams with a voice-over: how something works</span></a>
+      <a class="type" data-type="tutorial" href="/make?type=tutorial"><b>Tutorial</b><span class="hint">Your screen recording with a voice-over, scene by scene</span></a>
+    </div>
+    <p class="error" id="err"></p>
+
+    <!-- 1. INPUTS -->
+    <div class="pane card" id="p1">
+      <div id="exIn">
+        <h2>1. What should the video explain?</h2>
+        <label class="lbl" for="exTopic">Topic</label>
+        <input id="exTopic" placeholder="e.g. how a heat pump heats a house">
+        <label class="lbl" for="exPoints" style="margin-top:12px">Points to explain, one per line</label>
+        <textarea id="exPoints" rows="6" placeholder="It moves heat instead of making it&#10;The refrigerant boils at a very low temperature&#10;..."></textarea>
+        <p class="help">The script uses only these facts. Nothing is invented, so put the numbers you want said here.</p>
+        <div class="grid2" style="margin-top:12px">
+          <div><label class="lbl" for="exLen">Length</label><select id="exLen"><option value="60">About 1 minute</option><option value="90" selected>About 1.5 minutes</option><option value="120">About 2 minutes</option><option value="180">About 3 minutes</option></select></div>
+          <div><label class="lbl" for="exTheme">Look</label><select id="exTheme"><option value="paper">Paper (friendly, hand drawn)</option><option value="clean">Clean (products, business)</option><option value="chalk">Chalk (teaching)</option><option value="blueprint">Blueprint (engineering)</option><option value="midnight">Midnight (developer tools)</option><option value="editorial">Editorial (money, history, essays)</option></select></div>
+        </div>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="exGo">Write the explainer &rarr;</button></div>
+      </div>
+      <div id="tuIn" hidden>
+        <h2>1. Your screen recording</h2>
+        <label class="lbl" for="tuTopic">What is the tutorial about?</label>
+        <input id="tuTopic" placeholder="e.g. how to schedule a post in Buffer">
+        <label class="lbl" for="tuNotes" style="margin-top:12px">What does the recording show? (a few sentences, in order)</label>
+        <textarea id="tuNotes" rows="6" placeholder="First I open the dashboard and click Create post. Then I paste the text, pick the Instagram account and choose a time..."></textarea>
+        <p class="help">The voice-over is written only from these notes, scene by scene, so the voice never names buttons that are not there.</p>
+        <label class="drop" style="margin-top:12px"><input type="file" id="tuFile" accept=".mp4,.mov,.webm,.mkv,video/*" hidden><span id="tuFileText">Click to choose the recording (MP4, MOV, WebM or MKV)</span></label>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="tuGo">Write the voice-over &rarr;</button></div>
+      </div>
+    </div>
+
+    <!-- 2. REVIEW -->
+    <div class="pane card" id="p2" hidden>
+      <h2 id="p2Title">2. Read and fix the words</h2>
+      <div id="writeBusy"></div>
+      <div id="exReview" hidden>
+        <div class="note" id="exCheck"></div>
+        <p class="help">Each <b>## name</b> line starts a scene. <b>[#word]</b> marks the moment a picture changes. <b>{API|A, P, I}</b> shows "API" but says "A P I". Change the words freely; keep the ## lines.</p>
+        <textarea class="script" id="exScript"></textarea>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><button class="btn" id="exSave">Save &amp; redo the pictures</button><button class="btn ghost" id="exFresh">Write it again from scratch</button></div>
+          <button class="btn primary big" id="exMake">Make the video &rarr;</button>
+        </div>
+      </div>
+      <div id="tuReview" hidden>
+        <p class="help">One scene per picture change in your recording. The voice for a scene must end before the next one starts, so each box has a word limit.</p>
+        <div id="tuScenes"></div>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><button class="btn" id="tuSave">Save</button><button class="btn ghost" id="tuRedo">Write it again</button></div>
+          <button class="btn primary big" id="tuMake">Make the video &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. VIDEO -->
+    <div class="pane card" id="p3" hidden>
+      <h2>3. Your video</h2>
+      <div id="renderBusy"></div>
+      <div id="done" hidden>
+        <video class="bigvideo" id="video" controls></video>
+        <div class="row"><a class="btn primary" id="download" download>Download MP4</a><a class="btn ghost" id="subs" hidden download>Subtitles (.srt)</a><button class="btn ghost" id="back2">&larr; Change the words</button></div>
+        <div id="qa"></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+let project = qs.get("v") || "";
+let type = qs.get("type") === "tutorial" ? "tutorial" : "explainer";
+let info = null;
+let timer = null;
+let loadedText = false;
+/** "inputs" | "review" | "video" (null = decide from the project's state). */
+let view = null;
+const err = (m) => ($("err").textContent = m || "");
+const run = (stage) => api(`/api/pipeline/${project}/run`, { method: "POST", body: { stage } });
+
+function setType(t) {
+  type = t;
+  for (const a of document.querySelectorAll(".type[data-type]")) a.classList.toggle("on", a.dataset.type === t);
+  $("exIn").hidden = t !== "explainer";
+  $("tuIn").hidden = t !== "tutorial";
+  $("pageTitle").textContent = t === "explainer" ? "Explainer video" : "Tutorial from a screen recording";
+}
+
+function stageBox(id, busyText) {
+  const s = info.stages.find((x) => x.id === id);
+  if (s.status === "running") return { state: "running", html: `<div class="busy"><span class="spin"></span><div><b>${esc(busyText)}</b><div class="hint">${esc((s.last || "").slice(0, 160))}</div></div></div>` };
+  if (s.status === "failed") {
+    const h = s.hint || { title: "This step did not finish", fix: "Press Retry." };
+    return { state: "failed", html: `<div class="failbox"><h3>${esc(h.title)}</h3><p style="margin:0 0 10px">${esc(h.fix)}</p><div class="row" style="margin:0"><button class="btn primary" data-retry="${id}">Retry</button>${h.where ? `<a class="btn ghost" href="${h.where}">Open ${esc(h.where.slice(1))}</a>` : ""}<a class="btn ghost" href="/pipeline?project=${project}">Full log</a></div></div>` };
+  }
+  return { state: s.status, html: "" };
+}
+function bindRetry(el) {
+  for (const b of el.querySelectorAll("[data-retry]")) b.onclick = async () => { b.disabled = true; try { await run(b.dataset.retry); await refresh(); } catch (e) { err(e.message); } };
+}
+
+function render() {
+  if (!info) return;
+  setType(info.type);
+  const w = stageBox("writing", info.type === "explainer" ? "Writing the script and the pictures, then checking them (a few minutes)..." : "Finding the scenes and writing the voice-over...");
+  const r = stageBox("render", info.type === "explainer" ? "Recording the voice and drawing every frame (several minutes)..." : "Recording the voice and putting it on your recording...");
+  const written = info.type === "explainer" ? !!info.script : info.scenes.length > 0;
+  // One of three views: inputs (nothing written yet), review (the words), video (render + result).
+  if (!view) view = r.state === "running" || r.state === "failed" || info.hasVideo ? "video" : written || w.state !== "pending" ? "review" : "inputs";
+  if (view === "inputs" && (written || w.state === "running")) view = "review";
+  $("p1").hidden = view !== "inputs";
+  $("p2").hidden = view !== "review";
+  $("p3").hidden = view !== "video";
+  $("writeBusy").innerHTML = w.html;
+  bindRetry($("writeBusy"));
+  const showReview = written && w.state !== "running";
+  $("exReview").hidden = info.type !== "explainer" || !showReview;
+  $("tuReview").hidden = info.type !== "tutorial" || !showReview;
+  if (info.type === "explainer" && showReview) {
+    if (!loadedText) { $("exScript").value = info.script; loadedText = true; }
+    const c = info.check;
+    const errors = c ? c.open.filter((i) => i.level === "error") : [];
+    $("exCheck").innerHTML = c
+      ? `<b>${info.scenes} scenes.</b> explainroo checked the pictures${c.rounds ? ` and the AI fixed them in ${c.rounds} round(s)` : ""}. ${c.fallbacks.length ? `${c.fallbacks.length} scene(s) use a simple list instead of a drawing (${esc(c.fallbacks.join(", "))}).` : ""}`
+        + (c.open.length ? `<ul class="issues">${c.open.slice(0, 12).map((i) => `<li>${esc(i.level)}${i.scene ? ` in ${esc(i.scene)}` : ""}: ${esc(i.message)}</li>`).join("")}</ul>` : " No problems left.")
+        + (errors.length ? `<p class="help" style="color:var(--bad)">${errors.length} error(s) left: the video may not render until they are fixed.</p>` : "")
+      : "";
+  }
+  if (info.type === "tutorial" && showReview && !loadedText) {
+    $("tuScenes").innerHTML = info.scenes.map((s) => `<div class="scene${s.tooLong ? " long" : ""}"><div class="when">${s.start.toFixed(1)} s - ${s.end.toFixed(1)} s &middot; at most ${Math.floor((s.end - s.start) * 2.4)} words${s.tooLong ? " &middot; too long: the voice would run into the next scene" : ""}</div><textarea rows="2" data-id="${esc(s.id)}">${esc(s.text)}</textarea></div>`).join("");
+    loadedText = true;
+  }
+  $("renderBusy").innerHTML = r.html;
+  bindRetry($("renderBusy"));
+  $("done").hidden = !info.hasVideo || r.state === "running";
+  if (info.hasVideo && r.state !== "running") {
+    if (!$("video").src) $("video").src = `/api/projects/${project}/video?t=${Date.now()}`;
+    $("download").href = `/api/projects/${project}/video?download=1`;
+    const q = info.qa;
+    $("qa").innerHTML = q ? `<p style="margin-top:12px"><span class="pill ${q.summary.fail ? "f" : q.summary.warn ? "w" : "p"}">Checks: ${q.summary.pass} ok, ${q.summary.warn} to look at, ${q.summary.fail} problem(s)</span></p><div class="checks">${q.checks.filter((c) => c.status !== "pass").map((c) => `<div><span class="pill ${c.status === "fail" ? "f" : "w"}">${c.status}</span> ${esc(c.name)}: ${esc(c.detail)}</div>`).join("")}</div>` : "";
+  }
+}
+
+async function refresh() {
+  if (!project) return;
+  info = await api(`/api/make/${project}`);
+  render();
+  const busy = info.stages.some((s) => s.status === "running");
+  clearTimeout(timer);
+  timer = setTimeout(() => refresh().catch(() => {}), busy ? 2500 : 15000);
+}
+
+async function create(body) {
+  const r = await api("/api/make", { method: "POST", body: { ...body, project: project || undefined } });
+  project = r.project;
+  history.replaceState(null, "", `/make?v=${project}`);
+}
+
+$("exGo").onclick = async () => {
+  err("");
+  $("exGo").disabled = true;
+  try {
+    await create({ type: "explainer", topic: $("exTopic").value, points: $("exPoints").value, seconds: Number($("exLen").value), theme: $("exTheme").value });
+    loadedText = false;
+    view = "review";
+    await run("writing");
+    await refresh();
+  } catch (e) { err(e.message); }
+  $("exGo").disabled = false;
+};
+
+$("tuFile").onchange = () => { const f = $("tuFile").files[0]; $("tuFileText").textContent = f ? `${f.name} (${(f.size / 1e6).toFixed(1)} MB)` : "Click to choose the recording"; };
+function upload(file) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", `/api/make/${project}/recording`);
+    x.setRequestHeader("x-filename", encodeURIComponent(file.name));
+    x.upload.onprogress = (e) => e.lengthComputable && ($("tuFileText").textContent = `Uploading ${Math.round((100 * e.loaded) / e.total)}%`);
+    x.onload = () => (x.status < 300 ? resolve() : reject(new Error(JSON.parse(x.responseText || "{}").error || "upload failed")));
+    x.onerror = () => reject(new Error("upload failed"));
+    x.send(file);
+  });
+}
+$("tuGo").onclick = async () => {
+  err("");
+  const file = $("tuFile").files[0];
+  if (!file && !info?.recording) return err("Choose your screen recording first.");
+  $("tuGo").disabled = true;
+  try {
+    await create({ type: "tutorial", topic: $("tuTopic").value, notes: $("tuNotes").value });
+    if (file) await upload(file);
+    loadedText = false;
+    view = "review";
+    await run("writing");
+    await refresh();
+  } catch (e) { err(e.message); }
+  $("tuGo").disabled = false;
+};
+
+$("exSave").onclick = async () => {
+  try {
+    await api(`/api/make/${project}/script`, { method: "PUT", body: { text: $("exScript").value } });
+    loadedText = false;
+    await run("writing");
+    await refresh();
+  } catch (e) { err(e.message); }
+};
+$("exFresh").onclick = async () => {
+  if (!confirm("Write a new script from your points? Your edits will be replaced.")) return;
+  try { await api(`/api/make/${project}/fresh`, { method: "POST" }); loadedText = false; await run("writing"); await refresh(); } catch (e) { err(e.message); }
+};
+const tuTexts = () => Object.fromEntries([...document.querySelectorAll("#tuScenes textarea")].map((t) => [t.dataset.id, t.value]));
+$("tuSave").onclick = async () => {
+  try { info = await api(`/api/make/${project}/scenes`, { method: "PUT", body: { texts: tuTexts() } }); loadedText = false; render(); } catch (e) { err(e.message); }
+};
+$("tuRedo").onclick = async () => {
+  if (!confirm("Write the voice-over again? Your edits will be replaced.")) return;
+  try { loadedText = false; await run("writing"); await refresh(); } catch (e) { err(e.message); }
+};
+async function make() {
+  try {
+    // Changed words need new drawings first (scene names and markers must match scenes.js).
+    if (info.type === "explainer" && $("exScript").value.trim() !== info.script.trim()) return err('You changed the words: press "Save & redo the pictures" first, so the drawings match them.');
+    if (info.type === "tutorial") await api(`/api/make/${project}/scenes`, { method: "PUT", body: { texts: tuTexts() } });
+    err("");
+    view = "video";
+    $("video").removeAttribute("src");
+    await run("render");
+    await refresh();
+  } catch (e) { err(e.message); }
+}
+$("exMake").onclick = make;
+$("tuMake").onclick = make;
+$("back2").onclick = () => { view = "review"; render(); };
+
+setType(type);
+if (project) {
+  refresh().catch((e) => { err(e.message); project = ""; });
+}
+</script>
+</body>
+</html>

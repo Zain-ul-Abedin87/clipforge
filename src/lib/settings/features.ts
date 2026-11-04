@@ -129,6 +129,22 @@ export interface FeatureSettings {
     sources: string[];
     pythonCmd: string;
   };
+  formats: {
+    /** explainroo command (github.com/vincentsch/explainroo, MIT): "explainroo", or the path to its bin/explainroo.js. */
+    explainroo: string;
+    /** Look of explainer videos: paper, clean, chalk, blueprint, midnight, editorial. */
+    explainerTheme: string;
+    /** explainroo check -> AI fix rounds before the creator is asked to look. */
+    fixRounds: number;
+    /** argo command (github.com/shreyaskarnik/argo, MIT, npm @argo-video/cli): "argo", or "npx argo". */
+    argo: string;
+    /** Tutorial scenes: a picture change counts as a new scene above this score (0-1). */
+    sceneThreshold: number;
+    /** Tutorial scenes are at least this long (s). */
+    minSceneSec: number;
+    /** Words per second of voiceover a tutorial scene may hold. */
+    wordsPerSec: number;
+  };
   earshot: {
     /** earshot (github.com/Leonxlnx/earshot, MIT, CPU only) is installed: pip install earshot. */
     enabled: boolean;
@@ -176,6 +192,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
+  formats: { explainroo: "explainroo", explainerTheme: "paper", fixRounds: 3, argo: "argo", sceneThreshold: 0.3, minSceneSec: 4, wordsPerSec: 2.4 },
   earshot: { enabled: false, command: "earshot", sfxBank: true, whoosh: "whoosh_fast/crisp", pop: "pop/1", syncCheck: true, minHit: 0.8 },
   localize: { languages: ["de", "es", "fr", "it", "pt", "hi"], minRatio: 0.6, maxRatio: 1.7, localNumbers: true },
 };

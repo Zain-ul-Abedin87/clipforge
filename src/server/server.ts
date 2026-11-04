@@ -41,6 +41,8 @@ import { createEditorAPI } from "./routes/editorAPI.js";
 import { researchRoute } from "./routes/research.js";
 import { pipelineRoute } from "./routes/pipeline.js";
 import { wizardRoute } from "./routes/wizard.js";
+import { makeRoute } from "./routes/make.js";
+import { setRecording, tutorialDir, VIDEO_EXT } from "../lib/formats/tutorial.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
@@ -476,7 +478,7 @@ function streamFile(req: http.IncomingMessage, res: http.ServerResponse, file: s
 
 // ---------- Routes ----------
 
-const FULL_PAGES = ["new", "research", "pipeline", "dashboard", "tools", "chat"];
+const FULL_PAGES = ["new", "make", "research", "pipeline", "dashboard", "tools", "chat"];
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -781,8 +783,27 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
   }
 
+  // Tutorial: the creator's screen recording, streamed to workspace/<project>/tutorial/.
+  if (parts[1] === "make" && parts[3] === "recording" && method === "POST") {
+    const name = parts[2];
+    if (!validName(name) || !fs.existsSync(path.join(projDir(name), "tutorial.json"))) return send(res, 404, { error: "create the tutorial first" });
+    const fname = decodeURIComponent(String(req.headers["x-filename"] ?? "recording.mp4"));
+    const ext = path.extname(fname).toLowerCase();
+    if (!VIDEO_EXT.has(ext)) return send(res, 400, { error: "the recording must be mp4, mov, webm or mkv" });
+    fs.mkdirSync(tutorialDir(name), { recursive: true });
+    const dest = path.join(tutorialDir(name), `recording${ext}`);
+    await new Promise<void>((resolve, reject) => {
+      const ws = fs.createWriteStream(dest);
+      req.pipe(ws);
+      ws.on("finish", () => resolve());
+      ws.on("error", reject);
+    });
+    setRecording(name, path.basename(dest));
+    return send(res, 200, { ok: true, bytes: fs.statSync(dest).size });
+  }
+
   {
-    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req))) ?? (await wizardRoute(parts, method, () => readBody(req, 8 * 1024 * 1024)));
+    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req))) ?? (await wizardRoute(parts, method, () => readBody(req, 8 * 1024 * 1024))) ?? (await makeRoute(parts, method, () => readBody(req, 1024 * 1024)));
     const file = r && "file" in r ? (r as { file?: string }).file : undefined;
     if (file) return streamFile(req, res, file);
     if (r) return send(res, r.status, r.body);

@@ -37,7 +37,12 @@ export interface StageState {
   log?: string[];
 }
 
+/** ranked = the product countdown (the original pipeline); explainer / tutorial = src/lib/formats. */
+export type VideoType = "ranked" | "explainer" | "tutorial";
+export const VIDEO_TYPES: VideoType[] = ["ranked", "explainer", "tutorial"];
+
 export interface PipelineConfig {
+  type?: VideoType;
   topic: string;
   products: string[];
   words?: number;
@@ -63,6 +68,7 @@ export function saveConfig(project: string, c: PipelineConfig): PipelineConfig {
   const dir = projectDir(project);
   fs.mkdirSync(dir, { recursive: true });
   const clean: PipelineConfig = {
+    ...(c.type && c.type !== "ranked" && VIDEO_TYPES.includes(c.type) ? { type: c.type } : {}),
     topic: String(c.topic ?? "").trim().slice(0, 160),
     products: (c.products ?? []).map((p) => String(p).trim()).filter(Boolean).slice(0, 20),
     ...(c.words ? { words: Math.max(200, Math.min(6000, Math.round(Number(c.words)))) } : {}),
@@ -97,6 +103,14 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
   // A language version (src/lib/localize/versions.ts): no research of its own, and its script is
   // translated from the original instead of written.
   const version = !!p.sourceProject;
+  // Explainer / tutorial videos: their own tools make the whole picture; ClipForge writes, checks
+  // and runs QA (stages without work are skipped).
+  if (cfg?.type === "explainer" || cfg?.type === "tutorial") {
+    const t = cfg.type;
+    if (stage === "writing") return [[t, "-p", project, "--write"]];
+    if (stage === "render") return [[t, "-p", project, "--render"], ["qa", "-p", project]];
+    return [];
+  }
   switch (stage) {
     case "research":
       if (version) return [];
@@ -175,7 +189,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
   };
   if (!steps.length) {
     s.status = "skipped";
-    line(`[pipeline] ${STAGE_LABELS[stage]}: nothing to do${stage === "research" ? "" : " (set topic and products first)"}`);
+    line(`[pipeline] ${STAGE_LABELS[stage]}: nothing to do${stage === "research" || cfg?.type ? "" : " (set topic and products first)"}`);
   } else {
     s.status = "done";
     for (const argv of steps) {
@@ -185,7 +199,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
       line(`=== ${real[0]} ===`);
       const code = await runner(real, line);
       // Exit 2 from script/shorts/translate = finished with warnings (report written); anything else non-zero fails.
-      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate"))) {
+      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate" || real[0] === "explainer"))) {
         s.status = "failed";
         s.error = `${real[0]} exited with code ${code}`;
         s.hint = friendlyHint(s.log ?? [], s.error);

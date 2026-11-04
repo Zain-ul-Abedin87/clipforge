@@ -43,6 +43,15 @@ export interface SubShot {
   variant?: "mirror" | "punch" | "mirror_punch";
 }
 
+/** Repeat statistics of one pacing run (<project>/pacing_stats.json). */
+export interface PacingStats {
+  forcedReuse: number;
+  forced: string[];
+  maxClipUses: number;
+  /** Sources shown more than maxClipUses times (distinct windows of a long file count as uses). */
+  overCap: number;
+}
+
 /** On-screen share per product chapter (seconds), written to <project>/footage_share.json by the timeline. */
 export interface ChapterShare {
   product: string;
@@ -394,6 +403,8 @@ export function applyPacing(
     lockOut?: Map<string, SubShot>;
     /** A locked shot's file is still usable (default: always). */
     lockUsable?: (s: SubShot) => boolean;
+    /** Filled with this run's forced repeats (written to pacing_stats.json; QA fails above 20). */
+    stats?: PacingStats;
   } = {},
 ): ChapterShare[] {
   // Only exact-model verified pool shots count as (and may be used as) product footage.
@@ -578,6 +589,24 @@ export function applyPacing(
     return undefined;
   };
 
+  /** On-screen uses of a source so far (reserved lock windows not yet shown do not count). */
+  const usesOf = (key: string) => ledger.used.filter((u) => u.key === key && !u.reserved).length;
+  const maxClipUses = Math.max(1, Number(process.env.MAX_CLIP_USES ?? 2) || 2);
+  type ForcedClip = { path: string; kind: "video" | "image"; duration?: number; source: string; in?: number };
+  /** Forced repeat: the least-used candidate, under MAX_CLIP_USES when any is; own clip wins ties. */
+  const forcedPick = (own: ForcedClip, others: { path: string; duration: number; source: string }[], prevKey: string | undefined) => {
+    const cands: ForcedClip[] = [own, ...others.map((g) => ({ path: g.path, kind: "video" as const, duration: g.duration, source: g.source, in: 0 }))];
+    const seen = new Set<string>();
+    const ranked = cands
+      .map((clip, order) => {
+        const id = clip.kind === "image" ? { key: sourceKey(clip.path), base: 0 } : ident(clip.path);
+        return { clip, ident: id, uses: usesOf(id.key), order };
+      })
+      .filter((x) => (seen.has(x.ident.key) ? false : (seen.add(x.ident.key), true)))
+      .sort((x, y) => Number(x.ident.key === prevKey) - Number(y.ident.key === prevKey) || Number(x.uses >= maxClipUses) - Number(y.uses >= maxClipUses) || x.uses - y.uses || x.order - y.order);
+    return ranked[0];
+  };
+
   /** Products in turn, each one's best-fitting free pool shot (poolPick ranks them), then generic clips. */
   const poolNames = names.filter((n) => pool.some((p) => p.product === n));
   /** Words spoken in [a, b) (a little before a: the name often starts just before the cut). */
@@ -755,12 +784,16 @@ export function applyPacing(
         // Nothing unused left: reuse (logged, QA reports it), at the in-point farthest from the
         // moments already shown and with a mirror / punch-in so it is not the same picture again.
         // Booked under the source identity (a vault clip is the same YouTube moment as its pool shot).
-        const { key, base } = a.kind === "image" ? { key: sourceKey(a.path), base: 0 } : ident(a.path);
-        ledger.forced.push(`scene ${sc.id} sub-shot ${k + 1}: ${a.path.split(/[\\/]/).pop()}`);
-        const at = a.kind === "video" ? farthestIn(ledger, key, a.duration, need, a.in ?? 0, base) : 0;
-        const variant = a.kind === "video" ? ("punch" as const) : undefined;
-        s = { path: a.path, kind: a.kind, in: at, frames: 0, source: a.source, key, srcIn: base + at, reused: true, ...(variant ? { variant } : {}) };
-        ledger.take(key, base + at, a.kind === "image" ? STILL : base + at + need, sc.id);
+        // Which clip repeats: the least-used one (own clip first on a tie, never the one shown right
+        // before), so no clip goes past MAX_CLIP_USES (default 2) while another is under it.
+        const pick = forcedPick(a, product ? [] : [...generic.values()], prevKey);
+        const { key, base } = pick.ident;
+        const c = pick.clip;
+        ledger.forced.push(`scene ${sc.id} sub-shot ${k + 1}: ${c.path.split(/[\\/]/).pop()} (use ${pick.uses + 1})`);
+        const at = c.kind === "video" ? farthestIn(ledger, key, c.duration, need, c.in ?? 0, base) : 0;
+        const variant = c.kind === "video" ? ("punch" as const) : undefined;
+        s = { path: c.path, kind: c.kind, in: at, frames: 0, source: c.source, key, srcIn: base + at, reused: true, ...(variant ? { variant } : {}) };
+        ledger.take(key, base + at, c.kind === "image" ? STILL : base + at + need, sc.id);
       }
       s.frames = f;
       if (s.source === "web_crawl" && s.product) poolShots++;
@@ -827,7 +860,15 @@ export function applyPacing(
   log(`[pacing] generic scenes: ${genericProductShots} shot(s) filled with verified product b-roll instead of a repeat`);
   log(`[pacing] reuse: ${reusedCount} reused verified moment(s), ${reusedSec.toFixed(1)} s (gap >= ${REUSE_GAP} s preferred, mirror/punch-in variants)`);
   if (opts.locks?.size) log(`[pacing] shot locks: ${lockedShots} sub-shot(s) kept from the last run, ${reservedShots.size - lockedShots} unused`);
-  log(`[pacing] footage ledger: ${ledger.used.length} segments, ${ledger.forced.length} forced reuse(s)${ledger.forced.length ? ": " + ledger.forced.join("; ") : ""}`);
+  log(`[pacing] footage ledger: ${ledger.used.length} segments, ${ledger.forced.length} forced reuse(s) (max ${maxClipUses} uses per clip preferred)${ledger.forced.length ? ": " + ledger.forced.join("; ") : ""}`);
+  if (opts.stats) {
+    opts.stats.forcedReuse = ledger.forced.length;
+    opts.stats.forced = [...ledger.forced];
+    opts.stats.maxClipUses = maxClipUses;
+    const per = new Map<string, number>();
+    for (const u of ledger.used) if (!u.reserved) per.set(u.key, (per.get(u.key) ?? 0) + 1);
+    opts.stats.overCap = [...per.entries()].filter(([, n]) => n > maxClipUses).length;
+  }
   log(`[pacing] ${totalShots} shots (${poolShots} from product pools), avg ${(dur / totalShots).toFixed(2)} s, ${((totalShots - 1) / (dur / 60)).toFixed(1)} cuts/min, ${flashes} product-boundary flash(es)`);
   return shares;
 }

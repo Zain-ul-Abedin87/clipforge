@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../../env.js";
-import { disableProvider, loadLlmSettings, providerOrder, ProviderName, qwenKey, recordUsage } from "./settings.js";
+import { currentStage, modelLoader } from "../../models/loader.js";
+import { DEFAULT_NUM_CTX, disableProvider, loadLlmSettings, providerOrder, ProviderName, qwenKey, recordUsage, stageModel } from "./settings.js";
 
 /**
  * One AI client for every agent: `llm().messages.parse(...)` / `.create(...)` (and `.beta.messages.*`)
@@ -69,18 +71,79 @@ export function batchSize(claudeSize: number, localSize = Math.max(8, Math.round
 export const isTooBig = (err: unknown) => err instanceof Anthropic.APIError && (err.status === 413 || (err.status === 422 && /split/i.test(err.message)));
 
 /**
+ * Set while a request runs inside splitWhenTooBig with more than one item: a garbage answer from the
+ * GPU then asks the caller to halve the request (still on the GPU) instead of going to the CPU.
+ */
+const splitScope = new AsyncLocalStorage<{ canSplit: boolean }>();
+
+/**
+ * For callers that split a batch themselves (planner labels): marks a request of `items` items as
+ * splittable, so a garbage GPU answer comes back as "split it" (422) instead of going to the CPU.
+ */
+export const splittable = <T>(items: number, fn: () => Promise<T>): Promise<T> => splitScope.run({ canSplit: items > 1 }, fn);
+
+/**
  * Runs `run` on all items; when the model says the request is too big (see isTooBig), runs each half
  * on its own, down to single items. Results come back in item order. Any other error is thrown.
+ * A garbage / empty GPU answer to a multi-item request counts as too big: it is halved and retried
+ * on the GPU, and only a single item that still fails may go to the CPU.
  */
 export async function splitWhenTooBig<T, R>(items: T[], run: (part: T[]) => Promise<R[]>, log: (m: string) => void = () => {}): Promise<R[]> {
   try {
-    return await run(items);
+    return await splitScope.run({ canSplit: items.length > 1 }, () => run(items));
   } catch (err) {
     if (!isTooBig(err) || items.length <= 1) throw err;
     const mid = Math.ceil(items.length / 2);
     log(`[llm] request too big for the local model (${String((err as Error).message).slice(0, 120)}); splitting ${items.length} items into ${mid} + ${items.length - mid}`);
     return [...(await splitWhenTooBig(items.slice(0, mid), run, log)), ...(await splitWhenTooBig(items.slice(mid), run, log))];
   }
+}
+
+/** Images one request may carry: the local vision model's maxImages (default 2), Claude `claudeMax`. */
+export function imagesPerRequest(claudeMax: number): number {
+  const s = loadLlmSettings();
+  return activeProvider() === "qwen" && s.qwen.mode === "local" ? Math.max(1, Math.min(claudeMax, s.qwen.maxImages || 2)) : claudeMax;
+}
+
+/**
+ * Packs `units` into requests of at most `maxImages` images each (a unit with more images goes
+ * alone; callers cap a unit's images at maxImages), then runs every pack through splitWhenTooBig, so a
+ * pack the model refuses (413) or answers with garbage is halved, never skipped. A pack that fails
+ * for another reason is logged and the rest still run. Results come back in unit order.
+ */
+export async function runImageBatches<T, R>(
+  units: T[],
+  imagesOf: (u: T) => number,
+  maxImages: number,
+  run: (part: T[]) => Promise<R[]>,
+  log: (m: string) => void = () => {},
+): Promise<{ results: R[]; failed: T[] }> {
+  const packs: T[][] = [];
+  let cur: T[] = [];
+  let n = 0;
+  for (const u of units) {
+    const k = Math.max(1, imagesOf(u));
+    if (cur.length && n + k > maxImages) {
+      packs.push(cur);
+      cur = [];
+      n = 0;
+    }
+    cur.push(u);
+    n += k;
+  }
+  if (cur.length) packs.push(cur);
+  const results: R[] = [];
+  const failed: T[] = [];
+  for (const p of packs) {
+    try {
+      results.push(...(await splitWhenTooBig(p, run, log)));
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) throw err;
+      failed.push(...p);
+      log(`[llm] image request failed (${p.length} item(s)): ${String((err as Error).message ?? err).slice(0, 160)}`);
+    }
+  }
+  return { results, failed };
 }
 
 const apiError = (status: number, message: string) => new Anthropic.APIError(status, { type: "error", error: { type: "api_error", message } }, message, undefined);
@@ -187,6 +250,8 @@ export const looksLikeGpuFault = (textOrError: string) => /@{6,}|repeat limit|gr
  * QWEN_GPU_MAX_FAULTS times (default 2); after that every call goes straight to the CPU.
  */
 let gpuFaults = 0;
+/** Tests: forget earlier GPU faults of this process. */
+export const resetGpuFaults = () => (gpuFaults = 0);
 const gpuGivenUp = () => gpuFaults >= Math.max(1, Number(env("QWEN_GPU_MAX_FAULTS", "2")) || 2);
 
 /** Rough prompt size: ~3.5 characters per token for text, ~1200 tokens per image (Qwen2.5-VL, 720p-ish). */
@@ -207,9 +272,10 @@ export const answerTokens = (maxTokens: number, numCtx: number) => Math.max(256,
 /** An answer with nothing usable in it: empty, one symbol, or a run of "@" (truncated / faulting model). */
 export const looksEmpty = (text: string) => /^\W{0,2}$/.test(text.trim());
 
-async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean, cpu: boolean): Promise<ChatResult> {
+type OllamaResult = ChatResult & { loadNs?: number; totalNs?: number };
+
+async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean, cpu: boolean, numCtx: number): Promise<OllamaResult> {
   const s = loadLlmSettings();
-  const numCtx = s.qwen.numCtx || 16384;
   const base = s.qwen.baseUrl.replace(/\/v1\/?$/, "");
   const res = await qwenFetch(`${base}/api/chat`, {
     method: "POST",
@@ -232,7 +298,25 @@ async function ollamaChat(messages: ChatMessage[], model: string, maxTokens: num
     const msg = String(body?.error?.message ?? body?.error ?? res.statusText);
     throw apiError(res.ok ? 500 : res.status, `Qwen ${res.ok ? 500 : res.status}: ${msg}`);
   }
-  return { text: String(body.message?.content ?? ""), inTok: body.prompt_eval_count ?? 0, outTok: body.eval_count ?? 0, finish: body.done_reason === "length" ? "length" : body.done ? "stop" : "aborted" };
+  return {
+    text: String(body.message?.content ?? ""),
+    inTok: body.prompt_eval_count ?? 0,
+    outTok: body.eval_count ?? 0,
+    finish: body.done_reason === "length" ? "length" : body.done ? "stop" : "aborted",
+    loadNs: typeof body.load_duration === "number" ? body.load_duration : undefined,
+    totalNs: typeof body.total_duration === "number" ? body.total_duration : undefined,
+  };
+}
+
+/**
+ * Smaller context for a GPU retry: half of num_ctx when the prompt + answer still fit (less VRAM, so
+ * nothing spills to the CPU), else the smallest 1K step that fits, else the same size.
+ */
+export function retryCtx(numCtx: number, est: number, maxTokens: number): number {
+  const half = Math.max(2048, Math.floor(numCtx / 2));
+  if (half < numCtx && est + answerTokens(maxTokens, half) <= half) return half;
+  for (let c = 2048; c < numCtx; c += 1024) if (est + answerTokens(maxTokens, c) <= c) return c;
+  return numCtx;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -267,39 +351,72 @@ async function whenOllamaUp<T>(request: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Local model: GPU first, and the same request on the CPU when the GPU returns garbage (device "auto"). */
-async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean): Promise<ChatResult> {
-  const { device, numCtx: ctx } = loadLlmSettings().qwen;
-  const numCtx = ctx || 16384;
+/**
+ * Local model: GPU first. A garbage / empty answer never goes straight to the CPU:
+ *  1. inside splitWhenTooBig with several items: "split it" (422), so the caller halves the request
+ *     and runs both halves on the GPU;
+ *  2. a single request: one more GPU try with a smaller context (retryCtx) on a fresh runner (the
+ *     model is unloaded first; a new load clears a faulted CUDA context);
+ *  3. only then the CPU (device "auto"; pictures only with VISION_CPU=on).
+ */
+async function localChat(messages: ChatMessage[], model: string, maxTokens: number, json: boolean, numCtxIn?: number): Promise<ChatResult> {
+  const s = loadLlmSettings();
+  const { device } = s.qwen;
+  const numCtx = numCtxIn || s.qwen.numCtx || DEFAULT_NUM_CTX;
   const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
   // Token budget: a prompt that does not fit is refused here (the caller splits it), never sent cut.
   const est = estimateTokens(messages);
   const answer = answerTokens(maxTokens, numCtx);
-  process.stderr.write(`[llm] ${model}: request ~${est} tokens + ${answer} for the answer (num_ctx ${numCtx})\n`);
+  const stage = currentStage() ?? (hasImages ? "vision" : "text");
+  process.stderr.write(`[llm] ${model} (stage ${stage}): request ~${est} tokens + ${answer} for the answer (num_ctx ${numCtx})\n`);
   if (est + answer > numCtx) throw apiError(413, `prompt ~${est} tokens + ${answer} for the answer exceeds num_ctx ${numCtx}: split the request`);
-  const chat = (cpu: boolean) => {
+  const loader = modelLoader(() => s.qwen.baseUrl.replace(/\/v1\/?$/, ""));
+  const fallbackModel = hasImages ? s.qwen.visionModel : s.qwen.model;
+  if (loader) model = await loader.ensure(model, stage, { fallback: fallbackModel, numCtx, minFreeMb: s.models.minFreeVramMb, oneModel: s.models.oneModelInVram });
+  const chat = async (cpu: boolean, ctx = numCtx): Promise<ChatResult> => {
     // The vision model on the CPU needs 30+ minutes per request: a step that checks pictures would
     // stall for hours. It stops instead, and the agent falls back to its rules (VISION_CPU=on allows it).
     if (cpu && hasImages && env("VISION_CPU", "off").toLowerCase() !== "on") {
-      return Promise.reject(apiError(500, "the vision model is too slow on the CPU (the GPU is not usable): skipping the picture check (VISION_CPU=on allows it)"));
+      throw apiError(500, "the vision model is too slow on the CPU (the GPU is not usable): skipping the picture check (VISION_CPU=on allows it)");
     }
-    return whenOllamaUp(() => ollamaChat(messages, model, maxTokens, json, cpu));
+    const t0 = Date.now();
+    const r = await whenOllamaUp(() => ollamaChat(messages, model, maxTokens, json, cpu, ctx));
+    loader?.record(model, stage, { loadNs: r.loadNs, totalNs: r.totalNs, wallMs: Date.now() - t0, cpu });
+    return r;
   };
   if (device === "cpu" || (device === "auto" && gpuGivenUp())) return chat(true);
-  let problem = "";
-  try {
-    const r = await chat(false);
-    if (!looksLikeGpuFault(r.text) && !looksEmpty(r.text) && r.finish !== "aborted") return r;
-    problem = r.text.slice(0, 80) || "empty answer";
-    // A big request that came back as garbage: a smaller request first, the CPU only after that.
-    if (est > numCtx * 0.35) throw apiError(422, `garbage answer (${problem}) to a ~${est}-token request: split it into smaller ones`);
-  } catch (err) {
-    if (!(err instanceof Anthropic.APIError) || err.status === 503 || !looksLikeGpuFault(err.message)) throw err;
-    problem = err.message.slice(0, 120);
+  /** One GPU attempt: the answer, or what was wrong with it. */
+  const gpuTry = async (ctx: number): Promise<{ r?: ChatResult; problem?: string }> => {
+    try {
+      const r = await chat(false, ctx);
+      if (!looksLikeGpuFault(r.text) && !looksEmpty(r.text) && r.finish !== "aborted") return { r };
+      return { problem: r.text.slice(0, 80) || "empty answer" };
+    } catch (err) {
+      if (!(err instanceof Anthropic.APIError) || err.status === 503 || !looksLikeGpuFault(err.message)) throw err;
+      return { problem: err.message.slice(0, 120) };
+    }
+  };
+  const first = await gpuTry(numCtx);
+  if (first.r) return first.r;
+  let problem = first.problem!;
+  // 1. Several items in this request: the caller halves it and stays on the GPU.
+  if (splitScope.getStore()?.canSplit) {
+    process.stderr.write(`[llm] garbage answer on the GPU (${problem}); halving the request, still on the GPU\n`);
+    throw apiError(422, `garbage answer (${problem}) to a ~${est}-token request: split it into smaller ones`);
   }
-  if (device === "gpu") throw apiError(500, `Qwen on the GPU returned garbage (${problem}) - the GPU is faulting; set Qwen device to Auto or CPU`);
+  // 2. One more GPU try: smaller context, fresh runner.
+  const ctx2 = retryCtx(numCtx, est, maxTokens);
+  process.stderr.write(`[llm] garbage answer on the GPU (${problem}); retrying on the GPU with num_ctx ${ctx2}\n`);
+  if (loader) {
+    await loader.unload(model);
+    await loader.ensure(model, stage, { numCtx: ctx2, oneModel: s.models.oneModelInVram });
+  }
+  const second = await gpuTry(ctx2);
+  if (second.r) return second.r;
+  problem = second.problem!;
+  if (device === "gpu") throw apiError(500, `Qwen on the GPU returned garbage twice (${problem}) - the GPU is faulting; set Qwen device to Auto or CPU`);
   gpuFaults++;
-  process.stderr.write(`[llm] GPU returned garbage (${problem}); this request runs on the CPU${gpuGivenUp() ? ", and so does the rest of this step (slower)" : ", the next one tries the GPU again"}\n`);
+  process.stderr.write(`[llm] GPU returned garbage twice (${problem}); this request runs on the CPU${gpuGivenUp() ? ", and so does the rest of this step (slower)" : ", the next one tries the GPU again"}\n`);
   return chat(true);
 }
 
@@ -311,10 +428,10 @@ function debugDump(model: string, messages: ChatMessage[], body: unknown): void 
   fs.writeFileSync(path.join(dbg, `${Date.now()}_${model.replace(/[^\w.-]/g, "_")}.json`), JSON.stringify({ model, messages, response: body }, null, 1));
 }
 
-async function qwenChat(messages: ChatMessage[], model: string, maxTokens: number, schema: unknown): Promise<ChatResult> {
+async function qwenChat(messages: ChatMessage[], model: string, maxTokens: number, schema: unknown, numCtx?: number): Promise<ChatResult> {
   const s = loadLlmSettings();
   // Local (Ollama): native API, so each request can pick GPU or CPU. The schema is in the prompt.
-  if (s.qwen.mode === "local") return localChat(messages, model, maxTokens, !!schema);
+  if (s.qwen.mode === "local") return localChat(messages, model, maxTokens, !!schema, numCtx);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (s.qwen.mode === "cloud") headers.Authorization = `Bearer ${qwenKey()}`;
   const res = await qwenFetch(`${s.qwen.baseUrl}/chat/completions`, {
@@ -368,12 +485,14 @@ async function callQwen(kind: Kind, params: Params): Promise<unknown> {
   const s = loadLlmSettings();
   const need = needsOf(params);
   if (need.tools) throw apiError(400, "Qwen cannot run this step (it uses Claude's web search tool)");
-  const model = need.vision ? s.qwen.visionModel : s.qwen.model;
+  // Local: the current stage's model + context (llm_settings.json "stages"); cloud: qwen settings.
+  const local = s.qwen.mode === "local" ? stageModel(currentStage(), need.vision, s) : null;
+  const model = local?.model ?? (need.vision ? s.qwen.visionModel : s.qwen.model);
   const format = params.output_config?.format as { schema?: unknown; parse?: (t: string) => unknown } | undefined;
   const wantJson = !!format?.schema;
   const messages = toChatMessages(params, wantJson ? restoreConstraints(format!.schema) : undefined);
   const schema = wantJson ? restoreConstraints(format!.schema) : false;
-  let r = await qwenChat(messages, model, params.max_tokens, schema);
+  let r = await qwenChat(messages, model, params.max_tokens, schema, local?.numCtx);
   let inTok = r.inTok;
   let outTok = r.outTok;
   let parsed: unknown = null;
@@ -383,7 +502,7 @@ async function callQwen(kind: Kind, params: Params): Promise<unknown> {
     } catch (err) {
       // One repair round: show the model its answer and the validation error.
       const retry: ChatMessage[] = [...messages, { role: "assistant", content: r.text }, { role: "user", content: `That answer is not valid: ${String((err as Error).message).slice(0, 800)}\nReply with only the corrected JSON object.` }];
-      r = await qwenChat(retry, model, params.max_tokens, schema || true);
+      r = await qwenChat(retry, model, params.max_tokens, schema || true, local?.numCtx);
       inTok += r.inTok;
       outTok += r.outTok;
       try {

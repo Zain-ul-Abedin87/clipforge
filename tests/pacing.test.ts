@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { applyPacing, cutTimes, farthestIn, pacingConfig, randomCuts, randomPieces, seededRandom, ShotLedger, type PacingConfig, type SubShot } from "../src/lib/pacing.js";
-import { checkExactRepeats, checkShotLength, type GateScene } from "../src/lib/qaGate.js";
+import { checkExactRepeats, checkForcedReuse, checkRepeatCounts, checkShotLength, REPEAT_LIMITS, type GateScene } from "../src/lib/qaGate.js";
 import { webClipSeconds } from "../src/lib/assets/webCrawler.js";
 import type { Niche } from "../src/lib/niche.js";
 import type { Scene } from "../src/lib/scenes.js";
@@ -108,5 +108,42 @@ describe("web_cc clip length", () => {
     assert.equal(webClipSeconds(15), 16); // was capped at 12 s -> a 15 s scene looped
     assert.equal(webClipSeconds(2), 5);
     assert.equal(webClipSeconds(90), 30);
+  });
+});
+
+describe("repeat limits (Phase 0): max 2 uses per clip, QA fails above 20 forced / identical", () => {
+  test("forced repeats go to the least-used clip and are counted in stats", () => {
+    // Three short generic scenes on 2.2 s clips cut into ~2 s pieces: windows run out quickly.
+    const scenes = [0, 1, 2, 3].map((i) => ({ id: i + 1, type: "broll", text: `line ${i}`, start: i * 6, end: i * 6 + 6 })) as unknown as Scene[];
+    const tl = scenes.map((s, i) => ({ id: s.id, startFrame: i * 180, endFrame: i * 180 + 180, transition: "cut", asset: { path: `/w/c${i % 2}.mp4`, kind: "video" as const, source: "pexels", duration: 2.2, in: 0 } }));
+    const stats = { forcedReuse: 0, forced: [] as string[], maxClipUses: 0, overCap: 0 };
+    const cfg: PacingConfig = { ...pacingConfig(niche(), false), shotChoices: [2, 3, 4] };
+    applyPacing(tl, scenes, [], [], cfg, () => {}, { stats });
+    assert.equal(stats.maxClipUses, 2);
+    assert.ok(stats.forcedReuse > 0, "the tiny clips must repeat");
+    assert.equal(stats.forced.length, stats.forcedReuse);
+    // Repeats are spread over both clips, not piled on one.
+    const uses = new Map<string, number>();
+    for (const t of tl) for (const s of t.asset.shots as SubShot[]) uses.set(s.path, (uses.get(s.path) ?? 0) + 1);
+    const counts = [...uses.values()];
+    assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, `uneven repeats: ${JSON.stringify([...uses])}`);
+  });
+
+  test("checkForcedReuse: pass at 0, warn 1-20, fail above 20; null without pacing", () => {
+    assert.equal(checkForcedReuse(null), null);
+    assert.equal(checkForcedReuse({ forcedReuse: 0, forced: [] })!.status, "pass");
+    assert.equal(checkForcedReuse({ forcedReuse: 20, forced: Array(20).fill("x") })!.status, "warn");
+    assert.equal(checkForcedReuse({ forcedReuse: 21, forced: Array(21).fill("x") })!.status, "fail");
+  });
+
+  test("checkRepeatCounts: identical pairs fail above 20; a moment shown 3+ times always fails", () => {
+    assert.equal(checkRepeatCounts(0, [], "pairs").status, "pass");
+    assert.equal(checkRepeatCounts(20, [], "pairs").status, "warn");
+    assert.equal(checkRepeatCounts(21, [], "pairs").status, "fail");
+    assert.equal(checkRepeatCounts(1, [{ name: "a.mp4", uses: 2 }], "pairs").status, "warn");
+    const r = checkRepeatCounts(1, [{ name: "a.mp4", uses: 3 }], "pairs");
+    assert.equal(r.status, "fail");
+    assert.match(r.detail, /a\.mp4 3x/);
+    assert.deepEqual(REPEAT_LIMITS, { forcedReuse: 20, identicalPairs: 20, usesPerMoment: 2 });
   });
 });

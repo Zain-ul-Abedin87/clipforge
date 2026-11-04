@@ -17,7 +17,7 @@ import { sourceKey } from "../lib/pacing.js";
 import { readFacts } from "../lib/facts.js";
 import { readChapters, youtubeChapters } from "../lib/chapters.js";
 import { buildPublishPack } from "../lib/publish.js";
-import { checkMusicLicenses, preflightChecks } from "../lib/qaGate.js";
+import { checkForcedReuse, checkMusicLicenses, checkRepeatCounts, preflightChecks, REPEAT_LIMITS } from "../lib/qaGate.js";
 import { trackLicense } from "../lib/music.js";
 import { readLedger } from "../lib/assets/licenseLedger.js";
 import { musicEnabled } from "./timeline.js";
@@ -109,8 +109,12 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
       add("Shots", "Talking heads on screen", st.talking.length ? "fail" : "pass",
         st.talking.length ? `${st.talking.length} shot(s): ${st.talking.slice(0, 8).map((x) => `${fmt(x.start)} (p ${x.p.toFixed(2)})`).join(", ")}` : "none");
       add("Shots", "Static shots (2 s+ without motion)", st.statics.length > 3 ? "warn" : "pass", st.statics.length ? st.statics.slice(0, 8).map((x) => `${fmt(x.start)}-${fmt(x.end)}`).join(", ") : "none");
-      add("Shots", "Repeated on-screen segments", st.repeats.length ? "fail" : "pass",
-        st.repeats.length ? `${st.repeats.length} pair(s) look the same (CLIP > 0.97): ${st.repeats.slice(0, 8).map((r) => `${fmt(r.a)} = ${fmt(r.b)}`).join("; ")}` : "no repeated shots");
+      {
+        // Identical-scene pairs: fail above 20 (REPEAT_LIMITS), warn below.
+        const rc = checkRepeatCounts(st.repeats.length, [], "pair(s) look the same (CLIP > 0.97)");
+        add("Shots", "Repeated on-screen segments", rc.status,
+          st.repeats.length ? `${rc.detail}: ${st.repeats.slice(0, 8).map((r) => `${fmt(r.a)} = ${fmt(r.b)}`).join("; ")}` : "no repeated shots");
+      }
       writeJson(path.join(dir, "shot_qa.json"), { ...st, shotList: q.shots.map(({ emb, ...x }) => x) });
     } else add("Shots", "Per-shot check", "warn", "shot_qa.py failed (see log)");
   } else add("Shots", "Per-shot check", "warn", "skipped (SHOT_QA=off or no .venv)");
@@ -176,11 +180,18 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
       }
     }
     const reps: string[] = [];
+    // Uses per source moment (the first showing of an overlapping window): max 2 (REPEAT_LIMITS).
+    const momentUses = new Map<(typeof segs)[number], number>();
     segs.forEach((x, i) => {
       const prev = segs.slice(0, i).find((y) => y.key === x.key && x.a < y.b - 0.05 && x.b > y.a + 0.05);
-      if (prev) reps.push(`${x.name} #${prev.scene} ${Math.floor(prev.at / 60)}:${String(Math.floor(prev.at % 60)).padStart(2, "0")} -> #${x.scene} ${Math.floor(x.at / 60)}:${String(Math.floor(x.at % 60)).padStart(2, "0")}`);
+      if (!prev) return;
+      reps.push(`${x.name} #${prev.scene} ${Math.floor(prev.at / 60)}:${String(Math.floor(prev.at % 60)).padStart(2, "0")} -> #${x.scene} ${Math.floor(x.at / 60)}:${String(Math.floor(x.at % 60)).padStart(2, "0")}`);
+      momentUses.set(prev, (momentUses.get(prev) ?? 1) + 1);
     });
-    add("Originality", "Repeated clip segments", reps.length ? "fail" : "pass", reps.length ? `${reps.length} repeat(s): ${reps.slice(0, 8).join("; ")}` : `${segs.length} shots, no source segment shown twice`);
+    const rc = checkRepeatCounts(reps.length, [...momentUses.entries()].map(([s, uses]) => ({ name: `${s.name}@${s.a.toFixed(1)}s`, uses })), "repeat(s)", REPEAT_LIMITS.forcedReuse);
+    add("Originality", "Repeated clip segments", rc.status, reps.length ? `${rc.detail}: ${reps.slice(0, 8).join("; ")}` : `${segs.length} shots, no source segment shown twice`);
+    const forcedCheck = checkForcedReuse(fs.existsSync(path.join(dir, "pacing_stats.json")) ? readJson<{ forcedReuse: number; forced: string[] }>(path.join(dir, "pacing_stats.json")) : null);
+    if (forcedCheck) add(forcedCheck.group, forcedCheck.name, forcedCheck.status, forcedCheck.detail);
     // Product sections must only show their own product's pool shots / photos.
     const leaks: string[] = [];
     const sceneList = readJson<Scene[]>(path.join(dir, "scenes.json"));

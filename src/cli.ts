@@ -15,6 +15,8 @@ import { transcribe } from "./commands/transcribe.js";
 import { tts } from "./commands/tts.js";
 import { harvestKeyword, harvestModel, rescoreVault } from "./lib/agents/youtube/ytExtractor.js";
 import { closeRedis } from "./lib/redis.js";
+import { activeLoader, setDefaultStage, stageForCommand } from "./lib/models/loader.js";
+import { loadLlmSettings } from "./lib/agents/llm/settings.js";
 
 // Per-project run log: every step run with -p/--project appends its console output (with time and
 // step name) to workspace/<project>/run.log, so a video's whole history is in one file.
@@ -50,6 +52,16 @@ import { closeRedis } from "./lib/redis.js";
 const program = new Command();
 
 program.name("clipforge").description("Voiceover -> faceless YouTube video pipeline").version("0.0.1");
+
+// Model loader (src/lib/models/loader.ts): each command is a stage with its own local model; the
+// stage's model is unloaded when the command ends so the next step (Whisper, TTS, render) has the VRAM.
+program.hook("preAction", (_root, cmd) => {
+  setDefaultStage(stageForCommand(cmd.name()));
+});
+program.hook("postAction", async () => {
+  const loader = activeLoader();
+  if (loader && loadLlmSettings().models.unloadAfterStage) await loader.release();
+});
 
 program
   .command("doctor")

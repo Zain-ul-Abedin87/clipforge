@@ -6,7 +6,7 @@ import { env, hasKey } from "../env.js";
 import { GRAPHIC_KINDS, Graphic, Scene, SCENE_TYPES, Section, SceneType } from "../scenes.js";
 import type { Span } from "./structure.js";
 import { Niche, nicheHints } from "../niche.js";
-import { activeProvider, batchSize, isTooBig, llm, llmAvailable } from "../agents/llm/llm.js";
+import { activeProvider, batchSize, isTooBig, llm, llmAvailable, splittable } from "../agents/llm/llm.js";
 import { LlmCache } from "../llmCache.js";
 
 const STOP = new Set(
@@ -281,7 +281,8 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`;
     for (let attempt = 1; attempt <= 2 && !labels && !split; attempt++) {
       log(`[plan] LLM batch ${b + 1}/${batches.length} (${ids.length} scenes), attempt ${attempt}`);
       try {
-        const res = await client.messages.parse({
+        // A batch of several scenes is halved (below) when the local model refuses it or answers garbage.
+        const res = await splittable(ids.length, () => client.messages.parse({
           model,
           max_tokens: 16000,
           // Haiku 4.5 rejects the effort setting; newer models use it to keep thinking (and cost) low.
@@ -292,7 +293,7 @@ Niche rules (${niche.label}): ${niche.llmGuidance}`;
               : { effort: "low", format: zodOutputFormat(LabelSchema) },
           system,
           messages: [{ role: "user", content: JSON.stringify(payload) }],
-        });
+        }));
         inputTokens += res.usage.input_tokens;
         outputTokens += res.usage.output_tokens;
         if (res.stop_reason === "refusal") {

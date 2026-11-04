@@ -33,12 +33,36 @@ export interface QwenSettings {
   device: "auto" | "gpu" | "cpu";
   /**
    * Local only: context window sent with every request (Ollama options.num_ctx). Ollama's own default
-   * is 4096 and it silently cuts longer prompts, which makes a 7B model answer "@@@@". 16384 fits a
-   * 7B model on an 8 GB GPU.
+   * is 4096 and it silently cuts longer prompts, which makes a 7B model answer "@@@@". 8192 keeps a
+   * 7B model 100% on an 8 GB GPU (16384 spilled ~36% of the model to the CPU).
    */
   numCtx: number;
   /** Local only: most items (scenes, lines) one request may carry; bigger jobs are split. */
   maxBatch: number;
+  /** Local only: most images one vision request may carry (1-2 fit an 8K context with room for the answer). */
+  maxImages: number;
+}
+
+/**
+ * Pipeline stages that call a local model. Each stage may name its own Ollama model and context
+ * (llm_settings.json "stages"); a stage without an entry uses qwen.model / qwen.visionModel.
+ * Only one model is kept in VRAM: switching stage unloads the previous model (src/lib/models/loader.ts).
+ */
+export const STAGES = ["niche", "titles", "script", "plan", "labels", "assets", "vision", "qa", "embed", "orchestrator"] as const;
+export type Stage = (typeof STAGES)[number];
+export interface StageModel {
+  model?: string;
+  numCtx?: number;
+}
+
+/** Model loader / VRAM guard settings (local Ollama only). */
+export interface ModelSettings {
+  /** Unload every other model before a stage loads its own (Ollama keep_alive 0). */
+  oneModelInVram: boolean;
+  /** Unload the stage's model when a pipeline command ends (frees VRAM for Whisper / TTS / render). */
+  unloadAfterStage: boolean;
+  /** VRAM guard: minimum free MB (nvidia-smi) before a model loads; below it the loader waits, then warns. */
+  minFreeVramMb: number;
 }
 
 export interface Budget {
@@ -53,9 +77,25 @@ export interface LlmSettings {
   fallback: ProviderName | "none";
   qwen: QwenSettings;
   budget: Record<ProviderName, Budget>;
+  stages: Partial<Record<Stage, StageModel>>;
+  models: ModelSettings;
 }
 
-export const QWEN_PRESETS: Record<QwenSettings["mode"], Omit<QwenSettings, "mode" | "device" | "numCtx" | "maxBatch">> = {
+/**
+ * Defaults per stage (hardware: RTX 3070 Ti Laptop, 8 GB VRAM). Plan / labels / vision keep the
+ * user's qwen.model / qwen.visionModel unless a stage entry is set in llm_settings.json.
+ */
+export const DEFAULT_STAGES: Partial<Record<Stage, StageModel>> = {
+  niche: { model: "qwen3:8b", numCtx: 8192 },
+  titles: { model: "qwen3:8b", numCtx: 8192 },
+  script: { model: "qwen3:8b", numCtx: 8192 },
+  plan: { numCtx: 8192 },
+  labels: { numCtx: 8192 },
+  embed: { model: "nomic-embed-text" },
+  orchestrator: { model: "qwen2.5:7b", numCtx: 8192 },
+};
+
+export const QWEN_PRESETS: Record<QwenSettings["mode"], Omit<QwenSettings, "mode" | "device" | "numCtx" | "maxBatch" | "maxImages">> = {
   // Alibaba Cloud Model Studio, OpenAI-compatible endpoint (international region).
   cloud: { baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", visionModel: "qwen-vl-plus", priceIn: 0, priceOut: 0 },
   // Ollama on this PC (http://localhost:11434), OpenAI-compatible endpoint; free.
@@ -69,9 +109,14 @@ export const usageFile = () => env("LLM_USAGE_FILE", "") || path.join(paths.root
 const defaults = (): LlmSettings => ({
   primary: "claude",
   fallback: "qwen",
-  qwen: { mode: "cloud", ...QWEN_PRESETS.cloud, device: "auto", numCtx: 16384, maxBatch: 15 },
+  qwen: { mode: "cloud", ...QWEN_PRESETS.cloud, device: "auto", numCtx: DEFAULT_NUM_CTX, maxBatch: 15, maxImages: 2 },
   budget: { claude: { creditUsd: null, stopBelowUsd: 0.5 }, qwen: { creditUsd: null, stopBelowUsd: 0.1 } },
+  stages: {},
+  models: { oneModelInVram: true, unloadAfterStage: true, minFreeVramMb: 1500 },
 });
+
+/** Context window of a local model when nothing else is set: 16384 did not fit a 7B model in 8 GB. */
+export const DEFAULT_NUM_CTX = 8192;
 
 const readJsonFile = <T>(f: string): T | null => {
   try {
@@ -89,7 +134,18 @@ export function loadLlmSettings(file = settingsFile()): LlmSettings {
     fallback: s.fallback ?? d.fallback,
     qwen: { ...d.qwen, ...(s.qwen ?? {}) },
     budget: { claude: { ...d.budget.claude, ...(s.budget?.claude ?? {}) }, qwen: { ...d.budget.qwen, ...(s.budget?.qwen ?? {}) } },
+    stages: { ...(s.stages ?? {}) },
+    models: { ...d.models, ...(s.models ?? {}) },
   };
+}
+
+/** Model + context a stage uses (stage entry -> built-in stage default -> qwen settings). */
+export function stageModel(stage: Stage | undefined, vision: boolean, s = loadLlmSettings()): { model: string; numCtx: number } {
+  const own = stage ? s.stages[stage] : undefined;
+  const builtIn = stage ? DEFAULT_STAGES[stage] : undefined;
+  const visionOwn = s.stages.vision;
+  if (vision) return { model: visionOwn?.model || s.qwen.visionModel, numCtx: visionOwn?.numCtx || s.qwen.numCtx || DEFAULT_NUM_CTX };
+  return { model: own?.model || builtIn?.model || s.qwen.model, numCtx: own?.numCtx || s.qwen.numCtx || builtIn?.numCtx || DEFAULT_NUM_CTX };
 }
 
 const num = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi ? v : undefined);
@@ -112,6 +168,22 @@ export function saveLlmSettings(patch: Record<string, unknown>, file = settingsF
   if (text(q.visionModel, 80)) next.qwen.visionModel = text(q.visionModel, 80)!;
   next.qwen.numCtx = num(q.numCtx, 2048, 131072) ?? next.qwen.numCtx;
   next.qwen.maxBatch = num(q.maxBatch, 1, 200) ?? next.qwen.maxBatch;
+  next.qwen.maxImages = num(q.maxImages, 1, 20) ?? next.qwen.maxImages;
+  const st = (patch.stages ?? {}) as Record<string, Record<string, unknown>>;
+  for (const k of STAGES) {
+    const v = st[k];
+    if (!v) continue;
+    const cur = { ...(next.stages[k] ?? {}) };
+    if (v.model === "" || v.model === null) delete cur.model;
+    else if (text(v.model, 80)) cur.model = text(v.model, 80)!;
+    if (v.numCtx === null) delete cur.numCtx;
+    else cur.numCtx = num(v.numCtx, 2048, 131072) ?? cur.numCtx;
+    next.stages[k] = cur;
+  }
+  const mo = (patch.models ?? {}) as Record<string, unknown>;
+  if (typeof mo.oneModelInVram === "boolean") next.models.oneModelInVram = mo.oneModelInVram;
+  if (typeof mo.unloadAfterStage === "boolean") next.models.unloadAfterStage = mo.unloadAfterStage;
+  next.models.minFreeVramMb = num(mo.minFreeVramMb, 0, 64000) ?? next.models.minFreeVramMb;
   next.qwen.priceIn = num(q.priceIn, 0, 100) ?? next.qwen.priceIn;
   next.qwen.priceOut = num(q.priceOut, 0, 500) ?? next.qwen.priceOut;
   const b = (patch.budget ?? {}) as Record<string, Record<string, unknown>>;

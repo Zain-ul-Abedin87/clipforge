@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
-import { batchSize, llm, llmAvailable, splitWhenTooBig } from "../agents/llm/llm.js";
+import { batchSize, imagesPerRequest, llm, llmAvailable, runImageBatches, splitWhenTooBig } from "../agents/llm/llm.js";
 import { LlmCache } from "../llmCache.js";
 
 /**
@@ -121,30 +121,39 @@ export async function vetCandidates(items: VetItem[], topic: string, log: (m: st
   // Thumbnails are images: only a vision-capable model can judge them.
   if (!agentEnabled() || !llmAvailable({ vision: true })) return out;
   const usage = { in: 0, out: 0 };
-  const per = batchSize(5, 1); // a local vision model: one scene's thumbnails per request
-  for (let i = 0; i < items.length; i += per) {
-    const batch = items.slice(i, i + per).filter((b) => b.thumbs.length);
-    if (!batch.length) continue;
+  // One unit = one thumbnail. Claude: ~5 scenes of thumbnails per request; a local vision model:
+  // qwen.maxImages (default 2) per request, halved on a refusal / garbage answer, never skipped.
+  const maxImages = imagesPerRequest(40);
+  type Unit = { it: VetItem; k: number };
+  const units: Unit[] = items.flatMap((it) => it.thumbs.map((_, k) => ({ it, k })));
+  const judged = new Map<number, number>();
+  const ask = async (part: Unit[]): Promise<number[]> => {
     const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
-    for (const it of batch) {
-      content.push({ type: "text", text: `Scene ${it.id}. Product discussed: ${it.subject ?? "none"}. Narration: "${it.text}"` });
-      it.thumbs.forEach((t, k) => {
-        content.push({ type: "text", text: `Scene ${it.id} thumbnail ${k}:` });
-        content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: t.data.toString("base64") } });
-      });
+    let last = -1;
+    for (const u of part) {
+      if (u.it.id !== last) content.push({ type: "text", text: `Scene ${u.it.id}. Product discussed: ${u.it.subject ?? "none"}. Narration: "${u.it.text}"` });
+      last = u.it.id;
+      content.push({ type: "text", text: `Scene ${u.it.id} thumbnail ${u.k}:` });
+      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: u.it.thumbs[u.k].data.toString("base64") } });
     }
-    try {
-      const res = await client().messages.parse({ model: agentModel(), max_tokens: 3000, output_config: outputConfig(VetSchema), system: VET, messages: [{ role: "user", content }] });
-      usage.in += res.usage.input_tokens;
-      usage.out += res.usage.output_tokens;
-      for (const r of res.parsed_output?.scenes ?? []) {
-        const it = batch.find((b) => b.id === r.id);
-        if (it) out.set(r.id, new Set(r.ok.filter((k) => k >= 0 && k < it.thumbs.length).map((k) => it.thumbs[k].candId)));
-      }
-    } catch (err) {
-      log(`[editor] thumbnail check failed: ${String((err as Error).message ?? err).slice(0, 160)}`);
+    const res = await client().messages.parse({ model: agentModel(), max_tokens: 3000, output_config: outputConfig(VetSchema), system: VET, messages: [{ role: "user", content }] });
+    usage.in += res.usage.input_tokens;
+    usage.out += res.usage.output_tokens;
+    for (const r of res.parsed_output?.scenes ?? []) {
+      const shown = part.filter((u) => u.it.id === r.id);
+      if (!shown.length) continue;
+      const it = shown[0].it;
+      const set = out.get(r.id) ?? new Set<string>();
+      for (const k of r.ok) if (shown.some((u) => u.k === k)) set.add(it.thumbs[k].candId);
+      out.set(r.id, set);
+      judged.set(r.id, (judged.get(r.id) ?? 0) + shown.length);
     }
-  }
+    return [part.length];
+  };
+  const { failed } = await runImageBatches(units, () => 1, maxImages, ask, (m) => log(m.replace("[llm]", "[editor]")));
+  // A scene only counts as judged when every thumbnail of it was seen (else CLIP's pick stays).
+  for (const it of items) if (out.has(it.id) && (judged.get(it.id) ?? 0) < it.thumbs.length) out.delete(it.id);
+  if (failed.length) log(`[editor] thumbnail check: ${failed.length} thumbnail(s) could not be judged`);
   if (items.length) log(`[editor] checked thumbnails for ${out.size}/${items.length} scenes (${usage.in} in / ${usage.out} out tokens)`);
   return out;
 }

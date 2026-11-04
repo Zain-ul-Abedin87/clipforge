@@ -7,7 +7,7 @@ import { z } from "zod";
 import { env } from "../env.js";
 import { run } from "../exec.js";
 import { agentEnabled, agentModel } from "./footage.js";
-import { batchSize, llm } from "../agents/llm/llm.js";
+import { imagesPerRequest, llm, runImageBatches } from "../agents/llm/llm.js";
 import { llmAvailable } from "../agents/llm/llm.js";
 
 /**
@@ -78,34 +78,36 @@ export async function checkFrames(
   const model = agentModel();
   const verdicts: FrameVerdict[] = [];
   const usage = { in: 0, out: 0 };
-  const per = batchSize(8, 2); // a local vision model gets a couple of frames per request
-  for (let i = 0; i < scenes.length; i += per) {
-    const batch = scenes.slice(i, i + per);
-    const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
-    for (const s of batch) {
-      const k = scenes.indexOf(s);
-      const before = scenes.slice(Math.max(0, k - 2), k).map((p) => p.text).join(" ");
-      const file = path.join(outDir, `frame_${String(s.id).padStart(4, "0")}.jpg`);
-      if (!(await grab(ff, video, (s.start + s.end) / 2, file))) continue;
-      content.push({ type: "text", text: `Frame id ${s.id}. Narration before: "${before.slice(-400)}" Narration now: "${s.text}"` });
-      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: fs.readFileSync(file).toString("base64") } });
-    }
-    try {
-      const res = await client.messages.parse({
-        model,
-        max_tokens: 4000,
-        output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low", format: zodOutputFormat(Schema) },
-        system: SYSTEM,
-        messages: [{ role: "user", content }],
-      });
-      usage.in += res.usage.input_tokens;
-      usage.out += res.usage.output_tokens;
-      verdicts.push(...(res.parsed_output?.frames ?? []).filter((f) => batch.some((b) => b.id === f.id)));
-    } catch (err) {
-      log(`[qa] frame check batch failed: ${String((err as Error).message ?? err).slice(0, 160)}`);
-    }
+  // Claude: 8 frames per request. A local vision model: qwen.maxImages (default 2); a request it
+  // refuses (413) or answers with garbage is halved down to one frame, never skipped.
+  const maxImages = imagesPerRequest(8);
+  type Unit = { s: (typeof scenes)[number]; before: string; file: string };
+  const units: Unit[] = [];
+  for (const [k, s] of scenes.entries()) {
+    const file = path.join(outDir, `frame_${String(s.id).padStart(4, "0")}.jpg`);
+    if (!(await grab(ff, video, (s.start + s.end) / 2, file))) continue;
+    units.push({ s, before: scenes.slice(Math.max(0, k - 2), k).map((p) => p.text).join(" "), file });
   }
-  log(`[qa] frame check: ${verdicts.length}/${scenes.length} frames judged (${model}, ${usage.in} in / ${usage.out} out tokens)`);
+  const ask = async (part: Unit[]): Promise<FrameVerdict[]> => {
+    const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
+    for (const u of part) {
+      content.push({ type: "text", text: `Frame id ${u.s.id}. Narration before: "${u.before.slice(-400)}" Narration now: "${u.s.text}"` });
+      content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: fs.readFileSync(u.file).toString("base64") } });
+    }
+    const res = await client.messages.parse({
+      model,
+      max_tokens: 4000,
+      output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low", format: zodOutputFormat(Schema) },
+      system: SYSTEM,
+      messages: [{ role: "user", content }],
+    });
+    usage.in += res.usage.input_tokens;
+    usage.out += res.usage.output_tokens;
+    return (res.parsed_output?.frames ?? []).filter((f) => part.some((u) => u.s.id === f.id));
+  };
+  const { results, failed } = await runImageBatches(units, () => 1, maxImages, ask, (m) => log(m.replace("[llm]", "[qa]")));
+  verdicts.push(...results);
+  log(`[qa] frame check: ${verdicts.length}/${scenes.length} frames judged (${model}, ${maxImages} frame(s) per request max, ${failed.length} failed, ${usage.in} in / ${usage.out} out tokens)`);
   fs.writeFileSync(cacheFile, JSON.stringify({ key, verdicts }, null, 1));
   return verdicts;
 }

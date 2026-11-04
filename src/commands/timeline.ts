@@ -13,7 +13,7 @@ import { slug } from "../lib/assets/presskit.js";
 import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
-import { applyPacing, pacingConfig, SubShot, Word } from "../lib/pacing.js";
+import { applyPacing, pacingConfig, PacingStats, SubShot, Word } from "../lib/pacing.js";
 import { hookText, hookTitleProps } from "../lib/render/hookTitle.js";
 import { blackSpans, hitsBlack } from "../lib/blackFrames.js";
 import { ffmpegPath, ffprobePath, venvPythonPath } from "../lib/tools.js";
@@ -173,6 +173,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
   pace.hookEnd = sections[0]?.hookEnd;
   pace.introEnd = sections.find((x) => x.kind === "intro")?.end;
   pace.outroStart = sections.find((x) => x.kind === "outro")?.start;
+  fs.rmSync(path.join(dir, "pacing_stats.json"), { force: true }); // stale stats from an earlier run
   if (pace.enabled) {
     // Word timings only snap cuts to speech; without aligned.json the scenes are still cut.
     const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: Word[] }>(path.join(dir, "aligned.json")).words : [];
@@ -183,7 +184,9 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     const lockFile = path.join(dir, "shot_locks.json");
     const locks = new Map<string, SubShot>(fs.existsSync(lockFile) && env("SHOT_LOCKS", "on").toLowerCase() !== "off" ? Object.entries(readJson<Record<string, SubShot>>(lockFile)) : []);
     const lockOut = new Map<string, SubShot>();
+    const stats: PacingStats = { forcedReuse: 0, forced: [], maxClipUses: 2, overCap: 0 };
     const shares = applyPacing(tl, scenes, words, pool, pace, log, {
+      stats,
       locks,
       lockOut,
       lockUsable: (s) => fs.existsSync(s.path),
@@ -195,6 +198,7 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     await clearBlackShots(tl, log);
     // After the black-frame guard: the locks hold the shots themselves, so moved in-points are saved.
     writeJson(lockFile, Object.fromEntries(lockOut));
+    writeJson(path.join(dir, "pacing_stats.json"), stats);
     const status = readPoolStatus(dir);
     const report = shares.map((sh) => ({ ...sh, poolVerified: status[sh.product]?.verified ?? pool.filter((p) => p.product === sh.product && p.verified).length, poolTarget: status[sh.product]?.need, insufficient: status[sh.product]?.insufficient ?? !pool.some((p) => p.product === sh.product && p.verified) }));
     writeJson(path.join(dir, "footage_share.json"), report);

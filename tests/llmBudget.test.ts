@@ -11,7 +11,7 @@ import { z } from "zod";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "clipforge-llmbudget-"));
 process.env.LLM_SETTINGS_FILE = path.join(tmp, "llm_settings.json");
 process.env.LLM_USAGE_FILE = path.join(tmp, "llm_usage.json");
-const { answerTokens, batchSize, estimateTokens, isTooBig, llm, looksEmpty, setQwenFetch, splitWhenTooBig } = await import("../src/lib/agents/llm/llm.js");
+const { answerTokens, batchSize, estimateTokens, imagesPerRequest, isTooBig, llm, looksEmpty, resetGpuFaults, retryCtx, runImageBatches, setQwenFetch, splitWhenTooBig } = await import("../src/lib/agents/llm/llm.js");
 const S = await import("../src/lib/agents/llm/settings.js");
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -34,6 +34,7 @@ beforeEach(() => {
   fs.rmSync(process.env.LLM_SETTINGS_FILE!, { force: true });
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.LLM_BATCH_SCENES;
+  resetGpuFaults();
   S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local", numCtx: 4096, maxBatch: 15 } });
 });
 
@@ -52,17 +53,54 @@ describe("local model token budget", () => {
     assert.equal(seen.length, 0);
   });
 
-  test("garbage back from a big request -> 'split it' (422) instead of going to the CPU", async () => {
+  test("garbage to a multi-item request inside splitWhenTooBig -> 'split it' (422), halves stay on the GPU", async () => {
     const seen = fakeOllama("@");
-    await assert.rejects(llm().messages.parse(req("word ".repeat(1400))), (e: unknown) => isTooBig(e));
-    assert.deepEqual(seen.map((b) => b.options.num_gpu ?? "gpu"), ["gpu"]);
+    const items = ["scene 0: the deck", "scene 1: the blade"];
+    const parts: number[] = [];
+    // Every GPU answer is garbage: the pair is halved (GPU), each single item gets a smaller-context
+    // GPU retry, and only then the CPU.
+    const out = await splitWhenTooBig(items, async (part) => {
+      parts.push(part.length);
+      return [await llm().messages.parse(req(part.join("\n")))];
+    });
+    assert.equal(out.length, 2);
+    assert.deepEqual(parts, [2, 1, 1]);
+    assert.deepEqual(seen.map((b) => b.options.num_gpu ?? "gpu"), ["gpu", "gpu", "gpu", 0, "gpu", "gpu", 0]);
   });
 
-  test("garbage from a small request still goes to the CPU", async () => {
+  test("garbage from a single request: GPU retry with a smaller num_ctx first, the CPU only after that", async () => {
     const seen = fakeOllama("@");
     const res = await llm().messages.parse(req("scene 0: the deck"));
     assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "product" }] });
-    assert.deepEqual(seen.map((b) => b.options.num_gpu ?? "gpu"), ["gpu", 0]);
+    assert.deepEqual(seen.map((b) => b.options.num_gpu ?? "gpu"), ["gpu", "gpu", 0]);
+    assert.equal(seen[0].options.num_ctx, 4096);
+    assert.equal(seen[1].options.num_ctx, 2048, "retry halves the context when the prompt still fits");
+  });
+
+  test("a GPU retry that answers properly never reaches the CPU", async () => {
+    let n = 0;
+    const seen: Record<string, any>[] = [];
+    setQwenFetch((async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      seen.push(body);
+      const text = n++ === 0 ? "@@@@@@@@" : '{"scenes":[{"id":0,"type":"stock"}]}';
+      return new Response(JSON.stringify({ message: { content: text }, done: true, done_reason: "stop" }), { status: 200 });
+    }) as unknown as typeof fetch);
+    const res = await llm().messages.parse(req("scene 0: the deck"));
+    assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "stock" }] });
+    assert.deepEqual(seen.map((b) => b.options.num_gpu ?? "gpu"), ["gpu", "gpu"]);
+  });
+
+  test("retryCtx: half when it fits, else the smallest 1K step that fits, else unchanged", () => {
+    assert.equal(retryCtx(8192, 500, 2000), 4096);
+    assert.equal(retryCtx(8192, 3500, 2000), 5120);
+    assert.equal(retryCtx(8192, 6000, 2000), 8192);
+  });
+
+  test("numCtx defaults to 8192 (16384 spilled a 7B model to the CPU on 8 GB)", () => {
+    fs.rmSync(process.env.LLM_SETTINGS_FILE!, { force: true });
+    assert.equal(S.loadLlmSettings().qwen.numCtx, 8192);
+    assert.equal(S.loadLlmSettings().qwen.maxImages, 2);
   });
 
   test("estimates: ~3.5 chars per token, ~1200 per image; empty / one-symbol answers are garbage", () => {
@@ -94,5 +132,36 @@ describe("splitWhenTooBig", () => {
 
   test("other errors are not swallowed", async () => {
     await assert.rejects(splitWhenTooBig([1, 2], async () => { throw new Error("boom"); }), /boom/);
+  });
+});
+
+describe("vision requests: 1-2 images per request, never skipped on 413", () => {
+  test("a local vision model gets qwen.maxImages (default 2) per request; Claude its own size", () => {
+    assert.equal(imagesPerRequest(36), 2);
+    S.saveLlmSettings({ qwen: { maxImages: 1 } });
+    assert.equal(imagesPerRequest(36), 1);
+  });
+
+  test("runImageBatches packs units by image count and halves a pack the model refuses", async () => {
+    const tooBig = new Anthropic.APIError(413, { type: "error", error: { type: "api_error", message: "split" } }, "split the request", undefined);
+    const calls: string[][] = [];
+    const units = [{ id: "a", n: 1 }, { id: "b", n: 1 }, { id: "c", n: 2 }, { id: "d", n: 1 }];
+    const { results, failed } = await runImageBatches(units, (u) => u.n, 2, async (part) => {
+      calls.push(part.map((u) => u.id));
+      if (part.length > 1 && part[0].id === "a") throw tooBig; // the first pack is refused once
+      return part.map((u) => u.id.toUpperCase());
+    });
+    assert.deepEqual(results, ["A", "B", "C", "D"]);
+    assert.deepEqual(failed, []);
+    assert.deepEqual(calls, [["a", "b"], ["a"], ["b"], ["c"], ["d"]]);
+  });
+
+  test("a pack that fails for another reason is reported, the rest still run", async () => {
+    const { results, failed } = await runImageBatches([1, 2, 3], () => 1, 1, async (part) => {
+      if (part[0] === 2) throw new Error("boom");
+      return part;
+    });
+    assert.deepEqual(results, [1, 3]);
+    assert.deepEqual(failed, [2]);
   });
 });

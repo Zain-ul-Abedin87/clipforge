@@ -6,7 +6,7 @@ import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import type { Niche } from "../niche.js";
 import type { Scene } from "../scenes.js";
-import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
+import { batchSize, isTooBig, llm, llmAvailable, splitWhenTooBig } from "../agents/llm/llm.js";
 
 /**
  * AI Footage Agent: Claude reads each scene and writes stock-footage searches the way a human
@@ -89,11 +89,30 @@ async function ask(
         log(`[agent] ANTHROPIC_API_KEY rejected; footage agent off for this run`);
         return null;
       }
+      // Too big / garbage for a local model: the caller halves the batch (splitWhenTooBig).
+      if (isTooBig(err)) throw err;
       if (err instanceof Anthropic.APIError) log(`[agent] API error ${err.status}: ${err.message}`);
       else throw err;
     }
   }
   return null;
+}
+
+/** ask() over a batch that is halved (on the GPU) when the model refuses it or answers garbage. */
+async function askSplit<T>(
+  system: string,
+  batch: T[],
+  payloadOf: (part: T[]) => unknown,
+  log: (m: string) => void,
+  usage: { in: number; out: number },
+): Promise<(z.infer<typeof PlanSchema> | null)[]> {
+  try {
+    return await splitWhenTooBig(batch, async (part) => [await ask(system, payloadOf(part), log, usage)], log);
+  } catch (err) {
+    if (!isTooBig(err)) throw err;
+    log(`[agent] request too big even for one scene: ${String((err as Error).message).slice(0, 120)}`);
+    return [null];
+  }
 }
 
 const clean = (q: string) => q.replace(/[^\p{L}\p{N}\s-]/gu, " ").replace(/\s+/g, " ").trim().toLowerCase();
@@ -131,18 +150,19 @@ export async function planFootage(
   for (let i = 0; i < todo.length; i += per) {
     const batch = todo.slice(i, i + per);
     log(`[agent] planning footage for scenes ${i + 1}-${i + batch.length} of ${todo.length} (${model})`);
-    const payload = batch.map((s) => ({
-      id: s.id,
-      section: sectionLabel(s),
-      ...(s.type === "product" && s.product_name ? { product: s.product_name } : {}),
-      text: s.text,
-    }));
-    const res = await ask(system, payload, log, usage);
-    if (!res) {
+    const payloadOf = (part: Scene[]) =>
+      part.map((s) => ({
+        id: s.id,
+        section: sectionLabel(s),
+        ...(s.type === "product" && s.product_name ? { product: s.product_name } : {}),
+        text: s.text,
+      }));
+    const answers = (await askSplit(system, batch, payloadOf, log, usage)).filter((r): r is z.infer<typeof PlanSchema> => !!r);
+    if (!answers.length) {
       if (!llmAvailable()) return null;
       continue; // the rule-based queries stay for this batch
     }
-    for (const r of res.scenes) {
+    for (const r of answers.flatMap((a) => a.scenes)) {
       const s = batch.find((b) => b.id === r.id);
       const queries = s ? sanitize(niche, r.queries) : [];
       if (s && queries.length) cache[keyOf(s)] = { queries: queries.slice(0, 5), visual: r.visual.trim() };
@@ -187,8 +207,8 @@ export async function broadenFootage(weak: WeakScene[], niche: Niche, log: (m: s
   for (let i = 0; i < weak.length; i += perWeak) {
     const batch = weak.slice(i, i + perWeak);
     log(`[agent] re-searching ${batch.length} weak scene(s) with broader queries`);
-    const res = await ask(system, batch.map((w) => ({ ...w, found: w.found.slice(0, 6).map((f) => f.slice(0, 80)) })), log, usage);
-    for (const r of res?.scenes ?? []) {
+    const answers = await askSplit(system, batch, (part) => part.map((w) => ({ ...w, found: w.found.slice(0, 6).map((f) => f.slice(0, 80)) })), log, usage);
+    for (const r of answers.flatMap((a) => a?.scenes ?? [])) {
       const w = batch.find((b) => b.id === r.id);
       if (!w) continue;
       const tried = new Set(w.tried.map(clean));

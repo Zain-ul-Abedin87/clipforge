@@ -195,16 +195,17 @@ describe("local Qwen (Ollama native API) on a faulting GPU", () => {
     return seen;
   }
 
-  test("garbage (@@@@ / repeat limit) on the GPU -> same request on the CPU; GPU retried until it faults twice", async () => {
+  test("garbage (@@@@ / repeat limit) on the GPU -> one more GPU try (smaller context), then the CPU; GPU given up after two faults", async () => {
     S.saveLlmSettings({ primary: "qwen", fallback: "none", qwen: { mode: "local" } });
     const seen = fakeOllama({ text: "@@@@@@@@@@@@@@@@" });
     const res = await llm().messages.parse(req());
     assert.deepEqual(res.parsed_output, { scenes: [{ id: 0, type: "product" }] });
-    assert.deepEqual(seen.map((r) => [r.url, r.body.options.num_gpu ?? "gpu", r.body.format]), [["http://localhost:11434/api/chat", "gpu", "json"], ["http://localhost:11434/api/chat", 0, "json"]]);
+    assert.deepEqual(seen.map((r) => [r.url, r.body.options.num_gpu ?? "gpu", r.body.format]), [["http://localhost:11434/api/chat", "gpu", "json"], ["http://localhost:11434/api/chat", "gpu", "json"], ["http://localhost:11434/api/chat", 0, "json"]]);
+    assert.ok(seen[1].body.options.num_ctx < seen[0].body.options.num_ctx, "the GPU retry uses a smaller context");
     // The GPU is tried again after one fault; after the second it is given up for this process.
     const second = fakeOllama({ error: "prediction aborted, token repeat limit reached" });
     await llm().messages.parse(req());
-    assert.deepEqual(second.map((r) => r.body.options.num_gpu ?? "gpu"), ["gpu", 0]);
+    assert.deepEqual(second.map((r) => r.body.options.num_gpu ?? "gpu"), ["gpu", "gpu", 0]);
     const later = fakeOllama({ text: "@@@@@@@@" });
     await llm().messages.parse(req());
     assert.deepEqual(later.map((r) => r.body.options.num_gpu), [0], "no GPU attempt after two faults");

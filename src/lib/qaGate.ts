@@ -98,6 +98,41 @@ export function checkExactRepeats(scenes: GateScene[]): GateCheck {
   };
 }
 
+/** QA limits for repeats (Phase 0): fail above these counts, warn at 1..limit. */
+export const REPEAT_LIMITS = { forcedReuse: 20, identicalPairs: 20, usesPerMoment: 2 };
+
+/** Forced repeats the pacing had to make (pacing_stats.json). Null when pacing did not run. */
+export function checkForcedReuse(stats: { forcedReuse: number; forced: string[] } | null, max = REPEAT_LIMITS.forcedReuse): GateCheck | null {
+  if (!stats) return null;
+  const n = stats.forcedReuse;
+  return {
+    group: "Assets",
+    name: `Forced reuse (fail above ${max})`,
+    status: n > max ? "fail" : n > 0 ? "warn" : "pass",
+    detail: n ? `${n} forced repeat(s): ${stats.forced.slice(0, 6).join("; ")}${n > 6 ? ` (+${n - 6} more)` : ""}${n > max ? " - add footage (more searches / product clips) and re-run assets" : ""}` : "no forced repeats",
+  };
+}
+
+/**
+ * Pairs of on-screen shots that look identical (shot QA, CLIP > 0.97) and source moments shown more
+ * than `perMoment` times. Fails above `maxPairs` pairs or when a moment is shown 3+ times; warns below.
+ */
+export function checkRepeatCounts(
+  pairs: number,
+  momentUses: { name: string; uses: number }[],
+  what: string,
+  maxPairs = REPEAT_LIMITS.identicalPairs,
+  perMoment = REPEAT_LIMITS.usesPerMoment,
+): Pick<GateCheck, "status" | "detail"> {
+  const over = momentUses.filter((m) => m.uses > perMoment);
+  const status: GateStatus = pairs > maxPairs || over.length ? "fail" : pairs > 0 ? "warn" : "pass";
+  const parts = [
+    pairs ? `${pairs} ${what} (fail above ${maxPairs})` : "",
+    over.length ? `${over.length} moment(s) shown more than ${perMoment}x: ${over.slice(0, 4).map((m) => `${m.name} ${m.uses}x`).join(", ")}` : "",
+  ].filter(Boolean);
+  return { status, detail: parts.join("; ") };
+}
+
 /** Footage shots longer than `maxSec` (pacing sub-shots carry their frame count). */
 export function checkShotLength(scenes: GateScene[], maxSec = 4, fps = 30): GateCheck {
   const long: string[] = [];

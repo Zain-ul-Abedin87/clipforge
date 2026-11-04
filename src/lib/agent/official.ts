@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
 import { agentEnabled, agentModel } from "./footage.js";
-import { llm } from "../agents/llm/llm.js";
+import { imagesPerRequest, llm, runImageBatches } from "../agents/llm/llm.js";
 import { llmAvailable } from "../agents/llm/llm.js";
 
 /** Small Claude helpers for the official photo importer (only used when the agent is on). */
@@ -45,18 +45,23 @@ export interface ImageIn {
 /** Looks at the images and returns the indexes that are product photos of `product`. */
 export async function pickProductPhotos(product: string, images: ImageIn[]): Promise<number[]> {
   if (!agentEnabled() || !llmAvailable({ vision: true }) || !images.length) return [];
-  const content: Anthropic.ContentBlockParam[] = [];
-  images.forEach((img, i) => {
-    content.push({ type: "text", text: `Image ${i}:` });
-    content.push({ type: "image", source: { type: "base64", media_type: img.mime, data: img.data.toString("base64") } });
-  });
-  content.push({
-    type: "text",
-    text: `Which images clearly show the product "${product}" itself (a product photo or a clear shot of this firearm/item)? Leave out logos, icons, banners, other models, people without the product, and tiny thumbnails. Return their indexes, best first.`,
-  });
-  try {
+  // A local vision model sees qwen.maxImages (default 2) images per request; packs it refuses are halved.
+  const ask = async (part: number[]): Promise<number[]> => {
+    const content: Anthropic.ContentBlockParam[] = [];
+    for (const i of part) {
+      content.push({ type: "text", text: `Image ${i}:` });
+      content.push({ type: "image", source: { type: "base64", media_type: images[i].mime, data: images[i].data.toString("base64") } });
+    }
+    content.push({
+      type: "text",
+      text: `Which images clearly show the product "${product}" itself (a product photo or a clear shot of this firearm/item)? Leave out logos, icons, banners, other models, people without the product, and tiny thumbnails. Return their indexes, best first.`,
+    });
     const res = await client().messages.parse({ model: agentModel(), max_tokens: 1000, output_config: outputConfig(Picks), messages: [{ role: "user", content }] });
-    return (res.parsed_output?.indexes ?? []).filter((i) => i >= 0 && i < images.length);
+    return (res.parsed_output?.indexes ?? []).filter((i) => part.includes(i));
+  };
+  try {
+    const { results } = await runImageBatches(images.map((_, i) => i), () => 1, imagesPerRequest(images.length), ask);
+    return [...new Set(results)];
   } catch {
     return [];
   }

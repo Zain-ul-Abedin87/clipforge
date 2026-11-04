@@ -6,7 +6,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env, hasKey } from "../env.js";
 import { agentModel } from "./footage.js";
-import { batchSize, llm, llmAvailable } from "../agents/llm/llm.js";
+import { imagesPerRequest, llm, llmAvailable, runImageBatches } from "../agents/llm/llm.js";
 
 /**
  * Vision verify (assets step): for each scene the top CLIP candidates (default 3) are shown to
@@ -65,50 +65,57 @@ export async function verifyCandidates(items: VerifyItem[], topic: string, cache
   const client = llm();
   const usage = { in: 0, out: 0 };
   let judged = 0;
-  // Up to 4 scenes (each with up to 3 candidates x 3 frames) per request; one scene for a local model, whose context is 8K.
-  const perRequest = batchSize(4, 1);
-  for (let i = 0; i < todo.length; i += perRequest) {
-    const batch = todo.slice(i, i + perRequest);
+  // One unit = one candidate of one scene. Claude: up to 4 scenes x 3 candidates x 3 frames per
+  // request. A local vision model (8K context): at most qwen.maxImages (default 2) pictures per
+  // request, so a candidate shows its first 1-2 frames; a refused / garbage pack is halved, not skipped.
+  const maxImages = imagesPerRequest(36);
+  const framesPer = Math.min(3, maxImages);
+  type Unit = { it: VerifyItem; cid: string; k: number; frames: string[] };
+  const units: Unit[] = todo.flatMap((it) => it.cands.map((c, k) => ({ it, cid: c.id, k, frames: c.frames.filter((x) => fs.existsSync(x)).slice(0, framesPer) })));
+  const ask = async (part: Unit[]): Promise<number[]> => {
     const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: `Video topic: ${topic}` }];
-    const keyMap = new Map<string, { it: VerifyItem; cid: string }>();
-    for (const it of batch) {
-      content.push({ type: "text", text: `Scene id ${it.sceneId}. Narration before: "${it.before.slice(-300)}" Narration now: "${it.text}"` });
-      it.cands.forEach((c, k) => {
-        const key = `${it.sceneId}-${String.fromCharCode(65 + k)}`;
-        keyMap.set(key, { it, cid: c.id });
-        content.push({ type: "text", text: `Candidate key ${key}:` });
-        for (const f of c.frames.filter((x) => fs.existsSync(x)).slice(0, 3))
-          content.push({ type: "image", source: { type: "base64", media_type: mime(f), data: fs.readFileSync(f).toString("base64") } });
-      });
-    }
-    try {
-      const res = await client.messages.parse({
-        model,
-        max_tokens: 3000,
-        output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low", format: zodOutputFormat(Schema) },
-        system: SYSTEM,
-        messages: [{ role: "user", content }],
-      });
-      usage.in += res.usage.input_tokens;
-      usage.out += res.usage.output_tokens;
-      for (const s of res.parsed_output?.scenes ?? [])
-        for (const c of s.candidates) {
-          const m = keyMap.get(c.key);
-          if (!m) continue;
-          cache[keyOf(m.it, m.cid)] = { fits: c.fits, reason: c.reason };
-          out.set(`${m.it.sceneId}|${m.cid}`, c.fits);
-          judged++;
-        }
-    } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) {
-        log(`[vision] ANTHROPIC_API_KEY rejected; vision verify off for this run`);
-        break;
+    const keyMap = new Map<string, Unit>();
+    let lastScene = -1;
+    for (const u of part) {
+      if (u.it.sceneId !== lastScene) {
+        content.push({ type: "text", text: `Scene id ${u.it.sceneId}. Narration before: "${u.it.before.slice(-300)}" Narration now: "${u.it.text}"` });
+        lastScene = u.it.sceneId;
       }
-      log(`[vision] batch failed: ${String((err as Error).message ?? err).slice(0, 160)}`);
+      const key = `${u.it.sceneId}-${String.fromCharCode(65 + u.k)}`;
+      keyMap.set(key, u);
+      content.push({ type: "text", text: `Candidate key ${key}:` });
+      for (const f of u.frames) content.push({ type: "image", source: { type: "base64", media_type: mime(f), data: fs.readFileSync(f).toString("base64") } });
     }
+    const res = await client.messages.parse({
+      model,
+      max_tokens: 3000,
+      output_config: model.startsWith("claude-haiku") ? { format: zodOutputFormat(Schema) } : { effort: "low", format: zodOutputFormat(Schema) },
+      system: SYSTEM,
+      messages: [{ role: "user", content }],
+    });
+    usage.in += res.usage.input_tokens;
+    usage.out += res.usage.output_tokens;
+    let n = 0;
+    for (const s of res.parsed_output?.scenes ?? [])
+      for (const c of s.candidates) {
+        const m = keyMap.get(c.key);
+        if (!m) continue;
+        cache[keyOf(m.it, m.cid)] = { fits: c.fits, reason: c.reason };
+        out.set(`${m.it.sceneId}|${m.cid}`, c.fits);
+        n++;
+      }
+    judged += n;
+    return [n];
+  };
+  try {
+    const { failed } = await runImageBatches(units, (u) => u.frames.length, maxImages, ask, log);
+    if (failed.length) log(`[vision] ${failed.length} candidate(s) could not be judged (see errors above)`);
+  } catch (err) {
+    if (!(err instanceof Anthropic.AuthenticationError)) throw err;
+    log(`[vision] ANTHROPIC_API_KEY rejected; vision verify off for this run`);
   }
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 1));
-  log(`[vision] verified ${judged} candidate(s) for ${todo.length} scene(s) (${model}, ${usage.in} in / ${usage.out} out tokens)`);
+  log(`[vision] verified ${judged} candidate(s) for ${todo.length} scene(s) (${model}, ${maxImages} image(s) per request max, ${usage.in} in / ${usage.out} out tokens)`);
   return out;
 }

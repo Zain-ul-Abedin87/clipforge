@@ -37,9 +37,9 @@ export interface StageState {
   log?: string[];
 }
 
-/** ranked = the product countdown (the original pipeline); explainer / tutorial = src/lib/formats. */
-export type VideoType = "ranked" | "explainer" | "tutorial" | "documentary";
-export const VIDEO_TYPES: VideoType[] = ["ranked", "explainer", "tutorial", "documentary"];
+/** ranked = the product countdown (the original pipeline); explainer / tutorial = src/lib/formats; clips = Shorts cut from the creator's long video (src/lib/shorts/longform.ts). */
+export type VideoType = "ranked" | "explainer" | "tutorial" | "documentary" | "clips";
+export const VIDEO_TYPES: VideoType[] = ["ranked", "explainer", "tutorial", "documentary", "clips"];
 
 export interface PipelineConfig {
   type?: VideoType;
@@ -109,6 +109,16 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
     const t = cfg.type;
     if (stage === "writing") return [[t, "-p", project, "--write"]];
     if (stage === "render") return [[t, "-p", project, "--render"], ["qa", "-p", project]];
+    return [];
+  }
+  // Shorts from a long video: Whisper times every word of the upload (writing), the picker finds the
+  // moments, then each one is cut, reframed and captioned (render). No voice, footage or edit.
+  if (cfg?.type === "clips") {
+    const cj = path.join(dir, "clips.json");
+    const ci = fs.existsSync(cj) ? readJson<{ source?: string; language?: string }>(cj) : {};
+    const src = ci.source ? path.join(dir, "clips", path.basename(ci.source)) : "";
+    if (stage === "writing") return src && fs.existsSync(src) ? [["transcribe", "-p", project, "--audio", src, "-l", ci.language ?? "en"], ["align", "-p", project, "--no-script-mode"], ["clips", "-p", project, "--find"]] : [];
+    if (stage === "render") return [["clips", "-p", project, "--render"]];
     return [];
   }
   // Documentary: researched + fact-checked writing, then the normal voice / footage / edit / render.
@@ -210,7 +220,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
       line(`=== ${real[0]} ===`);
       const code = await runner(real, line);
       // Exit 2 from script/shorts/translate = finished with warnings (report written); anything else non-zero fails.
-      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate" || real[0] === "explainer" || real[0] === "documentary"))) {
+      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate" || real[0] === "explainer" || real[0] === "documentary" || real[0] === "clips"))) {
         s.status = "failed";
         s.error = `${real[0]} exited with code ${code}`;
         s.hint = friendlyHint(s.log ?? [], s.error);

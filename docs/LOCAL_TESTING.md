@@ -156,6 +156,7 @@ Make each test short (about 5 minutes of video), so a problem shows up fast.
 | 6 | **Tutorial** (a 1-2 minute screen recording) | /make > Tutorial | needs argo: `npm install -g @argo-video/cli` |
 | 7 | **earshot** sound check | Tools > Sound check: enabled = true | `.venv\Scripts\pip install earshot`, then `earshot doctor --fetch`; render + QA a video |
 | 8 | **Product cutout** | Tools > Product photos: cutout = true | `.venv\Scripts\pip install "rembg[cpu]"`; a video with press-kit photos |
+| 9 | **Shorts from a long video** (your own 20-60 min podcast or vlog) | /make > Shorts from a long video | Run `.venv\Scripts\pip install -r python\requirements.txt` again first (OpenCV is pinned below 5). Check whether the picks are good moments. Check that "Follow the speaker's face" keeps the face in frame; the meta line under each Short says when it fell back to "fit". |
 
 ---
 

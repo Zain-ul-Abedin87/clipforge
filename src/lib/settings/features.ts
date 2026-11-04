@@ -129,6 +129,21 @@ export interface FeatureSettings {
     sources: string[];
     pythonCmd: string;
   };
+  clips: {
+    /** Shorts per hour of the long video (the length decides the count). */
+    perHour: number;
+    /** At most this many Shorts from one video. */
+    maxClips: number;
+    minSec: number;
+    /** Longest Short in seconds (check the platform's current limit before raising it). */
+    maxSec: number;
+    /** 9:16, 1:1 or 16:9. */
+    format: string;
+    /** smart (follow the face), center, fit (whole frame over a blur). */
+    reframe: string;
+    /** Caption preset (src/lib/render/captionPresets.ts). */
+    captionPreset: string;
+  };
   aistyle: {
     /** Where the pictures are made: "comfyui" (this PC, free) or "gemini" (Gemini API, paid, GEMINI_API_KEY). */
     engine: string;
@@ -218,6 +233,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
+  clips: { perHour: 10, maxClips: 40, minSec: 20, maxSec: 59, format: "9:16", reframe: "smart", captionPreset: "bold-pop" },
   aistyle: { engine: "comfyui", geminiModel: "gemini-2.5-flash-image", refWeight: 0.8, ipadapterPreset: "PLUS (high strength)", ipadapter: false, maxImages: 400 },
   factcheck: { wikipedia: true, wikiLang: "en", wikiPages: 3, removeUnverified: true, minOverlap: 2 },
   formats: { explainroo: "explainroo", explainerTheme: "paper", fixRounds: 3, argo: "argo", sceneThreshold: 0.3, minSceneSec: 4, wordsPerSec: 2.4 },

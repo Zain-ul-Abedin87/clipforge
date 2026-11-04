@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Explainer & tutorial - ClipForge</title>
+<title>Make a video - ClipForge</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/simple/simple.css">
 <link rel="stylesheet" href="/full/full.css">
@@ -49,18 +49,29 @@
   .opt2{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer}
   .opt2 input{width:auto;margin-top:4px}
   .opt2:has(input:checked){border-color:var(--accent);background:rgba(81,130,239,.08)}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media (max-width:760px){.grid3{grid-template-columns:1fr}}
+  .moment{display:grid;grid-template-columns:44px 1fr;gap:10px;border-top:1px solid var(--border);padding:10px 0}
+  .moment .rk{font-weight:700;font-size:var(--fs-md);color:var(--muted)}
+  .moment .t{font-size:var(--fs-xs);color:var(--muted);font-weight:600}
+  .clipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:12px}
+  .clip{border:1px solid var(--border);border-radius:var(--r);padding:10px;background:var(--surface)}
+  .clip video{width:100%;max-height:420px;border-radius:8px;background:#000;display:block}
+  .clip .ttl{font-weight:600;margin:8px 0 2px;font-size:var(--fs-sm)}
+  .clip .meta{font-size:var(--fs-xs);color:var(--muted)}
 </style>
 </head>
 <body>
 <header id="top"></header>
 <main>
   <section class="page">
-    <div class="head"><h1 id="pageTitle">Explainer &amp; tutorial videos</h1><p class="sub">Two more kinds of video. Each runs on free tools on this PC; you read and fix the words before anything is recorded.</p></div>
+    <div class="head"><h1 id="pageTitle">Make a video</h1><p class="sub">More kinds of video. Each runs on free tools on this PC, and you check the result before anything is final.</p></div>
     <div class="types" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       <a class="type" href="/new"><b>Ranked products</b><span class="hint">Countdown of products with footage (the New video page)</span></a>
       <a class="type" data-type="documentary" href="/make?type=documentary"><b>Documentary</b><span class="hint">History, science, places: researched, every fact checked</span></a>
       <a class="type" data-type="explainer" href="/make?type=explainer"><b>Explainer</b><span class="hint">Animated diagrams with a voice-over: how something works</span></a>
       <a class="type" data-type="tutorial" href="/make?type=tutorial"><b>Tutorial</b><span class="hint">Your screen recording with a voice-over, scene by scene</span></a>
+      <a class="type" data-type="clips" href="/make?type=clips"><b>Shorts from a long video</b><span class="hint">Your podcast, vlog or stream cut into captioned Shorts</span></a>
     </div>
     <p class="error" id="err"></p>
 
@@ -119,6 +130,24 @@
         </div>
         <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="exGo">Write the explainer &rarr;</button></div>
       </div>
+      <div id="clIn" hidden>
+        <h2>1. Your long video</h2>
+        <label class="lbl" for="clTopic">Name</label>
+        <input id="clTopic" placeholder="e.g. Podcast episode 12">
+        <label class="drop" style="margin-top:12px"><input type="file" id="clFile" accept=".mp4,.mov,.mkv,.webm,.m4v,video/*" hidden><span id="clFileText">Click to choose the video (MP4, MOV, MKV, WebM)</span></label>
+        <p class="help" id="clCount"></p>
+        <div class="grid3" style="margin-top:12px">
+          <div><label class="lbl" for="clFormat">Shape</label><select id="clFormat"><option value="9:16">9:16 tall (Shorts, Reels, TikTok)</option><option value="1:1">1:1 square (feed posts)</option><option value="16:9">16:9 wide (like the original)</option></select></div>
+          <div><label class="lbl" for="clReframe">Framing</label><select id="clReframe"><option value="smart">Follow the speaker's face</option><option value="center">Cut the middle</option><option value="fit">Whole picture, blurred bars</option></select></div>
+          <div><label class="lbl" for="clPreset">Captions</label><select id="clPreset"></select></div>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div><label class="lbl" for="clLang">Spoken language</label><select id="clLang"><option value="en">English</option><option value="de">German</option><option value="es">Spanish</option><option value="fr">French</option><option value="it">Italian</option><option value="pt">Portuguese</option><option value="hi">Hindi</option><option value="ur">Urdu</option></select></div>
+          <div><label class="lbl">&nbsp;</label><label class="opt2"><input type="checkbox" id="clCaps" checked><span>Burn the captions into the video</span></label></div>
+        </div>
+        <label class="opt2" style="margin-top:12px"><input type="checkbox" id="clRights"><span><b>This video is mine, or I have the owner's permission to cut it.</b><br><span class="hint">Shorts cut from someone else's video can get a copyright claim or a strike.</span></span></label>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="clGo">Find the Shorts &rarr;</button></div>
+      </div>
       <div id="tuIn" hidden>
         <h2>1. Your screen recording</h2>
         <label class="lbl" for="tuTopic">What is the tutorial about?</label>
@@ -153,6 +182,14 @@
           <button class="btn primary big" id="exMake">Make the video &rarr;</button>
         </div>
       </div>
+      <div id="clReview" hidden>
+        <div class="note" id="clSummary"></div>
+        <div id="clMoments"></div>
+        <div class="row" style="justify-content:space-between;margin-top:12px">
+          <button class="btn ghost" id="clRedo">Find them again</button>
+          <button class="btn primary big" id="clMake">Make the Shorts &rarr;</button>
+        </div>
+      </div>
       <div id="tuReview" hidden>
         <p class="help">One scene per picture change in your recording. The voice for a scene must end before the next one starts, so each box has a word limit.</p>
         <div id="tuScenes"></div>
@@ -165,12 +202,23 @@
 
     <!-- 3. VIDEO -->
     <div class="pane card" id="p3" hidden>
-      <h2>3. Your video</h2>
+      <h2 id="p3Title">3. Your video</h2>
       <div id="renderBusy"></div>
       <div id="done" hidden>
-        <video class="bigvideo" id="video" controls></video>
-        <div class="row"><a class="btn primary" id="download" download>Download MP4</a><a class="btn ghost" id="subs" hidden download>Subtitles (.srt)</a><button class="btn ghost" id="back2">&larr; Change the words</button></div>
-        <div id="qa"></div>
+        <div id="oneVideo">
+          <video class="bigvideo" id="video" controls></video>
+          <div class="row"><a class="btn primary" id="download" download>Download MP4</a><a class="btn ghost" id="subs" hidden download>Subtitles (.srt)</a><button class="btn ghost" id="back2">&larr; Change the words</button></div>
+          <div id="qa"></div>
+        </div>
+        <div id="clDone" hidden>
+          <div class="grid3">
+            <div><label class="lbl" for="clFormat2">Shape</label><select id="clFormat2"></select></div>
+            <div><label class="lbl" for="clReframe2">Framing</label><select id="clReframe2"></select></div>
+            <div><label class="lbl" for="clPreset2">Captions</label><select id="clPreset2"></select></div>
+          </div>
+          <div class="row" style="justify-content:space-between"><button class="btn ghost" id="clBack">&larr; The moments</button><button class="btn" id="clAgain">Make them again with these settings</button></div>
+          <div class="clipgrid" id="clGrid"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -181,7 +229,7 @@ header();
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
 let project = qs.get("v") || "";
-let type = ["tutorial", "documentary"].includes(qs.get("type")) ? qs.get("type") : "explainer";
+let type = ["tutorial", "documentary", "clips"].includes(qs.get("type")) ? qs.get("type") : "explainer";
 let info = null;
 let timer = null;
 let loadedText = false;
@@ -196,7 +244,10 @@ function setType(t) {
   $("exIn").hidden = t !== "explainer";
   $("tuIn").hidden = t !== "tutorial";
   $("doIn").hidden = t !== "documentary";
-  $("pageTitle").textContent = t === "explainer" ? "Explainer video" : t === "documentary" ? "Documentary" : "Tutorial from a screen recording";
+  $("clIn").hidden = t !== "clips";
+  $("pageTitle").textContent = { explainer: "Explainer video", documentary: "Documentary", clips: "Shorts from a long video" }[t] || "Tutorial from a screen recording";
+  $("p2Title").textContent = t === "clips" ? "2. The best moments" : "2. Read and fix the words";
+  $("p3Title").textContent = t === "clips" ? "3. Your Shorts" : "3. Your video";
 }
 
 function stageBox(id, busyText) {
@@ -216,12 +267,13 @@ function render() {
   if (!info) return;
   setType(info.type);
   const doc = info.type === "documentary";
-  const w = stageBox("writing", info.type === "explainer" ? "Writing the script and the pictures, then checking them (a few minutes)..." : doc ? "Reading the sources, writing chapter by chapter, checking every fact (several minutes)..." : "Finding the scenes and writing the voice-over...");
+  const clips = info.type === "clips";
+  const w = stageBox("writing", clips ? "Listening to the whole video and finding the best moments (a long video takes a while)..." : info.type === "explainer" ? "Writing the script and the pictures, then checking them (a few minutes)..." : doc ? "Reading the sources, writing chapter by chapter, checking every fact (several minutes)..." : "Finding the scenes and writing the voice-over...");
   // A documentary runs voice -> visuals -> edit -> render: show the one that is running or failed.
   const after = doc ? info.stages.filter((x) => x.id !== "writing") : info.stages.filter((x) => x.id === "render");
   const cur = after.find((x) => x.status === "running") || after.find((x) => x.status === "failed") || after[after.length - 1];
-  const r = stageBox(cur.id, info.type === "explainer" ? "Recording the voice and drawing every frame (several minutes)..." : doc ? `${cur.label}: ${{ voice: "recording the voice", visuals: "finding footage for every scene", edit: "cutting the video", render: "rendering and checking the video" }[cur.id] || "working"}...` : "Recording the voice and putting it on your recording...");
-  const written = info.type === "explainer" || doc ? !!info.script : info.scenes.length > 0;
+  const r = stageBox(cur.id, clips ? "Cutting, framing and captioning every Short..." : info.type === "explainer" ? "Recording the voice and drawing every frame (several minutes)..." : doc ? `${cur.label}: ${{ voice: "recording the voice", visuals: "finding footage for every scene", edit: "cutting the video", render: "rendering and checking the video" }[cur.id] || "working"}...` : "Recording the voice and putting it on your recording...");
+  const written = clips ? info.clips.length > 0 || w.state === "done" : info.type === "explainer" || doc ? !!info.script : info.scenes.length > 0;
   // One of three views: inputs (nothing written yet), review (the words), video (render + result).
   if (!view) view = r.state === "running" || r.state === "failed" || info.hasVideo ? "video" : written || w.state !== "pending" ? "review" : "inputs";
   if (view === "inputs" && (written || w.state === "running")) view = "review";
@@ -235,6 +287,8 @@ function render() {
   $("doReview").hidden = !doc || !showReview;
   if (doc && showReview) showDocumentary();
   $("tuReview").hidden = info.type !== "tutorial" || !showReview;
+  $("clReview").hidden = !clips || !showReview;
+  if (clips && showReview) showMoments();
   if (info.type === "explainer" && showReview) {
     if (!loadedText) { $("exScript").value = info.script; loadedText = true; }
     const c = info.check;
@@ -252,7 +306,10 @@ function render() {
   $("renderBusy").innerHTML = r.html;
   bindRetry($("renderBusy"));
   $("done").hidden = !info.hasVideo || r.state === "running";
-  if (info.hasVideo && r.state !== "running") {
+  $("oneVideo").hidden = clips;
+  $("clDone").hidden = !clips;
+  if (clips && info.hasVideo && r.state !== "running") showClips();
+  if (!clips && info.hasVideo && r.state !== "running") {
     if (!$("video").src) $("video").src = `/api/projects/${project}/video?t=${Date.now()}`;
     $("download").href = `/api/projects/${project}/video?download=1`;
     const q = info.qa;
@@ -274,6 +331,40 @@ function showDocumentary() {
     + (fc.removed && fc.removed.length ? `<details style="margin-top:8px"><summary class="help" style="cursor:pointer">${fc.removed.length} sentence(s) taken out (wrong or not confirmed)</summary>${fc.removed.map((x) => `<div class="removed">${esc(x)}</div>`).join("")}</details>` : "");
   const shown = fc.claims.filter((c) => !(fc.removed || []).includes(c.sentence));
   $("doFacts").innerHTML = shown.length ? `<table class="facts">${shown.map((c) => `<tr><td><span class="pill ${label[c.verdict][0]}">${label[c.verdict][1]}</span></td><td>${esc(c.sentence)}${c.note ? `<div class="q" style="color:var(--warn)">${esc(c.note)}</div>` : ""}${c.url ? `<div class="q">${esc(c.title || "")}: <a href="${esc(c.url)}" target="_blank" rel="noopener">source</a>${c.quote ? ` &middot; "${esc(c.quote.slice(0, 220))}"` : ""}</div>` : c.title ? `<div class="q">${esc(c.title)}${c.quote ? `: "${esc(c.quote.slice(0, 220))}"` : ""}</div>` : ""}</td></tr>`).join("")}</table>` : "";
+}
+
+// ---------- Shorts from a long video ----------
+const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const FORMATS = [["9:16", "9:16 tall (Shorts, Reels, TikTok)"], ["1:1", "1:1 square (feed posts)"], ["16:9", "16:9 wide (like the original)"]];
+const REFRAMES = [["smart", "Follow the speaker's face"], ["center", "Cut the middle"], ["fit", "Whole picture, blurred bars"]];
+function fillSelects() {
+  const presets = (info && info.presets) || [{ id: "bold-pop", label: "Bold pop" }, { id: "karaoke", label: "Karaoke" }, { id: "highlight", label: "Word highlight" }, { id: "pop", label: "Pop" }, { id: "bold", label: "Bold" }, { id: "classic", label: "Classic" }, { id: "minimal", label: "Minimal" }];
+  const opts = (xs) => xs.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+  for (const id of ["clPreset", "clPreset2"]) if (!$(id).options.length) $(id).innerHTML = opts(presets.map((p) => [p.id, p.label]));
+  if (!$("clFormat2").options.length) { $("clFormat2").innerHTML = opts(FORMATS); $("clReframe2").innerHTML = opts(REFRAMES); }
+}
+function showMoments() {
+  const n = info.clips.length;
+  const lim = info.limits;
+  $("clSummary").innerHTML = n
+    ? `<b>${n} moment(s)</b> found in ${info.duration ? mmss(info.duration) : "the video"} &middot; ${lim.minSec}-${lim.maxSec} s each, best first. <span class="hint">The score says how strong the opening line is and whether the bit makes sense on its own. It does not predict views.</span>`
+    : `No moment of ${lim.minSec}-${lim.maxSec} s made of whole sentences was found. A video with very long sentences or little speech gives none: check the full log.`;
+  $("clMoments").innerHTML = info.clips.map((c) => `<div class="moment"><div class="rk">#${c.rank}</div><div><div class="t">${mmss(c.start)} - ${mmss(c.end)} &middot; ${(c.end - c.start).toFixed(0)} s &middot; score ${c.score}</div><b>${esc(c.title || c.hook)}</b>${c.text.trim() !== (c.title || c.hook).trim() ? `<div class="hint">${esc(c.text.slice(0, 260))}${c.text.length > 260 ? "..." : ""}</div>` : ""}</div></div>`).join("");
+  $("clMake").disabled = !n;
+}
+function showClips() {
+  fillSelects();
+  const i = info.input || {};
+  $("clFormat2").value = i.format; $("clReframe2").value = i.reframe; $("clPreset2").value = i.captionPreset;
+  const key = info.clips.map((c) => `${c.rank}:${c.file}:${c.reframed}:${c.error || ""}`).join("|") + i.format;
+  if ($("clGrid").dataset.key === key) return;
+  $("clGrid").dataset.key = key;
+  const t = Date.now();
+  $("clGrid").innerHTML = info.clips.map((c) => `<div class="clip">${c.url ? `<video controls preload="metadata" src="${c.url}?t=${t}"></video>` : `<div class="failbox" style="padding:10px">${esc(c.error ? "This one failed: " + c.error.slice(0, 160) : "Not made yet")}</div>`}
+    <div class="ttl">#${c.rank} ${esc(c.title || c.hook)}</div>
+    <div class="meta">${mmss(c.start)} - ${mmss(c.end)} &middot; score ${c.score}${c.reframed ? ` &middot; ${esc(c.reframed)}` : ""}</div>
+    ${c.url ? `<div class="row" style="margin:8px 0 0"><a class="btn small primary" href="${c.url}" download="${esc(project)}_short_${c.rank}.mp4">Download</a><button class="btn small ghost" data-copy="${esc(c.title || "")}">Copy title</button></div>` : ""}</div>`).join("");
+  for (const b of $("clGrid").querySelectorAll("[data-copy]")) b.onclick = () => navigator.clipboard?.writeText(b.dataset.copy).then(() => (b.textContent = "Copied"));
 }
 
 async function refresh() {
@@ -406,6 +497,56 @@ $("exGo").onclick = async () => {
   $("exGo").disabled = false;
 };
 
+$("clFile").onchange = () => {
+  const f = $("clFile").files[0];
+  $("clFileText").textContent = f ? `${f.name} (${(f.size / 1e6).toFixed(f.size < 1e7 ? 1 : 0)} MB)` : "Click to choose the video";
+  $("clCount").textContent = "";
+  if (!f) return;
+  // How many Shorts the length gives (the same rule as the server: features.json clips.perHour / maxClips).
+  const v = document.createElement("video");
+  v.preload = "metadata";
+  v.onloadedmetadata = () => { const d = v.duration; URL.revokeObjectURL(v.src); if (isFinite(d)) $("clCount").textContent = `${mmss(d)} long: about ${Math.max(1, Math.min(40, Math.ceil((d / 3600) * 10)))} Short(s) with the default settings.`; };
+  v.src = URL.createObjectURL(f);
+};
+function uploadLong(file) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", `/api/make/${project}/longvideo`);
+    x.setRequestHeader("x-filename", encodeURIComponent(file.name));
+    x.upload.onprogress = (e) => e.lengthComputable && ($("clFileText").textContent = `Uploading ${Math.round((100 * e.loaded) / e.total)}%`);
+    x.onload = () => (x.status < 300 ? resolve() : reject(new Error(JSON.parse(x.responseText || "{}").error || "upload failed")));
+    x.onerror = () => reject(new Error("upload failed"));
+    x.send(file);
+  });
+}
+$("clGo").onclick = async () => {
+  err("");
+  const file = $("clFile").files[0];
+  if (!file && !info?.source) return err("Choose your long video first.");
+  if (!$("clRights").checked) return err("Tick the box: the video must be yours, or you need the owner's permission.");
+  $("clGo").disabled = true;
+  try {
+    await create({ type: "clips", topic: $("clTopic").value, rights: true, language: $("clLang").value, format: $("clFormat").value, reframe: $("clReframe").value, captionPreset: $("clPreset").value, captions: $("clCaps").checked });
+    if (file) await uploadLong(file);
+    view = "review";
+    await run("writing");
+    await refresh();
+  } catch (e) { err(e.message); }
+  $("clGo").disabled = false;
+};
+$("clRedo").onclick = async () => { try { await run("writing"); await refresh(); } catch (e) { err(e.message); } };
+$("clMake").onclick = async () => { err(""); view = "video"; $("clGrid").dataset.key = ""; try { await run("render"); await refresh(); } catch (e) { err(e.message); } };
+$("clBack").onclick = () => { view = "review"; render(); };
+$("clAgain").onclick = async () => {
+  err("");
+  try {
+    info = await api(`/api/make/${project}/settings`, { method: "PUT", body: { format: $("clFormat2").value, reframe: $("clReframe2").value, captionPreset: $("clPreset2").value } });
+    $("clGrid").dataset.key = "";
+    await run("render");
+    await refresh();
+  } catch (e) { err(e.message); }
+};
+
 $("tuFile").onchange = () => { const f = $("tuFile").files[0]; $("tuFileText").textContent = f ? `${f.name} (${(f.size / 1e6).toFixed(1)} MB)` : "Click to choose the recording"; };
 function upload(file) {
   return new Promise((resolve, reject) => {
@@ -471,6 +612,7 @@ $("tuMake").onclick = make;
 $("back2").onclick = () => { view = "review"; render(); };
 
 setType(type);
+fillSelects();
 if (project) {
   refresh().catch((e) => { err(e.message); project = ""; });
 }

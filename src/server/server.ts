@@ -45,6 +45,7 @@ import { makeRoute } from "./routes/make.js";
 import { aistyleRoute } from "./routes/aistyle.js";
 import { saveRef } from "../lib/assets/aiStyle.js";
 import { setRecording, tutorialDir, VIDEO_EXT } from "../lib/formats/tutorial.js";
+import { clipsDir, LONG_VIDEO_EXT, readClipsInput, setClipsSource } from "../lib/shorts/longform.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
@@ -801,6 +802,27 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     } catch (err) {
       return send(res, 400, { error: (err as Error).message });
     }
+  }
+
+  // Shorts from a long video: the creator's video, streamed to workspace/<project>/clips/.
+  if (parts[1] === "make" && parts[3] === "longvideo" && method === "POST") {
+    const name = parts[2];
+    if (!validName(name) || !readClipsInput(name)) return send(res, 404, { error: "create the Shorts project first" });
+    const fname = decodeURIComponent(String(req.headers["x-filename"] ?? "video.mp4"));
+    const ext = path.extname(fname).toLowerCase();
+    if (!LONG_VIDEO_EXT.has(ext)) return send(res, 400, { error: "the video must be mp4, mov, mkv, webm or m4v" });
+    fs.mkdirSync(clipsDir(name), { recursive: true });
+    // One long video per project: an earlier upload is replaced.
+    for (const f of fs.readdirSync(clipsDir(name))) if (/^source\./.test(f)) fs.rmSync(path.join(clipsDir(name), f), { force: true });
+    const dest = path.join(clipsDir(name), `source${ext}`);
+    await new Promise<void>((resolve, reject) => {
+      const ws = fs.createWriteStream(dest);
+      req.pipe(ws);
+      ws.on("finish", () => resolve());
+      ws.on("error", reject);
+    });
+    setClipsSource(name, path.basename(dest));
+    return send(res, 200, { ok: true, bytes: fs.statSync(dest).size });
   }
 
   // Tutorial: the creator's screen recording, streamed to workspace/<project>/tutorial/.

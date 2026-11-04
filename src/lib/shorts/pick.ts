@@ -63,7 +63,24 @@ const SYSTEM = `You pick YouTube Shorts from a long video's narration. For each 
 - standalone: 0-10, does the text make sense without the rest of the video?
 - title: a Shorts title, max 60 characters, original wording.`;
 
-export async function pickShorts(sentences: TimedSentence[], o: { count: number; minSec: number; maxSec: number; log?: (m: string) => void }): Promise<ShortWindow[]> {
+/**
+ * The openings the model is asked about. Normally the best by the rules; with `spread` (a long
+ * podcast or stream) the video is cut into equal parts and each part sends its own best openings,
+ * so a strong moment in a quiet hour is not lost to the word rules alone.
+ */
+export function shortlistOpenings<T extends { start: number; ruleScore: number }>(openings: T[], count: number, spread = false): T[] {
+  const best = (xs: T[]) => [...xs].sort((a, b) => b.ruleScore - a.ruleScore || a.start - b.start);
+  if (!spread || openings.length <= count * 6) return best(openings).slice(0, Math.max(count * 6, 12));
+  const t0 = Math.min(...openings.map((x) => x.start));
+  const span = Math.max(1, Math.max(...openings.map((x) => x.start)) - t0);
+  const parts = Math.max(2, count * 2);
+  const bucket = (x: T) => Math.min(parts - 1, Math.floor(((x.start - t0) / span) * parts));
+  const out: T[] = [];
+  for (let b = 0; b < parts; b++) out.push(...best(openings.filter((x) => bucket(x) === b)).slice(0, 4));
+  return best(out).slice(0, count * 8);
+}
+
+export async function pickShorts(sentences: TimedSentence[], o: { count: number; minSec: number; maxSec: number; spread?: boolean; log?: (m: string) => void }): Promise<ShortWindow[]> {
   const log = o.log ?? (() => {});
   const cands = candidateWindows(sentences, o.minSec, o.maxSec).map((c) => ({ ...c, ruleScore: ruleHookScore(c.hook, c.text), modelScore: null as number | null, score: 0 }));
   if (!cands.length) {
@@ -74,7 +91,7 @@ export async function pickShorts(sentences: TimedSentence[], o: { count: number;
   // model, small batches). Its score then applies to every window with that opening.
   const byFirst = new Map<number, (typeof cands)[number]>();
   for (const c of cands) if (!byFirst.has(c.first) || c.end - c.start < byFirst.get(c.first)!.end - byFirst.get(c.first)!.start) byFirst.set(c.first, c);
-  const shortlist = [...byFirst.values()].sort((a, b) => b.ruleScore - a.ruleScore || a.start - b.start).slice(0, Math.max(o.count * 6, 12));
+  const shortlist = shortlistOpenings([...byFirst.values()], o.count, o.spread);
   if (llmAvailable()) {
     const ask = async (part: typeof shortlist) => {
       const res = await withStage("titles", () =>

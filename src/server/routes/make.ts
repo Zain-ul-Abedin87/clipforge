@@ -6,6 +6,9 @@ import { readDocumentaryInput, recheckDocumentary, saveDocumentaryInput } from "
 import { PIPELINE_STAGES, readConfig, readState, saveConfig, STAGE_LABELS, VideoType } from "../../lib/orchestrator/pipeline.js";
 import { projectSlug } from "../../lib/orchestrator/wizard.js";
 import { explainerDir, parseScriptMd, readExplainerInput, saveExplainerInput, THEMES } from "../../lib/formats/explainer.js";
+import { clipsSource, readClips, readClipsInput, saveClipsInput } from "../../lib/shorts/longform.js";
+import { CAPTION_PRESETS } from "../../lib/render/captionPresets.js";
+import { loadFeatures } from "../../lib/settings/features.js";
 import { readTutorialInput, readTutorialScenes, recordingPath, saveTutorialInput, saveTutorialScenes, tooLong } from "../../lib/formats/tutorial.js";
 
 /**
@@ -20,15 +23,16 @@ import { readTutorialInput, readTutorialScenes, recordingPath, saveTutorialInput
  *   PUT  /api/make/:project/scenes    {texts: {id: text}}   tutorial: the edited voice-over
  * The screen recording is uploaded with POST /api/make/:project/recording (server.ts, streamed).
  */
-export type RouteResult = { status: number; body: unknown } | null;
+export type RouteResult = { status: number; body: unknown; file?: string } | null;
 const NAME = /^[a-z0-9][a-z0-9-]{1,60}$/;
 const exists = (n: string) => fs.existsSync(path.join(paths.workspace, n));
 
 export function createMade(b: Record<string, unknown>): { project: string } {
-  const type = b.type === "explainer" || b.type === "tutorial" || b.type === "documentary" ? (b.type as VideoType) : null;
-  if (!type) throw new Error("type must be explainer, tutorial or documentary");
+  const type = b.type === "explainer" || b.type === "tutorial" || b.type === "documentary" || b.type === "clips" ? (b.type as VideoType) : null;
+  if (!type) throw new Error("type must be explainer, tutorial, documentary or clips");
   const topic = String(b.topic ?? "").trim();
-  if (!topic) throw new Error(type === "explainer" ? "Please enter what the video explains." : "Please enter what the tutorial is about.");
+  if (!topic) throw new Error(type === "clips" ? "Give the long video a name (e.g. Podcast episode 12)." : type === "explainer" ? "Please enter what the video explains." : "Please enter what the tutorial is about.");
+  if (type === "clips" && b.rights !== true) throw new Error("Confirm that the video is yours or that you have permission to cut it (someone else's video can get a copyright claim).");
   const lines = (v: unknown) => (Array.isArray(v) ? v.map(String) : String(v ?? "").split(/\n/)).map((x) => x.trim()).filter(Boolean);
   // Validate the inputs before anything is written (a refused request leaves no project folder).
   if (type === "explainer" && !lines(b.points).length) throw new Error("Add at least one point the video must explain (one per line).");
@@ -41,7 +45,8 @@ export function createMade(b: Record<string, unknown>): { project: string } {
     // The documentary rules (no countdown, longer shots, archive / public-domain footage first).
     const pj = path.join(paths.workspace, project, "project.json");
     writeJson(pj, { ...readJson<Record<string, unknown>>(pj), niche: "documentary" });
-  } else if (type === "explainer") saveExplainerInput(project, { topic, title: typeof b.title === "string" ? b.title : undefined, points: lines(b.points), sources: lines(b.sources), seconds: Number(b.seconds) || 90, theme: typeof b.theme === "string" ? b.theme : undefined });
+  } else if (type === "clips") saveClipsInput(project, { ...(b as Partial<Parameters<typeof saveClipsInput>[1]>), topic, rights: true });
+  else if (type === "explainer") saveExplainerInput(project, { topic, title: typeof b.title === "string" ? b.title : undefined, points: lines(b.points), sources: lines(b.sources), seconds: Number(b.seconds) || 90, theme: typeof b.theme === "string" ? b.theme : undefined });
   else saveTutorialInput(project, { topic, notes: String(b.notes ?? "") });
   return { project };
 }
@@ -55,12 +60,27 @@ export function madeView(project: string) {
     project,
     type: cfg?.type ?? "ranked",
     topic: cfg?.topic ?? "",
-    // A documentary runs the whole pipeline after the writing; the other two only write + render.
+    // A documentary runs the whole pipeline after the writing; the others only write + render.
     stages: PIPELINE_STAGES.filter((s) => (cfg?.type === "documentary" ? s !== "research" && s !== "avatar" : s === "writing" || s === "render")).map((s) => ({ id: s, label: STAGE_LABELS[s], status: st.stages[s].status, hint: st.stages[s].hint ?? null, last: (st.stages[s].log ?? []).slice(-1)[0] ?? "" })),
     hasVideo: fs.existsSync(path.join(paths.output, `${project}.mp4`)),
     hasSubtitles: fs.existsSync(path.join(paths.output, `${project}.srt`)),
     qa: fs.existsSync(qaFile) ? readJson<{ summary: unknown; checks: unknown[] }>(qaFile) : null,
   };
+  if (cfg?.type === "clips") {
+    const src = clipsSource(project);
+    const res = readClips(project);
+    const f = loadFeatures().clips;
+    return {
+      ...base,
+      hasVideo: !!res?.clips.some((c) => c.file),
+      input: readClipsInput(project),
+      source: src ? { name: path.basename(src), mb: Math.round(fs.statSync(src).size / 1048576) } : null,
+      duration: res?.duration ?? null,
+      limits: { perHour: f.perHour, maxClips: f.maxClips, minSec: f.minSec, maxSec: f.maxSec },
+      presets: CAPTION_PRESETS.map((p) => ({ id: p.id, label: p.label })),
+      clips: (res?.clips ?? []).map((c) => ({ ...c, url: c.file && fs.existsSync(path.join(paths.output, c.file)) ? `/api/make/${project}/clip/${c.rank}` : null })),
+    };
+  }
   if (cfg?.type === "documentary") {
     const sf = path.join(dir, "script.txt");
     const ff = path.join(dir, "factcheck.json");
@@ -88,6 +108,18 @@ export async function makeRoute(parts: string[], method: string, body: () => Pro
     if (!NAME.test(project) || !exists(project) || !readConfig(project)) return { status: 404, body: { error: "no such video" } };
     const type = readConfig(project)?.type;
     if (!parts[3] && method === "GET") return { status: 200, body: madeView(project) };
+    if (type === "clips" && parts[3] === "clip" && method === "GET") {
+      const c = readClips(project)?.clips.find((x) => x.rank === Number(parts[4]));
+      const file = c?.file ? path.join(paths.output, path.basename(c.file)) : "";
+      if (!file || !fs.existsSync(file)) return { status: 404, body: { error: "not rendered yet" } };
+      return { status: 200, body: null, file };
+    }
+    if (type === "clips" && parts[3] === "settings" && method === "PUT") {
+      // A new shape / reframe / caption look; the page then renders again (from "render").
+      const b = await json();
+      saveClipsInput(project, { ...readClipsInput(project), ...b, rights: true });
+      return { status: 200, body: madeView(project) };
+    }
     if (parts[3] === "script" && method === "PUT" && type === "documentary") {
       const text = String((await json()).text ?? "").replace(/\r\n/g, "\n").trim();
       if (text.split(/\s+/).length < 50) return { status: 400, body: { error: "The script is very short." } };

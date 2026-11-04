@@ -1366,6 +1366,76 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Shorts from a long video (2026-11-04)
+
+The creator uploads their own long video (a podcast, vlog or stream) and gets ranked, captioned
+Shorts. It runs on the same local tools as the rest: Whisper for the word timings, the local model
+for the hook scores, FFmpeg for the cuts.
+
+**Flow** (`/make` > Shorts from a long video, or the CLI):
+1. Upload + the rights box ("the video is mine, or I have the owner's permission"). Without the
+   box nothing is created (the server checks it too, not only the page).
+2. Writing stage: `transcribe` (the spoken language goes to Whisper) -> `align --no-script-mode`
+   -> `clips --find`. The number of Shorts follows the length (`features.json` `clips.perHour`,
+   default 10 per hour, at most `clips.maxClips` = 40).
+3. The creator sees the moments, best first: time, length, score, title, text.
+4. Render stage: `clips --render` -> `output/<project>_clip_<rank>.mp4`. The page shows every
+   Short with play, download and copy title, and can make them all again in another shape,
+   framing or caption look.
+
+**Picking on long videos.** The Shorts picker only sent the openings with the best word-rule
+scores to the model. On a 2-hour podcast that means the model never sees most of the video.
+`shortlistOpenings(..., spread)` now cuts the video into `2 x count` equal parts, and each part
+sends its 4 best openings (at most `8 x count` in all). The finished-video Shorts keep the old
+behaviour.
+
+**Shapes and framing** (`src/lib/shorts/reframe.ts`):
+- 9:16 (1080x1920), 1:1 (1080x1080), 16:9 (1920x1080). Caption size and position change with the
+  shape.
+- *Follow the speaker's face* (`python/face_track.py`, the OpenCV Haar face detector, one sample
+  every 0.5 s). The crop holds still and moves only when the face moves more than 8% of the
+  width, in a 0.4 s pan. One lost face in a row is filled from its neighbours.
+- If faces are seen in fewer than 30% of the samples, or the tracker cannot run, the Short falls
+  back to the whole picture over a blurred copy, and the page says why ("fit (too few faces
+  seen)" / "fit (face tracker not available)"). A speaker is never cut off by a wrong guess.
+- *Cut the middle* and *Whole picture, blurred bars* are the other two framings.
+
+**Pinned:** `opencv-python-headless>=4.8,<5`. OpenCV 5 removed `CascadeClassifier`, which both
+`face_track.py` and the existing `shot_qa.py` use, so a fresh install would have broken
+`shot_qa.py` as well.
+
+**Tests** (`tests/clips.test.ts`, 12): crop width per shape; keyframes hold on jitter and follow
+a clear move; the crop stays inside the frame; the pan expression's values; filter choice; the count
+rule; the spread shortlist; the rights check; the pipeline steps; and real FFmpeg renders.
+- One render checks the crop timing: the clip starts 2 s into the source, and the test checks the
+  frame brightness to prove the crop uses the clip's own time.
+- One render runs the whole find -> render path, including the fallback to fit.
+- One re-renders a single rank as 1:1.
+- The full suite: see the commit.
+
+**Checked by hand here.**
+- The real face tracker on a moving face. At 1920x1080, with the face at 20% for 3 s and then at
+  83%, it gave 2 keyframes (x 85, then 1284). The face is in the 9:16 frame both before and
+  after the jump.
+- The page in Chromium: the rights error, the upload, the friendly "Whisper is not set up" box
+  (there is no Whisper model in the cloud), the moments list, the Shorts grid, and making them
+  again as 9:16 with the middle cut (1080x1920).
+
+**Limits (honest)**
+- The Haar detector finds frontal faces. It misses side profiles and small faces in wide shots: a
+  test frame of a footballer in a wide shot found no face. Those Shorts fall back to fit, which is
+  safe but less full-screen. A better detector (e.g. a DNN face model) is a later step.
+- Only the largest face is followed. With two people talking, the crop does not switch to whoever
+  is speaking (no speaker detection).
+- The score is the opening line's strength and whether the bit stands alone. It does not
+  predict views.
+- Not run here on a real 1-2 hour podcast: Whisper time and the model's picks on long talk are
+  first measured on your PC.
+- Default Short length is 20-59 s. Check each platform's current limit before raising
+  `clips.maxSec` (the code caps it at 180 s).
+
+---
+
 ## Build status with the real model files (2026-11-04)
 
 `src/lib/models/loader.ts` and `embed.ts` are committed (`f62c09f`). With them, a fresh clone
@@ -1378,6 +1448,8 @@ two were missing.
 ## Blocked / needs user
 
 - ~~Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC~~ **done** (`f62c09f`): typecheck passes, 423 tests: 422 pass, 0 fail, 1 skipped.
+- **Shorts from a long video**: `.venv\Scripts\pip install -r python\requirements.txt` (OpenCV <5), then
+  a 20-60 minute podcast of your own on /make; send `run.log` and say which picks were good or bad.
 - **Install explainroo and argo** on your PC to make the first real Explainer / Tutorial.
 - **Run third-party code**: to test earshot / explainroo / argo for real (here or on your PC).
 - **Video API keys** (optional, paid): `GEMINI_API_KEY` for Veo, `RUNWAYML_API_SECRET` for Runway

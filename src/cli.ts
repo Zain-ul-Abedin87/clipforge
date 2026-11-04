@@ -154,6 +154,29 @@ program
   });
 
 program
+  .command("clips")
+  .description("Shorts from a long video (workspace/<project>/clips/): --find = the best moments, ranked; --render = cut, reframe, caption -> output/<project>_clip_<rank>.mp4")
+  .requiredOption("-p, --project <name>", "project name (made on /make > Shorts from a long video)")
+  .option("--find", "find the moments (needs aligned.json: transcribe + align first)")
+  .option("--render", "render the found Shorts")
+  .option("--ranks <list>", "with --render: only these ranks, e.g. 1,3")
+  .action(async (o) => {
+    const { findClips, renderClips } = await import("./lib/shorts/longform.js");
+    try {
+      if (o.find) await findClips(String(o.project));
+      if (o.render) {
+        const ranks = o.ranks ? String(o.ranks).split(",").map(Number).filter((n) => n > 0) : undefined;
+        const r = await renderClips(String(o.project), { ranks });
+        // 2 = some Shorts failed (the others are kept).
+        process.exitCode = r.some((c) => c.error && (!ranks || ranks.includes(c.rank))) ? 2 : 0;
+      }
+    } catch (err) {
+      console.error(`[clips] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command("tutorial")
   .description("Tutorial from a screen recording (argo): --write = scenes + AI voice-over; --render = argo import, tts, export -> output/<project>.mp4")
   .requiredOption("-p, --project <name>", "project name")

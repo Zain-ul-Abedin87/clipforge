@@ -166,6 +166,65 @@ phase). The `/research` page was loaded in the browser preview; without a key it
 
 ---
 
+## Phase 2: Titles
+
+**What changed**
+
+- `src/lib/research/title-patterns.ts`: 11 title structures (numbered list, best of year, versus,
+  warning, budget, only one, curiosity, question, tested, ranked, made in). They are found in
+  competitor titles and ranked by mean views × count. The agent only gets abstract templates
+  such as `Top {N} {X} ({YEAR})`, never competitor wording.
+- `src/lib/agents/titles.ts`: 10 options from the local model (stage `titles`, default
+  `qwen3:8b`, thinking off).
+  - Every candidate is checked against the competitor titles: word 2-gram Jaccard, word cosine,
+    and embedding cosine (nomic-embed-text, when pulled).
+  - A title more than **80%** similar (`features.json` → `titles.maxSimilarity`) is rewritten,
+    up to 2 rounds, and dropped if it is still too close.
+  - Template titles fill any gap, so there are always 10 (also when no model is available).
+- `src/lib/originality/similarity.ts`: the shared originality guard (n-gram Jaccard,
+  containment, word cosine, embedding cosine). Phase 5 uses it for scripts.
+- `src/lib/models/embed.ts`: Ollama `/api/embed` through the model loader (stage `embed`). If the
+  model is missing, it falls back to lexical scores with a log line.
+- `src/lib/research/news.ts`: Google News RSS headlines (free, no key, cached 6 h). They are
+  offered as angles and never copied.
+- `llm.ts`: `think: false` for qwen3 / deepseek-r1 (set `THINK=on` to allow thinking), and
+  `<think>` blocks are stripped from answers.
+- Competitor titles come from the last research scan's outliers, plus a 25-result topic search
+  when `YOUTUBE_API_KEY` is set (101 units, cached).
+- UI: **Titles** card on `/research`. API: `POST /api/research/titles {topic}`. CLI:
+  `npm run cf -- titles -t "best budget 9mm pistols"`.
+
+**Files**: `src/lib/research/{title-patterns,news,index}.ts`, `src/lib/agents/titles.ts`,
+`src/lib/originality/similarity.ts`, `src/lib/models/embed.ts`, `src/lib/agents/llm/llm.ts`,
+`src/server/routes/research.ts`, `src/cli.ts`, `web/research.html`, `tests/titles.test.ts`.
+
+**Checks**: typecheck passes. 299 tests, 298 pass, 0 fail, 1 skipped (the one skipped before
+this phase).
+
+- Browser check: on `/research`, "Generate titles" returned 10 titles. This worktree has no
+  model configured, so they came from the template fallback, with 8 Google News headlines.
+- Unit test: 2 copied competitor titles were rejected and rewritten, and all 10 final titles
+  scored ≤ 80%.
+
+**How to verify on your PC**
+
+```bash
+ollama pull qwen3:8b
+ollama pull nomic-embed-text
+npm run cf -- titles -t "best budget 9mm pistols"
+```
+
+You should get 10 titles. Each line shows its structure and "closest competitor N%", and every
+N should be ≤ 80.
+
+**Open risks**
+
+- Embedding similarity of short titles is noisy. It is rescaled (cosine 0.5 = 0) and only raises
+  the score, never lowers it.
+- Google News can rate-limit; the titles still work without hooks.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

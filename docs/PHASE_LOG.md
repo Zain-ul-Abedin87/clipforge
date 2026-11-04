@@ -366,6 +366,74 @@ forced reuse 0, and all 3 have a licence logged.
 
 ---
 
+## Phase 5: Script writer
+
+**What changed**
+
+- `src/lib/agents/script/outline.ts`: intro (hook, ~8%), one section per product in countdown
+  order (the last product listed is #1 and gets 1.2× budget), outro (~5%).
+  - Word budgets add up **exactly** to the target (largest-remainder rounding).
+  - Angles and the hook come from the local model (stage `script`, `qwen3:8b`, thinking off).
+- `src/lib/agents/script/sections.ts`: **one request per section**, so each prompt carries only
+  one product's facts and stays well inside 8K.
+  - Up to 3 attempts to hit the section budget; the closest attempt is kept.
+  - A draft that states unsourced numbers is rewritten, and any leftover sentence with an
+    unsourced number is removed.
+  - The total is then balanced to **±3%**.
+  - Rule-based sections are used when there is no model.
+- `src/lib/agents/script/facts.ts`: **sourced facts only**.
+  - Inputs are a facts file (`<project>/facts_sources.json`) and/or product pages
+    (`<project>/sources.json`: `{product: [urls]}`).
+  - For pages, the model may only return values whose numbers appear in that page's text
+    (invented specs are dropped). Each fact keeps its URL and page title.
+  - **Claim checker**: every number in the finished script must match a sourced fact of that
+    section's product. Exceptions are counting numbers 1-10 and numbers inside product names
+    (Glock 43X).
+- `src/lib/agents/script/originality.ts`: per section, 5-gram containment against the
+  competitor transcripts, plus nomic-embed-text similarity to the closest ~120-word window.
+  - Above `script.maxNgramOverlap` (0.2) or `script.maxSimilarity` (0.8), the section is
+    rewritten and re-checked.
+- CLI:
+  `npm run cf -- script -p <name> -t "<topic>" --products "a,b,...,#1" [--words 1500] [--competitors <videoIds>]`.
+  - Competitor transcripts come from `youtube-transcript-api` (existing `quickTranscript`) and
+    are saved in `<project>/competitors/`.
+  - Writes `script.txt` and `script_report.json` (word counts, deviation, originality, unsourced
+    claims, facts used with their URLs).
+  - The exit code is 2 when the script is not clean.
+
+**Files**: `src/lib/agents/script/{outline,sections,facts,originality,index}.ts`,
+`src/lib/settings/features.ts`, `src/lib/models/loader.ts`, `src/cli.ts`, `tests/script.test.ts`.
+
+**Checks**: typecheck passes. 322 tests, 321 pass, 0 fail, 1 skipped (the one skipped before this
+phase). The 10-product test checks:
+
+- every section is its own request;
+- the total is within ±3%;
+- one section that copied a competitor is caught and rewritten, so the originality report is
+  clean;
+- 0 unsourced claims, and the 10 facts used all carry an https source.
+
+**How to verify on your PC**
+
+1. Put product page URLs in `workspace/<name>/sources.json`.
+2. Run:
+
+   ```bash
+   npm run cf -- script -p <name> -t "best concealed carry pistols" --products "Taurus G3C,Ruger Max-9,Glock 43X,Sig P365,S&W Shield Plus,Springfield Hellcat,Kimber R7 Mako,CZ P-10 S,Walther PDP F,Canik Mete MC9" --words 1500 --competitors <id1>,<id2>
+   ```
+
+3. Expect the final line `[script] 1500±45 words ... 0 unsourced claim(s)`.
+
+**Open risks**
+
+- A 7-8B model often misses the budget on the first attempt. Expect 2-3 attempts per section
+  (~3-6 min for 12 sections on the 3070 Ti).
+- With no sources, the script states **no numbers at all** (by design).
+- Some manufacturer pages render specs with JavaScript only. In that case, add the facts to
+  `facts_sources.json` by hand.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

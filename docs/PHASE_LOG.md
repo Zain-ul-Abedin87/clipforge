@@ -599,6 +599,60 @@ phase). In the end-to-end test, FFmpeg stands in for the lip-sync engine:
 
 ---
 
+## Phase 8: Shorts cutter
+
+**What changed**
+
+- `src/lib/shorts/pick.ts`: candidates are every window of **whole sentences** lasting 30-58 s
+  (`features.json` → `shorts.minSec` / `maxSec`).
+  - **Rule hook score** for the opening sentence: numbers and prices, words like best / worst /
+    stop / don't, questions, "you". Openers that start mid-thought ("And", "It") score lower.
+  - **Hook score from the local model** (stage `titles`), asked once per opening sentence:
+    `hook` 60% + `stands alone` 40%, plus a Shorts title.
+  - The best N (3) **non-overlapping** windows win. At equal score the shorter window wins, so the
+    others still fit.
+- `src/lib/shorts/render.ts`: a **1080×1920** cut of the finished video.
+  - The 16:9 picture sits at full width over a blurred, darkened copy.
+  - **Word-highlight captions** (`bold-pop`, vertical ASS, PlayRes 1080×1920) sit in the upper
+    middle, clear of the Shorts buttons.
+  - Every Short is under 60 s.
+- CLI: `npm run cf -- shorts -p <project>` (after `render`). Writes
+  `output/<project>_short_<n>.mp4` and `workspace/<project>/shorts.json` (windows, scores,
+  titles).
+
+**Files**: `src/lib/shorts/{pick,render}.ts`, `src/commands/shorts.ts`, `src/cli.ts`,
+`tests/shorts.test.ts`.
+
+**Checks**: typecheck passes. 336 tests, 335 pass, 0 fail, 1 skipped (the one skipped before this
+phase).
+
+- End-to-end with FFmpeg: a 160 s video with sentence timings gives **3 Shorts**, each
+  1080×1920, 29-34 s, with a captions file.
+- The picker test: both strong hooks are picked and the model scores are used.
+- A sample frame was checked by eye: blurred background, the picture in the middle, and the
+  spoken word on a green box.
+
+**How to verify on your PC**
+
+```bash
+npm run cf -- render -p <project>
+```
+
+```bash
+npm run cf -- shorts -p <project>
+```
+
+Then open `output/<project>_short_1.mp4` … `_3.mp4`.
+
+**Open risks**
+
+- The hook score only looks at text. A great hook over weak footage still gets picked. Check the
+  3 Shorts before uploading.
+- Captions use the bundled Inter font. If the channel uses another caption font, the Short still
+  uses Inter.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

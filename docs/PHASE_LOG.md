@@ -1366,10 +1366,18 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Build status with the real model files (2026-11-04)
+
+`src/lib/models/loader.ts` and `embed.ts` are committed (`f62c09f`). With them, a fresh clone
+passes: typecheck clean; 423 tests: 422 pass, 0 fail, 1 skipped (the one skipped before this work).
+The 6 failures reported in the entries above came only from the stand-in files used while these
+two were missing.
+
+---
+
 ## Blocked / needs user
 
-- **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
-  then the pushed branch does not compile.
+- ~~Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC~~ **done** (`f62c09f`): typecheck passes, 423 tests: 422 pass, 0 fail, 1 skipped.
 - **Install explainroo and argo** on your PC to make the first real Explainer / Tutorial.
 - **Run third-party code**: to test earshot / explainroo / argo for real (here or on your PC).
 - **Video API keys** (optional, paid): `GEMINI_API_KEY` for Veo, `RUNWAYML_API_SECRET` for Runway

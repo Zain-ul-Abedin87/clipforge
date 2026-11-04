@@ -37,7 +37,7 @@ export function createMade(b: Record<string, unknown>): { project: string } {
   const project = typeof b.project === "string" && NAME.test(b.project) && exists(b.project) ? b.project : projectSlug(topic, exists);
   saveConfig(project, { type, topic, products: [], channel: typeof b.channel === "string" ? b.channel : "default" });
   if (type === "documentary") {
-    saveDocumentaryInput(project, { topic, title: typeof b.title === "string" ? b.title : undefined, notes: String(b.notes ?? ""), links: lines(b.links), minutes: Number(b.minutes) || 10, script: typeof b.script === "string" ? b.script : undefined });
+    saveDocumentaryInput(project, { topic, title: typeof b.title === "string" ? b.title : undefined, notes: String(b.notes ?? ""), links: lines(b.links), minutes: Number(b.minutes) || 10, script: typeof b.script === "string" ? b.script : undefined, visuals: b.visuals === "ai" ? "ai" : "stock" });
     // The documentary rules (no countdown, longer shots, archive / public-domain footage first).
     const pj = path.join(paths.workspace, project, "project.json");
     writeJson(pj, { ...readJson<Record<string, unknown>>(pj), niche: "documentary" });

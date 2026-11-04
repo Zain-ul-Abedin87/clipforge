@@ -309,8 +309,18 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   }
   const stillWarn = niche.qa?.stillWarn ?? 0.5;
   const stillFail = niche.qa?.stillFail ?? 0.65;
-  add("Originality", "Still images vs motion", stillShare <= stillWarn ? "pass" : stillShare <= stillFail ? "warn" : "fail",
-    `${pct(stillShare)} of the video is still images/cards (warn above ${pct(stillWarn)}, fail above ${pct(stillFail)}; add product video clips to lower it)`);
+  // AI image style: pictures ARE the format; what matters is that they move and change often.
+  const aiStyleVideo = fs.existsSync(path.join(dir, "ai_style_plan.json"));
+  if (aiStyleVideo) {
+    const imgs = tl.scenes.filter((s) => s.asset.kind === "image" && s.asset.source !== "graphic");
+    const still = imgs.filter((s) => !s.motion || s.motion === "none").length;
+    const lens = imgs.map((s) => s.end - s.start).sort((a, b) => a - b);
+    const med = lens.length ? lens[Math.floor(lens.length / 2)] : 0;
+    add("Originality", "AI pictures move and change", still ? "warn" : med <= 8 ? "pass" : "warn",
+      `${imgs.length} AI picture(s), a new one every ${med.toFixed(1)} s on average (aim 8 s or less)${still ? `; ${still} without a camera move` : "; every one has a camera move"}`);
+  } else
+    add("Originality", "Still images vs motion", stillShare <= stillWarn ? "pass" : stillShare <= stillFail ? "warn" : "fail",
+      `${pct(stillShare)} of the video is still images/cards (warn above ${pct(stillWarn)}, fail above ${pct(stillFail)}; add product video clips to lower it)`);
   add("Originality", "Graphic cards", cardShare <= 0.35 ? "pass" : "warn", `${pct(cardShare)} of the video`);
   add("Originality", "Longest run of stills", maxRun <= 4 ? "pass" : "warn", `${maxRun} still scenes in a row`);
 
@@ -424,12 +434,14 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   // A generated talking avatar (Phase 7) is a realistic synthetic person: YouTube wants the label.
   const avatarPlanFile = path.join(dir, "avatar_plan.json");
   const avatarClips = fs.existsSync(avatarPlanFile) ? readJson<{ clips: { file?: string }[] }>(avatarPlanFile).clips.filter((c) => c.file).length : 0;
-  const aiVisuals = generated.length > 0 || avatarClips > 0;
+  // AI pictures (ComfyUI / Gemini, source "imagegen") count too: they were missing before.
+  const aiPictures = tl.scenes.filter((s) => s.asset.source === "imagegen").length;
+  const aiVisuals = generated.length > 0 || avatarClips > 0 || aiPictures > 0;
   const aiVoice = false; // the voiceover is the creator's own
   const forced = style.aiDisclosure === "always";
   const aiDisclosure = {
     required: aiVisuals || aiVoice || forced,
-    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals ? (avatarClips ? `${avatarClips} AI avatar clip(s) (lip-synced presenter) are used` : `${generated.length} AI-generated clip(s) (Google Flow / Veo) are used`) : aiVoice ? "AI-generated realistic voice is used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
+    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals ? (avatarClips ? `${avatarClips} AI avatar clip(s) (lip-synced presenter) are used` : generated.length ? `${generated.length} AI-generated clip(s) (Google Flow / Veo) are used` : `${aiPictures} AI-generated picture(s) are used (YouTube asks for the label on realistic ones; a clearly unreal style such as a cartoon may not need it: check YouTube's current rule)`) : aiVoice ? "AI-generated realistic voice is used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
   };
   add("Publish", "YouTube \"altered or synthetic content\" label", "pass", aiDisclosure.required ? "TURN ON when uploading" : aiDisclosure.reason);
   add("Publish", "Human review", "warn", "watch the video and press Approve in the QA tab before uploading");

@@ -37,6 +37,18 @@
   .facts td:first-child{white-space:nowrap}
   .facts .q{color:var(--muted);font-size:var(--fs-xs);margin-top:2px}
   .removed{font-size:var(--fs-xs);color:var(--muted);text-decoration:line-through}
+  .stylebox{border:1px solid var(--border2);border-radius:var(--r);padding:14px;margin-top:12px}
+  .stylebox textarea#stLook{min-height:64px}
+  .xbtn{height:40px;min-width:34px;border-radius:var(--r-sm);border:1px solid var(--border2);background:var(--surface);color:var(--muted);cursor:pointer;font-size:18px;line-height:1}
+  .refs .xbtn{background:rgba(0,0,0,.65);color:#fff;border:0;font-size:14px}
+  .refs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .refs img{width:96px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border2)}
+  .char{display:grid;grid-template-columns:140px 1fr 34px;gap:8px;margin-top:8px}
+  @media (max-width:640px){.char{grid-template-columns:1fr}}
+  .preview{width:100%;max-width:640px;border-radius:10px;margin-top:8px;display:block}
+  .opt2{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer}
+  .opt2 input{width:auto;margin-top:4px}
+  .opt2:has(input:checked){border-color:var(--accent);background:rgba(81,130,239,.08)}
 </style>
 </head>
 <body>
@@ -65,6 +77,31 @@
         <label class="lbl" for="doNotes" style="margin-top:12px">Your own facts (optional)</label>
         <textarea id="doNotes" rows="4" placeholder="Facts you know and want in the video, with the numbers."></textarea>
         <p class="help">ClipForge also reads Wikipedia on the topic. Every number, date and name in the script is checked against these sources; what no source confirms is taken out.</p>
+        <label class="lbl" style="margin-top:12px">Pictures</label>
+        <div class="grid2">
+          <label class="opt2"><input type="radio" name="doVis" value="stock" checked><span><b>Real footage</b><br><span class="hint">Stock and archive clips (needs Pexels / Pixabay keys)</span></span></label>
+          <label class="opt2"><input type="radio" name="doVis" value="ai"><span><b>AI pictures in one style</b><br><span class="hint">One picture per scene, the same look in every one</span></span></label>
+        </div>
+        <div class="stylebox" id="styleBox" hidden>
+          <div class="grid2">
+            <div><label class="lbl" for="stPreset">Start from</label><select id="stPreset"></select></div>
+            <div><label class="lbl" for="stEngine">Made by</label><select id="stEngine"><option value="comfyui">ComfyUI on this PC (free)</option><option value="gemini">Gemini API (paid, GEMINI_API_KEY)</option></select></div>
+          </div>
+          <label class="lbl" for="stLook" style="margin-top:10px">The look (added to every picture)</label>
+          <textarea id="stLook" rows="2"></textarea>
+          <label class="lbl" for="stAvoid" style="margin-top:8px">Never in the pictures</label>
+          <input id="stAvoid">
+          <label class="lbl" style="margin-top:10px">Reference pictures (up to 5): your style, or your character</label>
+          <div class="refs" id="stRefs"></div>
+          <div class="row" style="margin-top:6px"><label class="btn small">Add pictures<input type="file" id="stRefFile" accept="image/png,image/jpeg,image/webp" multiple hidden></label><button class="btn small" id="stLearn">Learn the look from my pictures</button></div>
+          <label class="lbl" style="margin-top:10px">Characters (up to 4): the same look whenever the script names them</label>
+          <div id="stChars"></div>
+          <div class="row"><button class="btn small" id="stAddChar">+ Character</button></div>
+          <label class="lbl" for="stTest" style="margin-top:10px">Test one picture</label>
+          <div class="row" style="margin:0"><input id="stTest" placeholder="e.g. a busy harbour at dawn, sailing ships, wide shot" style="flex:1"><button class="btn small" id="stTestGo">Make a test picture</button></div>
+          <div id="stTestOut"></div>
+          <div class="row" style="justify-content:flex-end"><button class="btn small primary" id="stSave">Save the style</button></div>
+        </div>
         <details style="margin-top:8px"><summary class="help" style="cursor:pointer">I already have my own script</summary>
           <textarea id="doScript" rows="8" placeholder="Paste your whole script. The AI does not rewrite it; only the facts are checked."></textarea></details>
         <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="doGo">Research &amp; write &rarr;</button></div>
@@ -254,11 +291,81 @@ async function create(body) {
   history.replaceState(null, "", `/make?v=${project}`);
 }
 
+// ---------- AI picture style (per channel: channels/<ch>/ai_style) ----------
+const CH = "default";
+let st = null;
+const styleUrl = (f) => `/api/aistyle/${CH}/file?name=${encodeURIComponent(f)}`;
+async function loadStyleBox() {
+  const r = await api(`/api/aistyle/${CH}`);
+  st = r.style;
+  $("stPreset").innerHTML = `<option value="">My saved style</option>` + r.presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join("");
+  $("stPreset").onchange = () => {
+    const p = r.presets[Number($("stPreset").value)];
+    if (p && $("stPreset").value !== "") { $("stLook").value = p.look; $("stAvoid").value = p.avoid; }
+  };
+  $("stEngine").value = r.engine;
+  $("stLook").value = st.look;
+  $("stAvoid").value = st.avoid;
+  drawRefs();
+  drawChars();
+}
+function drawRefs() {
+  $("stRefs").innerHTML = st.refs.length ? st.refs.map((f, i) => `<span style="position:relative"><img src="${styleUrl(f)}" alt=""><button class="xbtn" data-delref="${i}" style="position:absolute;top:2px;right:2px;height:22px;width:22px;padding:0">&times;</button></span>`).join("") : '<span class="hint">None yet: the look text alone is used.</span>';
+  for (const b of $("stRefs").querySelectorAll("[data-delref]")) b.onclick = () => { st.refs.splice(Number(b.dataset.delref), 1); drawRefs(); };
+}
+function drawChars() {
+  $("stChars").innerHTML = st.characters.map((c, i) => `<div class="char"><input data-cn="${i}" placeholder="Name" value="${esc(c.name)}"><input data-cl="${i}" placeholder="Look: e.g. an old sea captain, grey beard, blue coat" value="${esc(c.look)}"><button class="xbtn" data-cx="${i}">&times;</button></div>`).join("");
+  for (const x of $("stChars").querySelectorAll("[data-cn]")) x.oninput = () => (st.characters[x.dataset.cn].name = x.value);
+  for (const x of $("stChars").querySelectorAll("[data-cl]")) x.oninput = () => (st.characters[x.dataset.cl].look = x.value);
+  for (const x of $("stChars").querySelectorAll("[data-cx]")) x.onclick = () => { st.characters.splice(Number(x.dataset.cx), 1); drawChars(); };
+}
+async function saveStyle(quiet) {
+  const r = await api(`/api/aistyle/${CH}`, { method: "PUT", body: { engine: $("stEngine").value, style: { ...st, name: $("stPreset").selectedOptions[0]?.text || st.name, look: $("stLook").value, avoid: $("stAvoid").value } } });
+  st = r.style;
+  if (!quiet) { drawRefs(); drawChars(); err(""); }
+  return r;
+}
+for (const r of document.querySelectorAll('input[name="doVis"]')) r.onchange = () => {
+  const ai = document.querySelector('input[name="doVis"]:checked').value === "ai";
+  $("styleBox").hidden = !ai;
+  if (ai && !st) loadStyleBox().catch((e) => err(e.message));
+};
+$("stRefFile").onchange = async () => {
+  try {
+    for (const f of [...$("stRefFile").files].slice(0, 5 - st.refs.length)) {
+      const res = await fetch(`/api/aistyle/${CH}/ref`, { method: "POST", headers: { "x-filename": encodeURIComponent(f.name) }, body: f });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "upload failed");
+      st.refs.push(j.file);
+    }
+    await saveStyle(false);
+  } catch (e) { err(e.message); }
+};
+$("stLearn").onclick = async () => {
+  $("stLearn").disabled = true;
+  try { const r = await api(`/api/aistyle/${CH}/learn`, { method: "POST" }); $("stLook").value = r.look; $("stAvoid").value = r.avoid; } catch (e) { err(e.message); }
+  $("stLearn").disabled = false;
+};
+$("stAddChar").onclick = () => { if (st.characters.length < 4) { st.characters.push({ name: "", look: "" }); drawChars(); } };
+$("stSave").onclick = () => saveStyle(false).catch((e) => err(e.message));
+$("stTestGo").onclick = async () => {
+  $("stTestGo").disabled = true;
+  $("stTestOut").innerHTML = '<div class="busy" style="margin-top:8px"><span class="spin"></span><div>Making one picture...</div></div>';
+  try {
+    await saveStyle(true);
+    const r = await api(`/api/aistyle/${CH}/preview`, { method: "POST", body: { scene: $("stTest").value } });
+    $("stTestOut").innerHTML = `<img class="preview" src="${r.url}" alt="test picture"><p class="hint">${esc(r.prompt)}</p>`;
+  } catch (e) { $("stTestOut").innerHTML = ""; err(e.message); }
+  $("stTestGo").disabled = false;
+};
+
 $("doGo").onclick = async () => {
   err("");
   $("doGo").disabled = true;
   try {
-    await create({ type: "documentary", topic: $("doTopic").value, minutes: Number($("doLen").value), links: $("doLinks").value, notes: $("doNotes").value, script: $("doScript").value });
+    const visuals = document.querySelector('input[name="doVis"]:checked').value;
+    if (visuals === "ai") await saveStyle(true);
+    await create({ type: "documentary", topic: $("doTopic").value, minutes: Number($("doLen").value), links: $("doLinks").value, notes: $("doNotes").value, script: $("doScript").value, visuals });
     loadedText = false;
     view = "review";
     await run("writing");

@@ -42,6 +42,8 @@ import { researchRoute } from "./routes/research.js";
 import { pipelineRoute } from "./routes/pipeline.js";
 import { wizardRoute } from "./routes/wizard.js";
 import { makeRoute } from "./routes/make.js";
+import { aistyleRoute } from "./routes/aistyle.js";
+import { saveRef } from "../lib/assets/aiStyle.js";
 import { setRecording, tutorialDir, VIDEO_EXT } from "../lib/formats/tutorial.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
@@ -783,6 +785,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     }
   }
 
+  // AI image style: a reference picture (at most 15 MB) into channels/<ch>/ai_style/.
+  if (parts[1] === "aistyle" && parts[3] === "ref" && method === "POST") {
+    const ch = parts[2] ?? "";
+    if (!listChannels().includes(ch)) return send(res, 400, { error: "unknown channel" });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const c of req) {
+      size += (c as Buffer).length;
+      if (size > 15 * 1024 * 1024) return send(res, 413, { error: "The picture is larger than 15 MB." });
+      chunks.push(c as Buffer);
+    }
+    try {
+      return send(res, 200, { file: saveRef(ch, decodeURIComponent(String(req.headers["x-filename"] ?? "ref.png")), Buffer.concat(chunks)) });
+    } catch (err) {
+      return send(res, 400, { error: (err as Error).message });
+    }
+  }
+
   // Tutorial: the creator's screen recording, streamed to workspace/<project>/tutorial/.
   if (parts[1] === "make" && parts[3] === "recording" && method === "POST") {
     const name = parts[2];
@@ -803,7 +823,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   {
-    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req))) ?? (await wizardRoute(parts, method, () => readBody(req, 8 * 1024 * 1024))) ?? (await makeRoute(parts, method, () => readBody(req, 1024 * 1024)));
+    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req))) ?? (await wizardRoute(parts, method, () => readBody(req, 8 * 1024 * 1024))) ?? (await makeRoute(parts, method, () => readBody(req, 1024 * 1024))) ?? (await aistyleRoute(parts, method, () => readBody(req, 64 * 1024), url.searchParams));
     const file = r && "file" in r ? (r as { file?: string }).file : undefined;
     if (file) return streamFile(req, res, file);
     if (r) return send(res, r.status, r.body);

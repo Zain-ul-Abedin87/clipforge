@@ -119,6 +119,22 @@ program
   });
 
 program
+  .command("aistyle")
+  .description("AI image style: one picture per footage scene, in the channel's fixed look (channels/<ch>/ai_style) -> assets.json")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--channel <name>", "channel whose style is used", "default")
+  .action(async (o) => {
+    const { runAiStyle } = await import("./lib/assets/aiStyle.js");
+    const { projectDir } = await import("./lib/project.js");
+    try {
+      await runAiStyle(projectDir(String(o.project)), { channel: String(o.channel) });
+    } catch (err) {
+      console.error(`[aistyle] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command("documentary")
   .description("Documentary: research (your links, notes, Wikipedia) -> chapters -> narration -> fact check -> script.txt + factcheck.json")
   .requiredOption("-p, --project <name>", "project name")

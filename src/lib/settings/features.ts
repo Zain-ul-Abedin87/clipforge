@@ -129,6 +129,20 @@ export interface FeatureSettings {
     sources: string[];
     pythonCmd: string;
   };
+  aistyle: {
+    /** Where the pictures are made: "comfyui" (this PC, free) or "gemini" (Gemini API, paid, GEMINI_API_KEY). */
+    engine: string;
+    /** Gemini image model (ids from Google's own SDK, e.g. gemini-2.5-flash-image). */
+    geminiModel: string;
+    /** ComfyUI + IP-Adapter: how strongly the reference pictures steer the look (0-1). */
+    refWeight: number;
+    /** IP-Adapter Unified Loader preset (cubiq/ComfyUI_IPAdapter_plus), e.g. "PLUS (high strength)". */
+    ipadapterPreset: string;
+    /** Use the reference pictures through IP-Adapter in ComfyUI (needs that node pack + its models). */
+    ipadapter: boolean;
+    /** At most this many pictures per video (each costs time, or money with Gemini). */
+    maxImages: number;
+  };
   factcheck: {
     /** Read Wikipedia articles on the topic as sources (free, no key; every claim links its article). */
     wikipedia: boolean;
@@ -204,6 +218,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
+  aistyle: { engine: "comfyui", geminiModel: "gemini-2.5-flash-image", refWeight: 0.8, ipadapterPreset: "PLUS (high strength)", ipadapter: false, maxImages: 400 },
   factcheck: { wikipedia: true, wikiLang: "en", wikiPages: 3, removeUnverified: true, minOverlap: 2 },
   formats: { explainroo: "explainroo", explainerTheme: "paper", fixRounds: 3, argo: "argo", sceneThreshold: 0.3, minSceneSec: 4, wordsPerSec: 2.4 },
   earshot: { enabled: false, command: "earshot", sfxBank: true, whoosh: "whoosh_fast/crisp", pop: "pop/1", syncCheck: true, minHit: 0.8 },

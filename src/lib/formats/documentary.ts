@@ -33,6 +33,8 @@ export interface DocumentaryInput {
   minutes?: number;
   /** The creator's own script: not written by the AI, only fact-checked. */
   script?: string;
+  /** Pictures: stock / archive footage, or AI pictures in the channel's fixed style (src/lib/assets/aiStyle.ts). */
+  visuals?: "stock" | "ai";
 }
 
 const dirOf = (project: string) => path.join(paths.workspace, project);
@@ -50,6 +52,7 @@ export function saveDocumentaryInput(project: string, i: DocumentaryInput): Docu
     links: (i.links ?? []).map((u) => String(u).trim()).filter((u) => /^https?:\/\//i.test(u)).slice(0, 8),
     minutes: Math.max(3, Math.min(30, Math.round(Number(i.minutes) || 10))),
     ...(script ? { script } : {}),
+    visuals: i.visuals === "ai" ? "ai" : "stock",
   };
   fs.mkdirSync(dirOf(project), { recursive: true });
   fs.writeFileSync(inputFile(project), JSON.stringify(clean, null, 2));

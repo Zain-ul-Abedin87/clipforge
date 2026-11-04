@@ -115,6 +115,12 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
   if (cfg?.type === "documentary") {
     if (stage === "research") return [];
     if (stage === "writing") return version ? [["translate", "-p", project]] : [["documentary", "-p", project, "--write"]];
+    // AI image style: every footage scene becomes a picture in the channel's look (no stock search).
+    const din = path.join(dir, "documentary.json");
+    if (stage === "visuals" && fs.existsSync(din) && readJson<{ visuals?: string }>(din).visuals === "ai") {
+      const ch = cfg.channel ?? p.channel ?? "default";
+      return [["plan", "-p", project, "--channel", ch], ["aistyle", "-p", project, "--channel", ch]];
+    }
   }
   switch (stage) {
     case "research":

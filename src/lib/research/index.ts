@@ -73,6 +73,8 @@ export async function runTitles(topic: string, o: { db?: ResearchDb; api?: YouTu
   }
   const news = feats.titles.newsHooks ? await newsHooks(topic, { db, log, fetch: o.fetchNews }) : [];
   const { loadBrief } = await import("../channelBrief.js");
+  // Our own past titles count too: a new title must not repeat one of the channel's videos.
+  if (o.channel) for (const t of (await import("../channelHistory.js")).pastTitles(o.channel)) if (!comp.has(t)) comp.set(t, undefined);
   const result = await generateTitles(topic, [...comp.entries()].map(([title, views]) => ({ title, views })), { news, log, brief: loadBrief(o.channel) });
   db.saveScan("titles", [topic], result);
   return result;

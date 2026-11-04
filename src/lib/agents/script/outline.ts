@@ -5,6 +5,7 @@ import { llm, llmAvailable } from "../llm/llm.js";
 import { withStage } from "../../models/loader.js";
 import type { SourcedFact } from "./facts.js";
 import { briefPrompt, ChannelBrief } from "../../channelBrief.js";
+import { FormatId, formatOf } from "./formats.js";
 
 /**
  * Script outline: intro (hook), one section per product (countdown order), outro. Word budgets add
@@ -13,7 +14,7 @@ import { briefPrompt, ChannelBrief } from "../../channelBrief.js";
  */
 
 export interface OutlineSection {
-  kind: "intro" | "product" | "outro";
+  kind: "intro" | "product" | "compare" | "outro";
   product?: string;
   rank?: number;
   words: number;
@@ -25,9 +26,16 @@ export interface OutlineSection {
   beats?: string[];
   /** SOP rules / do / don't the writer follows. */
   rules?: string[];
+  /** The format's instruction for this section (formats.ts). */
+  what?: string;
+  /** The rule-mode opening line. */
+  lead?: string;
+  /** Items whose sourced facts this section may state. */
+  factItems?: string[];
 }
 export interface Outline {
   topic: string;
+  format: FormatId;
   targetWords: number;
   sections: OutlineSection[];
 }
@@ -45,12 +53,13 @@ export function splitBudget(total: number, weights: number[]): number[] {
 
 const Angles = z.object({ sections: z.array(z.object({ product: z.string(), angle: z.string() })), hook: z.string() });
 
-export async function buildOutline(topic: string, products: string[], targetWords: number, facts: SourcedFact[], log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<Outline> {
-  // Countdown: the last product in the list is #1.
-  const weights = [0.08, ...products.map((_, i) => (i === products.length - 1 ? 1.2 : 1) * (0.87 / products.length)), 0.05];
-  const budgets = splitBudget(targetWords, weights);
+export async function buildOutline(topic: string, products: string[], targetWords: number, facts: SourcedFact[], log: (m: string) => void = () => {}, brief?: ChannelBrief | null, format?: FormatId): Promise<Outline> {
+  const fmt = formatOf(format);
+  // The format's section plan (countdown: the last product in the list is #1).
+  const plan = fmt.plan(topic, products);
+  const budgets = splitBudget(targetWords, plan.map((p) => p.weight));
   const angles = new Map<string, string>();
-  let hook = `The ${products.length} best ${topic}, ranked from good to the one worth your money.`;
+  let hook = fmt.id === "countdown" ? `The ${products.length} best ${topic}, ranked from good to the one worth your money.` : plan[0].lead;
   if (llmAvailable()) {
     try {
       const res = await withStage("script", () =>
@@ -58,7 +67,7 @@ export async function buildOutline(topic: string, products: string[], targetWord
           model: env("LLM_MODEL", "claude-haiku-4-5"),
           max_tokens: 1500,
           output_config: { format: zodOutputFormat(Angles) },
-          system: `You plan a countdown YouTube script. For each product give a one-sentence angle (who it is for, what sets it apart) based only on the facts given. Also a one-sentence hook for the intro. Original wording, no hype words like 'game-changer'.${brief ? `\n${briefPrompt(brief)}` : ""}`,
+          system: `You plan a YouTube script. Format: ${fmt.rules} For each item give a one-sentence angle (what sets it apart, who it matters to) based only on the facts given. Also a one-sentence hook for the intro. Original wording, no hype words like 'game-changer'.${brief ? `\n${briefPrompt(brief)}` : ""}`,
           messages: [{ role: "user", content: JSON.stringify({ topic, products: products.map((p) => ({ product: p, facts: facts.filter((f) => f.product === p).map((f) => `${f.label}: ${f.value}`) })) }) }],
         }),
       );
@@ -68,12 +77,27 @@ export async function buildOutline(topic: string, products: string[], targetWord
       log(`[script] outline angles failed (${String((err as Error).message).slice(0, 100)}); rule angles`);
     }
   }
-  const sections: OutlineSection[] = [{ kind: "intro", words: budgets[0], angle: hook, factIds: [] }];
-  products.forEach((p, i) =>
-    sections.push({ kind: "product", product: p, rank: products.length - i, words: budgets[i + 1], angle: angles.get(p) ?? `What ${p} does well, who should buy it, and its trade-offs.`, factIds: facts.filter((f) => f.product === p).map((f) => f.id) }),
-  );
-  sections.push({ kind: "outro", words: budgets.at(-1)!, angle: "Recap the top pick and invite a comment.", factIds: [] });
-  for (const s of sections) s.names = products;
-  log(`[script] outline: ${sections.length} sections, ${targetWords} words (${budgets.join("/")})`);
-  return { topic, targetWords, sections };
+  const sections: OutlineSection[] = plan.map((p, i) => ({
+    kind: p.kind,
+    product: p.product,
+    rank: p.rank,
+    words: budgets[i],
+    angle:
+      p.kind === "intro"
+        ? hook
+        : p.kind === "outro"
+          ? fmt.id === "countdown"
+            ? "Recap the top pick and invite a comment."
+            : "Sum up and give a clear answer, then invite a comment."
+          : p.product
+            ? angles.get(p.product) ?? (fmt.id === "countdown" ? `What ${p.product} does well, who should buy it, and its trade-offs.` : `What matters most about ${p.product}, and its trade-off.`)
+            : "Compare them on the same points, one at a time.",
+    factIds: facts.filter((f) => p.factItems.includes(f.product)).map((f) => f.id),
+    what: fmt.id === "countdown" ? undefined : p.what,
+    lead: p.lead,
+    factItems: p.factItems,
+    names: products,
+  }));
+  log(`[script] outline (${fmt.id}): ${sections.length} sections, ${targetWords} words (${budgets.join("/")})`);
+  return { topic, format: fmt.id, targetWords, sections };
 }

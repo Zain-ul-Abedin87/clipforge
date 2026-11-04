@@ -4,6 +4,7 @@ import { askJson } from "../llm/json.js";
 import type { Sop } from "../sop/extract.js";
 import { splitSentences } from "./facts.js";
 import type { Outline, OutlineSection } from "./outline.js";
+import { formatOf } from "./formats.js";
 
 /**
  * Retention plan (beat sheet) on top of the outline, and the check that the written script
@@ -68,7 +69,8 @@ export function scheduleRehooks(sections: { startWord: number; words: number }[]
   return out;
 }
 
-export async function planBeats(outline: Outline, o: { brief?: ChannelBrief | null; sop?: Sop | null; format?: string; log?: (m: string) => void } = {}): Promise<BeatSheet> {
+export async function planBeats(outline: Outline, o: { brief?: ChannelBrief | null; sop?: Sop | null; log?: (m: string) => void } = {}): Promise<BeatSheet> {
+  const fmt = formatOf(outline.format);
   const log = o.log ?? (() => {});
   const wpm = o.brief?.wpm ?? 150;
   const secs = outline.sections;
@@ -83,15 +85,24 @@ export async function planBeats(outline: Outline, o: { brief?: ChannelBrief | nu
   const sched = scheduleRehooks(pos, every, total);
   const hookType: "question" | "stakes" = o.sop?.hookFormula.type === "stakes" ? "stakes" : "question";
   const products = secs.filter((s) => s.kind === "product");
-  const top = products.find((s) => s.rank === 1) ?? products.at(-1);
-  const topIdx = top ? secs.indexOf(top) : secs.length - 1;
+  const items = products.map((s) => s.product ?? "");
+  const fallbackLoop = fmt.loop(secs);
+  // Per format: the rule hook (question / stakes), what is held back, and the promise.
+  const H: Record<string, { q: string; s: string; withheld: string; promise: string }> = {
+    countdown: { q: `Which of these ${products.length || "picks"} ${outline.topic} is actually worth your money?`, s: `Pick the wrong one of these ${outline.topic} and you pay for it twice.`, withheld: fallbackLoop ? `which one is number one (${fallbackLoop.answerKey})` : "the final answer", promise: "By the end you'll know which one fits you, and why number one won." },
+    versus: { q: `${items[0] ?? "A"} or ${items[1] ?? "B"}: which one deserves your money?`, s: `Pick the wrong one of these two and you live with it for years.`, withheld: "the verdict and the deciding factor", promise: "By the end you'll know which one fits you, and the one detail that decides it." },
+    "myth-vs-reality": { q: `How many of these ${outline.topic} myths do you still believe?`, s: `Believe the wrong thing about ${outline.topic} and it costs you.`, withheld: "the myth that costs the most", promise: "By the end you'll know what is true, and which myth hurts your wallet worst." },
+    "history-of": { q: `How did ${outline.topic} end up the way it is today?`, s: `Most people get the story of ${outline.topic} wrong.`, withheld: "the turning point", promise: "By the end you'll know how it got here, and the one moment that changed it." },
+    "every-x-explained": { q: `Which type of ${outline.topic} is actually right for you?`, s: `Buy the wrong type of ${outline.topic} and it never fits how you use it.`, withheld: "which type fits most people", promise: "By the end you'll know every type, and which one to pick." },
+  };
+  const h = H[fmt.id];
   const rules = o.sop ? [...o.sop.rules.slice(0, 4), ...o.sop.do.slice(0, 2).map((d) => `Do: ${d}`), ...o.sop.dont.slice(0, 2).map((d) => `Don't: ${d}`)] : [];
 
   const fallback = (): z.infer<typeof Plan> => ({
-    hook: { idea: hookType === "question" ? `Which of these ${products.length || "picks"} ${outline.topic} is actually worth your money?` : `Pick the wrong one of these ${outline.topic} and you pay for it twice.`, withheld: top ? `which one is number one (${top.product})` : "the final answer" },
-    promise: `By the end you'll know which one fits you, and why number one won.`,
-    sections: secs.map((s, index) => ({ index, angle: s.angle, turn: s.kind === "product" ? `But: its main trade-off. Therefore: who should buy it anyway.` : s.kind === "intro" ? "But: the obvious choice is not always the right one. Therefore: stay for the ranking." : "But: no pick is perfect. Therefore: match it to how you will use it." })),
-    loops: top ? [{ question: "Which one is number one?", answerKey: top.product ?? "", plantedInSection: 0, paidOffInSection: topIdx }] : [],
+    hook: { idea: hookType === "question" ? h.q : h.s, withheld: h.withheld },
+    promise: h.promise,
+    sections: secs.map((s, index) => ({ index, angle: s.angle, turn: s.kind === "product" || s.kind === "compare" ? `But: its main trade-off. Therefore: who it suits anyway.` : s.kind === "intro" ? "But: the obvious answer is not always the right one. Therefore: stay to the end." : "But: nothing is perfect. Therefore: match it to how you will use it." })),
+    loops: fallbackLoop ? [fallbackLoop] : [],
     rehookTechniques: sched.map((_, i) => REHOOK_TECHNIQUES[i % 3]),
   });
 
@@ -102,7 +113,7 @@ export async function planBeats(outline: Outline, o: { brief?: ChannelBrief | nu
     label: "beats",
     log,
     maxTokens: 1800,
-    system: `You plan the retention beats of a ${o.format ?? "countdown"} YouTube script. Return JSON:
+    system: `You plan the retention beats of a YouTube script. Format: ${fmt.rules} Return JSON:
 - hook: a ${hookType}-first opening idea (under 40 words) that holds back the answer; "withheld" names what is not revealed until later.
 - promise: one line said in the first 30 seconds: what the viewer gets by the end.
 - sections: for each section index, a one-sentence angle and a "but / therefore" turn (a complication, then what follows from it).
@@ -123,7 +134,7 @@ Use only what the sections say; invent no facts or numbers.${o.brief ? `\n${brie
   const plan = r.value;
   for (const s of plan.sections) if (secs[s.index] && r.source === "model") secs[s.index].angle = s.angle;
   const sheet: BeatSheet = {
-    format: o.format ?? "countdown",
+    format: fmt.id,
     wpm,
     hook: { type: hookType, idea: plan.hook.idea, withheld: plan.hook.withheld },
     promise: plan.promise,
@@ -158,7 +169,7 @@ export function beatInstructions(sheet: BeatSheet, index: number): string[] {
     out.push(`${offset <= 10 ? "Open this section" : `About ${offset} words into this section, place`} a re-hook: one sentence to ${TECH_TEXT[rh.technique]}.`);
   }
   for (const l of sheet.loops.filter((x) => x.plantedInSection === index)) out.push(`Plant this open question and do NOT answer it here: ${l.question}`);
-  for (const l of sheet.loops.filter((x) => x.paidOffInSection === index)) out.push(`Pay off the open question "${l.question}" clearly, and say ${l.answerKey}.`);
+  for (const l of sheet.loops.filter((x) => x.paidOffInSection === index)) out.push(`Pay off the open question "${l.question}" clearly, and say "${l.answerKey}".`);
   const turn = sheet.sections[index]?.turn;
   if (turn) out.push(`Include this but/therefore turn: ${turn}`);
   return out;

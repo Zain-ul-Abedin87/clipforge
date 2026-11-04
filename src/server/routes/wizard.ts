@@ -44,6 +44,7 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
           products: list(b.products),
           words: b.words ? Number(b.words) : undefined,
           channel: b.channel ? String(b.channel) : undefined,
+          format: typeof b.format === "string" ? b.format : undefined,
           sources,
           project: b.project ? String(b.project) : undefined,
           scriptMode: b.scriptMode === "own" || b.scriptMode === "none" ? b.scriptMode : "ai",

@@ -347,6 +347,7 @@ program
   .option("--facts <file>", "JSON [{product,label,value,url,title}] (default <project>/facts_sources.json)")
   .option("--competitors <ids>", "comma-separated YouTube video ids whose transcripts the script must not copy")
   .option("--channel <id>", "channel whose brief (voice, audience, length) is used (default: the project's channel)")
+  .option("--format <id>", "countdown (default), versus, myth-vs-reality, history-of, every-x-explained (--products = the items)")
   .option("--sop <competitor>", "follow this competitor SOP of the channel (default: the channel's newest SOP; \"none\" = no SOP)")
   .action(async (o) => {
     const fs = await import("node:fs");
@@ -382,9 +383,20 @@ program
     const sop = channel && o.sop !== "none" ? loadSop(channel, o.sop ? String(o.sop) : undefined) : null;
     if (o.sop && o.sop !== "none" && !sop) console.warn(`[script] no SOP "${o.sop}" for channel ${channel}: writing without one`);
     if (sop) console.log(`[script] following the SOP learned from ${sop.competitor} (${sop.stats.videos} videos)`);
+    const { isFormat, itemsProblem } = await import("./lib/agents/script/formats.js");
+    const format = isFormat(o.format) ? o.format : isFormat(proj.format) ? (proj.format as typeof o.format) : "countdown";
+    if (o.format && !isFormat(o.format)) console.warn(`[script] unknown format "${o.format}": countdown`);
+    const items = String(o.products).split(",").map((x: string) => x.trim()).filter(Boolean);
+    const bad = itemsProblem(format, items);
+    if (bad) {
+      console.error(`[script] ${bad}`);
+      process.exitCode = 1;
+      return;
+    }
     const { report } = await writeScript(dir, {
       brief,
       sop,
+      format,
       topic: String(o.topic),
       products: String(o.products).split(",").map((x) => x.trim()).filter(Boolean),
       targetWords: o.words ? Number(o.words) : undefined,

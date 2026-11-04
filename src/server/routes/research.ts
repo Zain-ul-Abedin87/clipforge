@@ -47,6 +47,12 @@ export async function researchRoute(parts: string[], method: string, body: () =>
       if (!topic) return { status: 400, body: { error: "topic is required" } };
       return { status: 200, body: await runTitles(topic, { db, api, channel: typeof req.channel === "string" ? req.channel : undefined, log: (m) => (logs.push(m), console.log(m)) }) };
     }
+    // Script formats for /new: the list, and the one the title points to.
+    if (method === "POST" && parts[2] === "formats") {
+      const { FORMATS, FORMAT_IDS, suggestFormat } = await import("../../lib/agents/script/formats.js");
+      const req = JSON.parse((await body()) || "{}") as { title?: unknown };
+      return { status: 200, body: { formats: FORMAT_IDS.map((id) => ({ id, label: FORMATS[id].label, items: FORMATS[id].items, itemHint: FORMATS[id].itemHint, min: FORMATS[id].minItems, max: FORMATS[id].maxItems })), suggested: suggestFormat(typeof req.title === "string" ? req.title : "") } };
+    }
     // Idea multiplier: POST {videoId, channel, title?} -> 15 ideas; GET /ideas/<channel>/<videoId> -> the saved run.
     if (parts[2] === "ideas") {
       const { multiplyIdeas } = await import("../../lib/agents/ideas.js");

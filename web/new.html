@@ -88,9 +88,10 @@
 
     <!-- 2 PRODUCTS -->
     <div class="pane card" data-pane="2" hidden>
-      <h2>2. Which products?</h2>
-      <p class="help" style="margin-top:-8px">Countdown order: the <b>last</b> product is your #1. A product page link is optional; with one, the script can quote real specs and prices (with the source).</p>
-      <div class="prod-head"><span></span><span>Product name</span><span class="link">Product page link (optional)</span><span></span></div>
+      <h2 id="itemsTitle">2. Which products?</h2>
+      <div style="max-width:420px"><label class="lbl" for="format">Video format</label><select id="format" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"><option value="countdown">Countdown (ranked list)</option></select><p class="hint" id="formatNote" style="margin:4px 0 0"></p></div>
+      <p class="help" id="itemsHelp" style="margin-top:8px">Countdown order: the <b>last</b> product is your #1. A product page link is optional; with one, the script can quote real specs and prices (with the source).</p>
+      <div class="prod-head"><span></span><span id="itemsCol">Product name</span><span class="link">Product page link (optional)</span><span></span></div>
       <div id="products"></div>
       <div class="row"><button class="btn small" id="addProd">+ Add product</button></div>
       <label class="lbl" style="margin-top:20px">Script</label>
@@ -240,16 +241,42 @@ const chosenTitle = () => {
   if (!r) return "";
   return r.value === "__own" ? $("ownTitle").value.trim() : r.value;
 };
-$("to2").onclick = () => {
+// ---------- format (countdown, versus, myth vs reality, history of, every X explained) ----------
+let formats = [{ id: "countdown", label: "Countdown (ranked list)", items: "Products", itemHint: "Countdown order: the last one is your #1.", min: 2, max: 15 }];
+let formatPicked = false;
+const curFormat = () => formats.find((f) => f.id === $("format").value) || formats[0];
+function showFormat() {
+  const f = curFormat();
+  const cd = f.id === "countdown";
+  $("itemsTitle").textContent = cd ? "2. Which products?" : `2. ${f.items}`;
+  $("itemsHelp").innerHTML = cd ? "Countdown order: the <b>last</b> product is your #1. A product page link is optional; with one, the script can quote real specs and prices (with the source)." : `${esc(f.itemHint)} A source link per line is optional; with one, the script can quote real facts (with the source).`;
+  $("itemsCol").textContent = cd ? "Product name" : f.items.replace(/s?\s*\(.*$/, "").replace(/s$/, "");
+  renumber();
+}
+async function suggestFormatFor(title) {
+  const r = await api("/api/research/formats", { method: "POST", body: { title } }).catch(() => null);
+  if (!r) return;
+  formats = r.formats;
+  const cur = $("format").value;
+  $("format").innerHTML = formats.map((f) => `<option value="${esc(f.id)}">${esc(f.label)}</option>`).join("");
+  $("format").value = formatPicked ? cur : r.suggested;
+  $("formatNote").textContent = !formatPicked && r.suggested !== "countdown" ? "Suggested from the title; change it if it does not fit." : "";
+  showFormat();
+}
+$("format").onchange = () => { formatPicked = true; $("formatNote").textContent = ""; showFormat(); };
+$("to2").onclick = async () => {
   if (!$("topic").value.trim()) return err("Type what the video is about.");
   if (!$("products").children.length) for (let i = 0; i < 3; i++) addProduct();
+  await suggestFormatFor(chosenTitle() || $("topic").value);
+  if (curFormat().id === "versus") while ($("products").children.length > 2) $("products").lastElementChild.remove();
   showStep(2);
 };
 
 // ---------- step 2 ----------
 function renumber() {
   const rows = [...$("products").children];
-  rows.forEach((r, i) => (r.querySelector(".rank").textContent = `#${rows.length - i}`));
+  const cd = !$("format") || $("format").value === "countdown";
+  rows.forEach((r, i) => (r.querySelector(".rank").textContent = cd ? `#${rows.length - i}` : $("format").value === "versus" ? "AB"[i] || "" : `${i + 1}`));
 }
 function addProduct(name = "", link = "") {
   const row = document.createElement("div");
@@ -306,7 +333,7 @@ $("create").onclick = async () => {
   const sources = Object.fromEntries(rows.filter((r) => r.link).map((r) => [r.name, [r.link]]));
   $("create").disabled = true;
   try {
-    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, sources, project: project || undefined, scriptMode: sm, voiceMode: voiceMode(), script: sm === "own" ? $("ownScript").value : undefined } });
+    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, format: $("format").value, sources, project: project || undefined, scriptMode: sm, voiceMode: voiceMode(), script: sm === "own" ? $("ownScript").value : undefined } });
     project = r.project;
     history.replaceState(null, "", `/new?v=${project}`);
     localStorage.setItem("cf.project", project);
@@ -558,7 +585,10 @@ async function start() {
     $("topic").value = pre.get("topic");
     if (pre.get("title")) $("titles").innerHTML = `<p class="lbl" style="margin-top:16px">Pick a title</p><label class="opt"><input type="radio" name="title" value="${esc(pre.get("title"))}" checked><span>${esc(pre.get("title"))}<br><span class="hint">from the idea you picked; press Suggest titles for more options</span></span></label>`;
     if (pre.get("channel") && channelList.some((c) => c.name === pre.get("channel"))) { $("channel").value = pre.get("channel"); showBrief(); }
-    if (pre.get("format")) window.__ideaFormat = pre.get("format");
+    if (pre.get("format")) {
+      await suggestFormatFor(pre.get("title") || pre.get("topic"));
+      if (formats.some((f) => f.id === pre.get("format"))) { $("format").value = pre.get("format"); formatPicked = true; $("formatNote").textContent = "From the idea you picked."; showFormat(); }
+    }
   }
   if (!project) return showStep(1);
   try {
@@ -573,6 +603,8 @@ async function start() {
   $("titles").innerHTML = `<label class="opt"><input type="radio" name="title" value="${esc(info.title)}" checked><span>${esc(info.title)}</span></label>`;
   $("channel").value = c.channel || "default";
   showBrief();
+  await suggestFormatFor(info.title || c.topic);
+  if (c.format && formats.some((f) => f.id === c.format)) { $("format").value = c.format; formatPicked = true; showFormat(); }
   $("length").value = String(c.words && [...$("length").options].some((o) => Number(o.value) === c.words) ? c.words : 1500);
   for (const r of document.querySelectorAll('input[name="sm"]')) r.checked = r.value === info.scriptMode;
   for (const r of document.querySelectorAll('input[name="vm"]')) r.checked = r.value === info.voiceMode;

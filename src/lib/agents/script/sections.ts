@@ -33,13 +33,15 @@ export interface SectionText {
 }
 
 function prompt(s: OutlineSection, topic: string, facts: SourcedFact[], target: number, prevLine: string, extra = ""): string {
-  const what =
-    s.kind === "intro"
+  const what = s.what
+    ? `${s.what} ${s.kind === "intro" ? "Open with this hook idea (in your own words):" : "Angle:"} ${s.angle}`
+    : s.kind === "intro"
       ? `The INTRO of a countdown video about ${topic}. Open with this hook idea (in your own words): ${s.angle} Tease the #1 pick without naming it.`
       : s.kind === "outro"
         ? `The OUTRO of a countdown video about ${topic}. ${s.angle}`
         : `The section for #${s.rank}: ${s.product}. Angle: ${s.angle} Start by naming the product and its rank.`;
-  const f = facts.length ? `Facts you may state (and only these):\n${facts.map((x) => `- ${x.label}: ${x.value}`).join("\n")}` : "Facts: none (state no numbers).";
+  const several = new Set(facts.map((x) => x.product)).size > 1;
+  const f = facts.length ? `Facts you may state (and only these):\n${facts.map((x) => `- ${several ? `${x.product} ` : ""}${x.label}: ${x.value}`).join("\n")}` : "Facts: none (state no numbers).";
   const beats = s.beats?.length ? `Beats for this section:\n${s.beats.map((b) => `- ${b}`).join("\n")}\n` : "";
   const rules = s.rules?.length ? `Structure rules (from the channel's SOP, wording is yours):\n${s.rules.map((b) => `- ${b}`).join("\n")}\n` : "";
   return `${what}\n${f}\n${beats}${rules}${prevLine ? `The previous section ended with: "${prevLine}"\n` : ""}Target: ${target} words.${extra ? `\n${extra}` : ""}`;
@@ -62,7 +64,7 @@ export function ruleSection(s: OutlineSection, topic: string, facts: SourcedFact
       ? [s.angle, `We looked at specs, prices and real-world trade-offs so you can pick the right one.`, `Stick around for number one, because it is not the one most people expect.`]
       : s.kind === "outro"
         ? [`That wraps up our list of ${topic}.`, s.angle, `Tell us in the comments which one you would buy.`]
-        : [...(s.beats?.some((b) => /re-hook/.test(b)) ? ["Next up, and here's why it made the list."] : []), `Number ${s.rank} is the ${s.product}.`, s.angle, ...facts.map((f) => `Its ${f.label.toLowerCase()} is ${f.value}.`)];
+        : [...(s.beats?.some((b) => /re-hook/.test(b)) ? ["Next up, and here's why it made the list."] : []), s.lead ?? `Number ${s.rank} is the ${s.product}.`, s.angle, ...facts.map((f) => `${s.factItems && s.factItems.length > 1 ? `The ${f.product}'s` : "Its"} ${f.label.toLowerCase()} is ${f.value}.`)];
   return fitWords(parts.join(" "), s.words);
 }
 
@@ -171,14 +173,14 @@ export async function writeSection(s: OutlineSection, topic: string, facts: Sour
   const removed = before - splitSentences(text).length;
   if (removed) log(`[script] ${s.product ?? s.kind}: removed ${removed} sentence(s) with unsourced numbers`);
   if (Math.abs(countWords(text) - target) > tol) text = fitWords(text, target);
-  log(`[script] ${s.kind === "product" ? `#${s.rank} ${s.product}` : s.kind}: ${countWords(text)}/${target} words in ${attempts} attempt(s)`);
+  log(`[script] ${s.kind === "product" ? (s.rank && !s.what ? `#${s.rank} ${s.product}` : s.product) : s.kind}: ${countWords(text)}/${target} words in ${attempts} attempt(s)`);
   return { section: s, text, words: countWords(text), attempts, unsourcedRemoved: removed };
 }
 
 export async function writeSections(outline: Outline, facts: SourcedFact[], ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null, beatCheck?: (index: number, text: string) => string[]): Promise<SectionText[]> {
   const out: SectionText[] = [];
   for (const [i, s] of outline.sections.entries()) {
-    const own = s.kind === "product" ? facts.filter((f) => f.product === s.product) : [];
+    const own = sectionFacts(s, facts);
     // The previous section's last 2 sentences, so the hand-over reads as one script.
     const prev = out.length ? splitSentences(out[out.length - 1].text).slice(-2).join(" ") : "";
     out.push(await writeSection(s, outline.topic, own, prev, ask, log, brief, beatCheck ? (t) => beatCheck(i, t) : undefined));
@@ -198,6 +200,9 @@ export function balanceTotal(sections: SectionText[], target: number, tolerance:
   }
   return sections;
 }
+
+/** The sourced facts a section may state (its own item; both for a head-to-head). */
+export const sectionFacts = (s: OutlineSection, facts: SourcedFact[]) => (s.factItems ? facts.filter((f) => s.factItems!.includes(f.product)) : s.kind === "product" ? facts.filter((f) => f.product === s.product) : []);
 
 export const llmWriter = (): Ask | null => (llmAvailable() ? modelWriter : null);
 export { words };

@@ -1366,6 +1366,79 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## S5: Self-repetition check + script formats (2026-11-04)
+
+**Self-repetition** (`src/lib/agents/script/selfRepeat.ts`, `src/lib/channelHistory.ts`)
+- Every script written for a channel with a brief is saved to `channels/<id>/history/<project>.json`
+  (title, topic, text). The ~120-word windows' nomic-embed-text vectors are stored the first time
+  they are needed, so an old script is embedded once.
+- Each new script's sections are checked against the channel's **last 20 scripts** (never
+  against its own project). The check is the same pair as the competitor one: 5-gram
+  containment > 20%, or a raw embedding cosine > 0.85 with a window. A flagged section is
+  rewritten once ("take a different angle than our earlier video ..."), then checked again.
+- The title is compared with our past titles.
+- The result goes to `script_report.json` (`selfRepetition`) and the QA report ("Originality >
+  Not repeating our own videos").
+- Titles: `runTitles` adds the channel's past titles to the competitor titles, so the existing
+  title check (> 0.8 = rewritten) also keeps us from repeating our own titles.
+- Without embeddings (`EMBEDDINGS=off` or no Ollama) only the 5-gram half runs.
+
+**Formats** (`src/lib/agents/script/formats.ts`). Each format has its outline rules, word budgets,
+section plan and beat template (its open loop):
+
+| Format | Items | Sections | Loop (planted in the intro) |
+|---|---|---|---|
+| countdown (default) | products, last = #1 | intro, items, outro | "which one is number one?" -> the #1 |
+| versus | exactly 2 | intro, A, B, head to head (both sides' facts), verdict | "one detail decides it" -> "deciding factor" |
+| myth-vs-reality | myths, the costliest last | intro, myth -> reality each, outro | "which myth costs the most?" |
+| history-of | chapters, oldest first | intro, chapters, where it stands now | "one moment changed everything" -> "turning point" |
+| every-x-explained | types | intro, type each, which fits most people | "which type fits most people?" |
+
+- `suggestFormat(title)` reads the title: vs / versus / "which is better" -> versus; myth / truth
+  / wrong about -> myth; history / origin / evolution -> history-of; every type / explained ->
+  every X; otherwise countdown.
+- The outline, the beats fallback (hook, what is withheld, the promise), the section prompts and
+  the rule skeleton all follow the format. Facts-only, originality and +-3% are unchanged.
+- **Fixed before it shipped**: two fallback promises said their own loop's answer ("turning
+  point", "most people"). The retention check would have flagged them as answered early, so
+  they were reworded. A test now checks that, for every format, neither the hook nor the promise
+  says the loop's answer words.
+- Wiring:
+  - `script --format <id>`; the wizard saves the format (versus refuses 3 items) and the pipeline
+    passes `--format`;
+  - `POST /api/research/formats {title}` returns the list and the suggestion;
+  - `/new` step 2 has a "Video format" picker, suggested from the title and pre-filled from an
+    idea. It relabels the items (Products / The two sides / Myths / Chapters / Types) and their
+    numbering (#N..1, A/B, 1..N).
+- Small fix: the writer logged "#undefined Alpha" for unranked formats.
+
+**Tests**: `tests/scriptFormats.test.ts`, 8. They cover:
+- the suggestions;
+- the item rules;
+- every format's outline: budgets add up; head to head has both sides' facts;
+- every format's rule beats: one loop, paid off later, not given away by the hook or the promise;
+- a versus script end to end: retention pass, both sides' sourced facts in the head to head,
+  nothing unsourced;
+- self-repetition:
+  - a copied section is flagged, a fresh one isn't, and the title is flagged;
+  - a project is never checked against itself;
+  - `writeScript` rewrites the copied section, ends clean, and adds the script to the history;
+- the wizard and pipeline `--format`.
+
+Full suite: 472 tests: 471 pass, 0 fail, 1 skipped. Checked in Chromium:
+- a "vs" title gives versus with rows A / B;
+- switching to History relabels the items to "Chapters (in time order)" with rows 1, 2;
+- an idea's format is pre-selected ("From the idea you picked").
+
+**Limits (honest)**
+- Only the **script** follows the format. The footage step still treats every item as a
+  "product". For versus and every-X (real things) that is right. For myths and history chapters,
+  the stock search uses the item's text, so check the footage of those videos before publishing.
+- The format suggestion is a title regex. The SOP only points to versus when its videos have 2
+  sections.
+
+---
+
 ## S4: Idea multiplier (2026-11-04)
 
 **What changed**

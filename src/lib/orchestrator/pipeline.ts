@@ -48,6 +48,8 @@ export interface PipelineConfig {
   words?: number;
   seeds?: string[];
   channel?: string;
+  /** Script format (src/lib/agents/script/formats.ts); default countdown. */
+  format?: string;
 }
 
 export interface PipelineState {
@@ -74,6 +76,7 @@ export function saveConfig(project: string, c: PipelineConfig): PipelineConfig {
     ...(c.words ? { words: Math.max(200, Math.min(6000, Math.round(Number(c.words)))) } : {}),
     ...(c.seeds?.length ? { seeds: c.seeds.map((s) => String(s).trim()).filter(Boolean).slice(0, 12) } : {}),
     channel: String(c.channel ?? "default").replace(/[^\w.-]/g, "") || "default",
+    ...(c.format && c.format !== "countdown" && /^[a-z-]{3,30}$/.test(c.format) ? { format: c.format } : {}),
   };
   writeJson(configFile(dir), clean);
   // The CLI steps read the channel from project.json.
@@ -139,7 +142,7 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
     case "writing":
       if (version) return [["translate", "-p", project]];
       if (!cfg?.topic || !cfg.products.length) return [];
-      return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : []), ...(cfg.channel ?? p.channel ? ["--channel", String(cfg.channel ?? p.channel)] : [])]];
+      return [["script", "-p", project, "-t", cfg.topic, "--products", cfg.products.join(","), ...(cfg.words ? ["-w", String(cfg.words)] : []), ...(cfg.channel ?? p.channel ? ["--channel", String(cfg.channel ?? p.channel)] : []), ...(cfg.format && cfg.format !== "countdown" ? ["--format", cfg.format] : [])]];
     case "voice": {
       // An uploaded recording (not a TTS one) is kept: only transcribe + align then. The upload
       // route sets no voiceMode, so the file name also counts (the AI voice is voiceover_tts.wav).

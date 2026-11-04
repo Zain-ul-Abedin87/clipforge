@@ -1,3 +1,4 @@
+import { isFormat, itemsProblem } from "../agents/script/formats.js";
 import fs from "node:fs";
 import path from "node:path";
 import { paths } from "../paths.js";
@@ -26,8 +27,10 @@ export interface WizardInput {
   /** scriptMode "own": the creator's script. */
   script?: string;
   title?: string;
-  /** Countdown order, last = #1. */
+  /** Countdown order, last = #1 (for other formats: the items: sides, myths, chapters, types). */
   products: string[];
+  /** Script format; default countdown. */
+  format?: string;
   words?: number;
   channel?: string;
   /** Product -> page links for sourced facts (written to sources.json). */
@@ -88,11 +91,13 @@ export function createVideo(i: WizardInput): { project: string } {
   const topic = i.topic.trim();
   if (!topic) throw new Error("Please enter a topic.");
   const products = i.products.map((p) => p.trim()).filter(Boolean);
-  if (products.length < 2) throw new Error("Please enter at least 2 products.");
+  const format = isFormat(i.format) ? i.format : "countdown";
+  const bad = itemsProblem(format, products);
+  if (bad) throw new Error(format === "countdown" && products.length < 2 ? "Please enter at least 2 products." : bad);
   // Checked before anything is written, so a refused request leaves no project folder behind.
   if (i.scriptMode === "own" && countWords((i.script ?? "").trim()) < 20) throw new Error("Paste your script (at least a few sentences).");
   const project = i.project && /^[a-z0-9][a-z0-9-]{1,60}$/.test(i.project) ? i.project : projectSlug(topic);
-  saveConfig(project, { topic, products, words: i.words, channel: i.channel });
+  saveConfig(project, { topic, products, words: i.words, channel: i.channel, ...(format !== "countdown" ? { format } : {}) });
   const pf = path.join(projectDir(project), "project.json");
   writeJson(pf, { ...readJson<Record<string, unknown>>(pf), title: (i.title ?? "").trim() || topic });
   const links: Record<string, string[]> = {};

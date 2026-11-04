@@ -198,6 +198,14 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     if (rr) add("Script", "Retention beats", rr.status, rr.problems.length ? rr.problems.slice(0, 6).join("; ") : `hook ${rr.hook.words} words, promise early, ${rr.rehooks.found}/${rr.rehooks.planned} re-hook(s) on time, ${rr.loops.filter((l) => l.paidOff).length}/${rr.loops.length} loop(s) paid off`);
   }
 
+  if (fs.existsSync(srFile)) {
+    const sr = readJson<{ selfRepetition?: { checkedAgainst: number; flagged: number; clean: boolean; sections: { flagged: boolean; against: string; ngram: number; cosine: number | null }[]; title: { flagged: boolean; against: string; score: number } | null } | null }>(srFile).selfRepetition;
+    if (sr && sr.checkedAgainst) {
+      const bad = sr.sections.filter((x) => x.flagged);
+      add("Originality", "Not repeating our own videos", sr.clean ? "pass" : "warn", sr.clean ? `checked against ${sr.checkedAgainst} earlier script(s)` : [...bad.map((b) => `a section is close to "${b.against}" (5-gram ${b.ngram}, cosine ${b.cosine ?? "-"})`), ...(sr.title?.flagged ? [`title close to "${sr.title.against}"`] : [])].slice(0, 5).join("; "));
+    }
+  }
+
   // ---- 3c. facts (documentaries: src/lib/factcheck, factcheck.json) ----
   const factFile = path.join(dir, "factcheck.json");
 

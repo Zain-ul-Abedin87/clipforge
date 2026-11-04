@@ -505,6 +505,100 @@ phase).
 
 ---
 
+## Phase 7: AI Avatar
+
+**What changed**
+
+- `src/lib/avatar/index.ts` + `engines.ts` (engine interface): `musetalk` (default),
+  `liveportrait`, and optional `sadtalker`, `wav2lip`, `latentsync`, `hallo2`, `echomimic` (the
+  last two are marked slow).
+  - Each engine is a command template run in its own checkout (`avatar.engineDir`, with its own
+    `avatar.pythonCmd`).
+  - `avatar.command` overrides the template. Placeholders: `{python} {image} {audio} {out}
+    {outdir} {face_video} {driving} {fps}`.
+  - `musetalk.ts` and `liveportrait.ts` hold the setup notes for each engine.
+- **Input**: one fixed photo per channel, `channels/<id>/avatar.png` (jpg/webp also work). The
+  audio is cut from the voiceover (Kokoro/XTTS or your own recording).
+- **Placement** (`avatar.placements`): `intro` (after the hook teaser), `bridge` (the first line
+  of every product), `outro`.
+  - Clips always cover whole scenes and last at most `avatar.maxClipSec` (15 s).
+  - Layout (`avatar.layout`) is `pip` or `full`:
+    - `pip`: transparent ProRes 4444 layers, `pipCorner` / `pipScale`. These go through the same
+      overlay path as the Remotion cards, so the renderer needs no change.
+    - `full`: the scene picture becomes the clip.
+- **One clip at a time**: every clip is its own engine process, so the model leaves VRAM when it
+  ends. All local LLMs are unloaded before the first clip. GPU time is logged per clip (stage
+  `avatar`).
+- **QA**: clips are tagged `source: own-avatar` (`avatar_plan.json`, timeline asset source).
+  - The "Talking heads on screen" check does not count shots inside avatar ranges, and the detail
+    says how many were skipped.
+  - The licence ledger records `own-avatar` as `own`.
+- CLI: `npm run cf -- avatar -p <project>`, after `timeline` and before `render`. It is off unless
+  `features.json` → `avatar.enabled` is true (or `--force`). Re-run it after re-running
+  `timeline`.
+
+**Files**: `src/lib/avatar/{index,engines,musetalk,liveportrait}.ts`, `src/commands/avatar.ts`,
+`src/commands/qa.ts`, `src/lib/assets/{types,licenseLedger}.ts`, `src/lib/settings/features.ts`,
+`src/cli.ts`, `tests/avatar.test.ts`.
+
+**Checks**: typecheck passes. 331 tests, 330 pass, 0 fail, 1 skipped (the one skipped before this
+phase). In the end-to-end test, FFmpeg stands in for the lip-sync engine:
+
+- 4 clips render one at a time;
+- the 6 s intro clip comes out 6.0 s;
+- 5 scenes get a PiP layer and the hook stays clean;
+- the full-frame layout sets `source: own-avatar` with the correct in-points.
+
+**How to verify on your PC** (this needs the GPU and the MuseTalk model):
+
+1. Clone https://github.com/TMElyralab/MuseTalk, set up its Python environment and download the
+   v1.5 weights (see its README).
+2. In `features.json`, set:
+
+   ```json
+   "avatar": {
+     "enabled": true,
+     "engine": "musetalk",
+     "engineDir": "D:/AI/MuseTalk",
+     "pythonCmd": "D:/AI/MuseTalk/.venv/Scripts/python.exe",
+     "placements": ["intro", "outro"],
+     "layout": "pip"
+   }
+   ```
+
+3. Put a front-facing photo at `channels/<channel>/avatar.png`.
+4. Run, one after the other:
+
+   ```bash
+   npm run cf -- timeline -p <project>
+   ```
+
+   ```bash
+   npm run cf -- avatar -p <project>
+   ```
+
+   ```bash
+   npm run cf -- render -p <project>
+   ```
+
+   ```bash
+   npm run cf -- qa -p <project>
+   ```
+
+5. Watch the intro and outro: the lips should match the voice, and QA's "Talking heads" check
+   should pass.
+
+**Open risks**
+
+- The command-line flags of the engines' own scripts change between releases. If a run fails,
+  copy the current inference command from the engine's README into `avatar.command`.
+- LivePortrait does not lip-sync to audio (it needs a driving video). Use MuseTalk, or chain
+  Wav2Lip.
+- Check the licences of the engine weights before monetising (MuseTalk and SadTalker code is
+  MIT/Apache; some face models are non-commercial).
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live
@@ -515,3 +609,5 @@ phase).
   that `pacing_stats.json` `forcedReuse` < 20.
 - **Phase 6**: put the Kokoro model files in `models/kokoro/` (or run Kokoro-FastAPI), then run
   `tts` on a 10-minute script and confirm the real-time factor is above 1x.
+- **Phase 7**: install MuseTalk + weights, put the photo at `channels/<id>/avatar.png`, render a
+  15 s intro/outro on the GPU, and judge the lip-sync by eye.

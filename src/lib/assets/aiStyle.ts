@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { GoogleGenAI } from "@google/genai";
+import { GenAIClient, genAIClient } from "../videogen/sdk.js";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { env } from "../env.js";
@@ -240,17 +240,17 @@ export function comfyGenerator(o: { url: string; ckpt: string; ipadapter: boolea
 }
 
 /** Gemini image model: the reference pictures go with the prompt (that is what keeps the look). */
-export function geminiGenerator(o: { model: string; client?: Pick<GoogleGenAI, "models"> }): Generator {
+export function geminiGenerator(o: { model: string; client?: Pick<GenAIClient, "models"> }): Generator {
   return async (prompt, g) => {
     const key = geminiKey();
     if (!o.client && !key) throw new Error("GEMINI_API_KEY is not set in .env");
-    const ai = o.client ?? new GoogleGenAI({ apiKey: key });
+    const ai = o.client ?? (await genAIClient(key!));
     const parts = [
       ...g.refs.slice(0, 5).map((f) => ({ inlineData: { data: fs.readFileSync(f).toString("base64"), mimeType: /\.png$/i.test(f) ? "image/png" : /\.webp$/i.test(f) ? "image/webp" : "image/jpeg" } })),
       { text: `${g.refs.length ? "Use the attached pictures as the reference for the art style and the characters. " : ""}Make one 16:9 picture: ${prompt} Avoid: ${g.avoid}.` },
     ];
     const r = await ai.models.generateContent({ model: o.model, contents: [{ role: "user", parts }] });
-    const img = r.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData;
+    const img = r.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data?: string } }) => p.inlineData?.data)?.inlineData;
     if (!img?.data) throw new Error("Gemini returned no picture (it may have been blocked by its safety filter: change the scene)");
     fs.writeFileSync(g.outFile, Buffer.from(img.data, "base64"));
     return { file: g.outFile, engine: "gemini", model: o.model };

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { GoogleGenAI } from "@google/genai";
-import RunwayML from "@runwayml/sdk";
+import { GenAIClient, genAIClient, RunwayClient, runwayClient } from "./sdk.js";
 import { env } from "../env.js";
 import { run } from "../exec.js";
 import { ffmpegPath } from "../tools.js";
@@ -24,8 +23,8 @@ export interface GenerateOpts {
   outFile: string;
   log?: (m: string) => void;
   /** Tests: fake SDK clients and download. */
-  veo?: Pick<GoogleGenAI, "models" | "operations" | "files">;
-  runway?: Pick<RunwayML, "imageToVideo">;
+  veo?: GenAIClient;
+  runway?: RunwayClient;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   /** Give up after this long (default 12 minutes). */
@@ -64,7 +63,7 @@ export async function generateClip(o: GenerateOpts): Promise<{ file: string; sec
   if (o.provider === "veo") {
     const key = geminiKey();
     if (!o.veo && !key) throw new Error("GEMINI_API_KEY is not set in .env");
-    const ai = o.veo ?? new GoogleGenAI({ apiKey: key });
+    const ai = o.veo ?? (await genAIClient(key!));
     let op = await ai.models.generateVideos({
       model: spec.id,
       source: { prompt: o.prompt, image: { imageBytes: ref.bytes.toString("base64"), mimeType: ref.mime } },
@@ -83,14 +82,14 @@ export async function generateClip(o: GenerateOpts): Promise<{ file: string; sec
   } else {
     const key = env("RUNWAYML_API_SECRET");
     if (!o.runway && !key) throw new Error("RUNWAYML_API_SECRET is not set in .env");
-    const client = o.runway ?? new RunwayML({ apiKey: key });
+    const client = o.runway ?? (await runwayClient(key!));
     const body = {
       model: spec.id,
       promptImage: `data:${ref.mime};base64,${ref.bytes.toString("base64")}`,
       promptText: o.prompt.slice(0, 1000),
       ratio: spec.landscape,
       duration: seconds,
-    } as unknown as Parameters<RunwayML["imageToVideo"]["create"]>[0];
+    };
     const task = await client.imageToVideo.create(body).waitForTaskOutput({ timeout: Math.max(60_000, deadline - Date.now()) });
     const url = task.output?.[0];
     if (!url) throw new Error("Runway returned no video");

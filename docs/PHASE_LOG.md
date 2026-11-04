@@ -1366,6 +1366,29 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Script engine v3: branch + baseline (2026-11-04)
+
+New branch `feature/script-engine-v3`, made from `feature/full-pipeline-v2-cwi1sx` at `25e1655`
+(the newest remote branch by `git for-each-ref --sort=-committerdate refs/remotes`). The old
+branch gets no more commits.
+
+**Baseline before any script-engine work:** typecheck clean; 435 tests: 434 pass, 0 fail,
+1 skipped.
+
+**Optional paid SDKs.** `@google/genai` and `@runwayml/sdk` were static imports. `aiStyle.ts` is
+loaded by the server, so a PC without them (no `npm install` after a pull) could not even start the
+server. They now load only when a paid call is made (`src/lib/videogen/sdk.ts`). A missing package
+gives "run npm install (npm.cmd install in PowerShell)".
+
+Checked by moving both packages out of `node_modules`:
+- typecheck: 0 errors;
+- the server routes import fine;
+- a Runway call gives that message.
+
+PowerShell blocks `npm.ps1` on your PC, so use `npm.cmd run typecheck` / `npm.cmd test` there.
+
+---
+
 ## Shorts from a long video (2026-11-04)
 
 The creator uploads their own long video (a podcast, vlog or stream) and gets ranked, captioned

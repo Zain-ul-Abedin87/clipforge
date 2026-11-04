@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Html5Audio, Html5Video, Img, Sequence, interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import type {PreviewClip, PreviewModel, PreviewOverlay} from '../../../src/lib/preview/previewTypes';
 import * as Cards from '../Cards';
-import {captionPreset} from '../../../src/lib/render/captionPresets';
+import {CaptionsLayer} from '../Captions';
 import {musicGain} from './mix';
 import {CardLength} from './remotionShim';
 
@@ -80,47 +80,6 @@ const StillOverlay: React.FC<{overlay: PreviewOverlay}> = ({overlay}) => {
   return <Img src={overlay.url ?? ''} style={{...fill, objectFit: 'contain', opacity: Math.min(enter, exit), transform}} />;
 };
 
-/** Captions in the model's preset (src/lib/render/captionPresets.ts), the same definition the render's ASS uses. */
-const Captions: React.FC<{captions: NonNullable<PreviewModel['captions']>}> = ({captions}) => {
-  const frame = useCurrentFrame();
-  const preset = captionPreset(captions.preset);
-  const line = captions.lines.find((l) => frame >= l.startFrame && frame < l.endFrame);
-  if (!line) return null;
-  const color = preset.textColor ?? captions.textColor;
-  const style: React.CSSProperties = {
-    fontFamily: 'Arial, Helvetica, sans-serif',
-    fontWeight: 700,
-    fontSize: Math.round(captions.fontSize * preset.sizeScale),
-    lineHeight: 1.2,
-    textAlign: 'center',
-    textTransform: preset.uppercase ? 'uppercase' : 'none',
-    color: preset.mode === 'word' ? preset.accent : color,
-    ...(preset.box
-      ? {background: captions.background, padding: '6px 22px', borderRadius: 8}
-      : {
-          // CSS strokes are centred on the edge; painting the fill over it leaves half the width outside.
-          WebkitTextStroke: `${preset.outline * 2}px ${preset.outlineColor}`,
-          paintOrder: 'stroke fill',
-          textShadow: preset.shadow ? `0 ${preset.shadow * 2}px ${preset.shadow * 3}px rgba(0,0,0,.6)` : undefined,
-        }),
-  };
-  let content: React.ReactNode = line.text;
-  if (preset.mode === 'karaoke' && line.words) {
-    content = line.words.map((w, i) => (
-      <span key={i} style={{color: frame >= w.startFrame ? preset.accent : color}}>
-        {w.text}{' '}
-      </span>
-    ));
-  } else if (preset.mode === 'word') {
-    const pop = interpolate(frame - line.startFrame, [0, 4], [0.75, 1], clamp);
-    style.transform = `scale(${pop})`;
-  }
-  return (
-    <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom: captions.marginV}}>
-      <div style={{maxWidth: '86%', ...style}}>{content}</div>
-    </AbsoluteFill>
-  );
-};
 
 const LOGO_SPOT: Record<string, React.CSSProperties> = {
   'top-left': {top: 36, left: 40},
@@ -145,7 +104,7 @@ export const TimelinePreview: React.FC<{model: PreviewModel}> = ({model}) => {
         </Sequence>
       ))}
       {model.logo ? <Img src={model.logo.url} style={{position: 'absolute', height: 90, opacity: model.logo.opacity, ...(LOGO_SPOT[model.logo.position] ?? LOGO_SPOT['top-right'])}} /> : null}
-      {model.captions ? <Captions captions={model.captions} /> : null}
+      {model.captions ? <CaptionsLayer lines={model.captions.lines} preset={model.captions.preset} fontSize={model.captions.fontSize} textColor={model.captions.textColor} background={model.captions.background} marginV={model.captions.marginV} fontFamily="Arial, Helvetica, sans-serif" /> : null}
       {model.voice.parts.map((p) => (
         <Sequence key={`voice_${p.startFrame}`} from={p.startFrame} durationInFrames={Math.max(1, p.frames)}>
           <Html5Audio src={model.voice.url} trimBefore={Math.round(p.sourceInSec * fps)} onError={mediaError(model.voice.url)} />

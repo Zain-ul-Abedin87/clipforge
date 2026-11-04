@@ -13,6 +13,7 @@ import { slug } from "../lib/assets/presskit.js";
 import { readResearch } from "../lib/agent/webResearch.js";
 import type { Section } from "../lib/scenes.js";
 import type { SfxKind } from "../lib/render/sfx.js";
+import { loadFeatures } from "../lib/settings/features.js";
 import { applyPacing, pacingConfig, PacingStats, SubShot, Word } from "../lib/pacing.js";
 import { hookText, hookTitleProps } from "../lib/render/hookTitle.js";
 import { blackSpans, hitsBlack } from "../lib/blackFrames.js";
@@ -295,7 +296,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     motion: motionCfg,
     logo: logoOf(style),
     captions: {
-      enabled: cap.enabled !== false,
+      // features.json captions.enabled is the master switch; the channel still opts in.
+      enabled: cap.enabled !== false && loadFeatures().captions.enabled,
       // A family the bundled caption folder has (default Inter, the style's caption font).
       font: captionFamily((style.fonts as { caption?: string } | undefined)?.caption),
       fontSize: Number(cap.fontSize ?? 54),
@@ -303,7 +305,8 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
       background: String(cap.background ?? "rgba(0,0,0,0.55)"),
       textColor: colors.text ?? "#FFFFFF",
       marginV: 70,
-      ...(isCaptionPreset(cap.preset) ? { preset: cap.preset } : {}),
+      // The channel's style, else the default style from features.json (empty = classic).
+      ...(isCaptionPreset(cap.preset) ? { preset: cap.preset } : isCaptionPreset(loadFeatures().captions.preset) ? { preset: loadFeatures().captions.preset } : {}),
     },
     scenes: tl,
   };

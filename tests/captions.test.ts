@@ -30,7 +30,7 @@ const eventsOf = (ass: string) => ass.split("\n").filter((l) => l.startsWith("Di
 
 describe("caption presets", () => {
   test("ids are validated; an unknown or missing id is Classic", () => {
-    assert.deepEqual(CAPTION_PRESETS.map((p) => p.id), ["classic", "bold", "karaoke", "pop", "minimal"]);
+    assert.deepEqual(CAPTION_PRESETS.map((p) => p.id), ["classic", "bold", "karaoke", "pop", "highlight", "bold-pop", "minimal"]);
     assert.equal(isCaptionPreset("bold"), true);
     assert.equal(isCaptionPreset("../x"), false);
     assert.equal(captionPreset("nope").id, "classic");
@@ -187,7 +187,7 @@ describe("caption style and voice cleanup on the studio timeline", () => {
     const api = createEditorAPI({ store, dirOf: () => dir, validProject: () => true, render: () => {}, isBusy: () => false, categoryOf: () => "pistol", musicLibrary: () => [] });
     const call = async (method: string, params: Record<string, unknown> = {}) => (await api.handle(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { project: "p", ...params } }))) as { result?: any; error?: { message: string } };
     const open = (await call("editor.open")).result;
-    assert.deepEqual(open.settings.captions.styles.map((x: { id: string }) => x.id), ["classic", "bold", "karaoke", "pop", "minimal"]);
+    assert.deepEqual(open.settings.captions.styles.map((x: { id: string }) => x.id), ["classic", "bold", "karaoke", "pop", "highlight", "bold-pop", "minimal"]);
     assert.deepEqual({ ...open.settings, captions: { ...open.settings.captions, styles: undefined } }, { captions: { enabled: false, preset: "classic", fontSize: 54, styles: undefined }, voice: { denoise: "off", rumble: false, even: false, loudness: false } });
     assert.match((await call("editor.voiceSample", { frame: 30, cleaned: true })).error!.message, /switch at least one cleanup option on first/);
     const orig = (await call("editor.voiceSample", { frame: 30, seconds: 3 })).result;

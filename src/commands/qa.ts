@@ -17,7 +17,7 @@ import { sourceKey } from "../lib/pacing.js";
 import { readFacts } from "../lib/facts.js";
 import { readChapters, youtubeChapters } from "../lib/chapters.js";
 import { buildPublishPack } from "../lib/publish.js";
-import { checkForcedReuse, checkMusicLicenses, checkRepeatCounts, preflightChecks, REPEAT_LIMITS } from "../lib/qaGate.js";
+import { checkForcedReuse, checkMusicLicenses, checkRepeatCounts, checkVisualChange, preflightChecks, REPEAT_LIMITS } from "../lib/qaGate.js";
 import { trackLicense } from "../lib/music.js";
 import { readLedger } from "../lib/assets/licenseLedger.js";
 import { musicEnabled } from "./timeline.js";
@@ -192,6 +192,13 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     add("Originality", "Repeated clip segments", rc.status, reps.length ? `${rc.detail}: ${reps.slice(0, 8).join("; ")}` : `${segs.length} shots, no source segment shown twice`);
     const forcedCheck = checkForcedReuse(fs.existsSync(path.join(dir, "pacing_stats.json")) ? readJson<{ forcedReuse: number; forced: string[] }>(path.join(dir, "pacing_stats.json")) : null);
     if (forcedCheck) add(forcedCheck.group, forcedCheck.name, forcedCheck.status, forcedCheck.detail);
+    // Edit polish (render/beats.json): a cut or punch-in at least every captions.maxVisualSec seconds.
+    const beatsFile = path.join(dir, "render", "beats.json");
+    if (fs.existsSync(beatsFile)) {
+      const b = readJson<{ longestStill: { sec: number; at: number }; maxVisualSec?: number }>(beatsFile);
+      const vc = checkVisualChange(b.longestStill, Math.max(3, Math.min(5, b.maxVisualSec ?? 5)));
+      if (vc) add(vc.group, vc.name, vc.status, vc.detail);
+    }
     // Product sections must only show their own product's pool shots / photos.
     const leaks: string[] = [];
     const sceneList = readJson<Scene[]>(path.join(dir, "scenes.json"));

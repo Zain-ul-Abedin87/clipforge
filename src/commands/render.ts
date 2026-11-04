@@ -9,6 +9,8 @@ import { projectDir, readJson, writeJson } from "../lib/project.js";
 import { AlignedWord } from "./align.js";
 import { buildAss, captionLines, CaptionLine, CaptionStyle, remapWords } from "../lib/render/captions.js";
 import { captionMaxWords, captionPreset } from "../lib/render/captionPresets.js";
+import { beatTimes, fillVisualGaps, longestStill, punchFilter } from "../lib/render/beats.js";
+import { loadFeatures } from "../lib/settings/features.js";
 import { ffmpegPath, ffprobePath } from "../lib/tools.js";
 import { ensureSfx } from "../lib/render/sfx.js";
 import { duckGraph } from "../audio/duck.js";
@@ -127,6 +129,8 @@ export interface SegmentJob {
   fadeOut: boolean;
   out: string;
   assFile: string | null;
+  /** Beat punch-in zooms, frames relative to the segment (src/lib/render/beats.ts). */
+  punch?: number[];
 }
 
 /** Ease-out cubic progress 0..1 of an animation that starts at d and lasts len seconds. */
@@ -189,6 +193,12 @@ export function segmentArgs(job: SegmentJob, encoder: "nvenc" | "x264"): string[
       ? [...showcaseGraph(scene, frames, sc), `[pv]${base.join(",")}[v0]`]
       : [`[0:v]${base.join(",")}[v0]`];
   let cur = "v0";
+  // Beat punch-ins on the footage only (cards and captions drawn on top stay sharp and still).
+  const punch = job.punch?.length ? punchFilter(job.punch, W, H) : "";
+  if (punch) {
+    graph.push(`[v0]${punch},setsar=1[v0p]`);
+    cur = "v0p";
+  }
   layers.forEach((l, k) => {
     if (l.video) {
       // The card animates itself (spring in, fade out); shift it to its start time and let the
@@ -317,6 +327,24 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     fs.writeFileSync(assFile, buildAss(lines, capStyle), "utf8");
   }
 
+  // Edit polish: beat punch-ins on emphasised words, plus one in every stretch longer than
+  // captions.maxVisualSec without a cut (features.json captions.punchIn / maxVisualSec).
+  const polish = loadFeatures().captions;
+  let beats: number[] = [];
+  if (polish.punchIn && fs.existsSync(path.join(dir, "aligned.json"))) {
+    const words = remapWords(readJson<{ words: AlignedWord[] }>(path.join(dir, "aligned.json")).words, tl.audio.voiceParts);
+    const cuts: number[] = [];
+    for (const s of scenes) {
+      let f = s.startFrame;
+      cuts.push(f / 30);
+      for (const x of s.asset.shots ?? []) cuts.push((f += x.frames) / 30);
+    }
+    const spoken = beatTimes(words.map((w) => ({ word: w.word, start: w.start, end: w.end })));
+    beats = fillVisualGaps(cuts.sort((a, b) => a - b), spoken, duration, Math.max(2, polish.maxVisualSec));
+    writeJson(path.join(segDir, "beats.json"), { beats, spoken: spoken.length, filled: beats.length - spoken.length, maxVisualSec: polish.maxVisualSec, longestStill: longestStill(cuts, beats, duration) });
+    log(`[render] punch-ins: ${spoken.length} on emphasised words + ${beats.length - spoken.length} to keep a visual change every ${polish.maxVisualSec} s`);
+  }
+
   // Non-16:9 product stills (press kit, official, Wikimedia, own photos) get the parallax showcase;
   // PRODUCT_PARALLAX=off falls back to one baked blurred-background still with a Ken Burns move.
   const parallaxOn = env("PRODUCT_PARALLAX", "on").toLowerCase() !== "off";
@@ -345,7 +373,10 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
     const fadeOut = scenes[i + 1]?.transition === "fade";
     const segLines = lines.filter((l) => l.end > startSec && l.start < endFrame / 30);
     const showcase = showcases.get(s.id);
+    // Punch-ins only on footage (not on rendered cards / product showcases), 4+ frames inside.
+    const punch = s.asset.source === "graphic" || showcase ? [] : beats.filter((b) => b >= startSec && b < endFrame / 30).map((b) => Math.round((b - startSec) * 30)).filter((f) => f >= 0 && f < frames - 4);
     const hash = sceneContentHash({
+      ...(punch.length ? { punch } : {}),
       sceneId: s.id,
       asset: s.asset,
       captions: segLines.length ? { lines: relativeCaptions(segLines, startSec), style: capStyle } : null,
@@ -360,7 +391,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
       showcase: showcase ?? null,
       version: 6,
     });
-    return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, hash, out: cache.file(s.id, hash), assFile: segLines.length ? assFile : null };
+    return { logo: tl.logo ?? null, showcase, scene: s, frames, startSec, fadeIn, fadeOut, hash, out: cache.file(s.id, hash), assFile: segLines.length ? assFile : null, ...(punch.length ? { punch } : {}) };
   });
   const segs: CachedSegment[] = jobs.map((j) => ({ sceneId: j.scene.id, hash: j.hash, frames: j.frames, out: j.out }));
 

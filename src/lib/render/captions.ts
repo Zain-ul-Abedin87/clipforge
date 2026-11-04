@@ -103,7 +103,24 @@ function assEvents(lines: CaptionLine[], p: CaptionPreset): string[] {
       return dialogue(l.start, l.end, text);
     }
     if (p.mode === "word") return dialogue(l.start, l.end, `{\\fscx75\\fscy75\\t(0,120,\\fscx100\\fscy100)}${assText(casing(p, l.text))}`);
+    if (p.mode === "highlight" && l.words?.length) return highlightEvents(l, p).map((e) => dialogue(e.start, e.end, e.text)).join("\n");
     return dialogue(l.start, l.end, assText(casing(p, l.text)));
+  });
+}
+
+/**
+ * Word highlight: one event per spoken word, from its start to the next word's start (the last one
+ * to the line's end), so the events tile the line with no gap. The active word is drawn in the
+ * accent colour, 12% larger (or on an accent "box": a thick accent-coloured border).
+ */
+export function highlightEvents(l: CaptionLine, p: CaptionPreset): { start: number; end: number; text: string }[] {
+  const ws = l.words ?? [];
+  const hi = p.highlightBox ? `{\\bord14\\3c${assColor(p.accent)}\\fscx108\\fscy108}` : `{\\c${assColor(p.accent)}\\fscx112\\fscy112}`;
+  return ws.map((w, i) => {
+    const start = i === 0 ? l.start : w.start;
+    const end = i + 1 < ws.length ? ws[i + 1].start : l.end;
+    const text = ws.map((x, k) => (k === i ? `${hi}${assText(casing(p, x.text))}{\\r}` : assText(casing(p, x.text)))).join(" ");
+    return { start, end: Math.max(end, start + 0.01), text };
   });
 }
 

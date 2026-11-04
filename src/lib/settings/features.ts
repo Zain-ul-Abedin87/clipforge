@@ -41,7 +41,9 @@ export interface FeatureSettings {
     maxLength: number;
   };
   captions: {
+    /** Master switch: false = no burned-in captions in any channel (channels still opt in). */
     enabled: boolean;
+    /** Caption style for channels without their own (classic, bold, karaoke, pop, highlight, bold-pop, minimal); "" = classic. */
     preset: string;
     /** Words on screen at once. */
     wordsPerLine: number;
@@ -117,7 +119,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
     cacheHours: 24,
   },
   titles: { count: 10, maxSimilarity: 0.8, newsHooks: true, maxLength: 70 },
-  captions: { enabled: true, preset: "bold-pop", wordsPerLine: 3, punchIn: true, maxVisualSec: 4 },
+  captions: { enabled: true, preset: "", wordsPerLine: 3, punchIn: true, maxVisualSec: 4 },
   stock: { pexels: true, pixabay: true, imagegen: false, comfyUrl: "http://127.0.0.1:8188", comfyCheckpoint: "sd_xl_turbo_1.0_fp16.safetensors", perQuery: 15 },
   script: { targetWords: 1500, tolerance: 0.03, products: 10, maxSimilarity: 0.8, ngram: 5, embedModel: "nomic-embed-text" },
   tts: { engine: "kokoro", voice: "am_michael", speed: 1, lufs: -14, xttsSpeakerWav: "", pythonCmd: "python" },

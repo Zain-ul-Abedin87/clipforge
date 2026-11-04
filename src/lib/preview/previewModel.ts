@@ -1,3 +1,4 @@
+import { toFrameLines } from "../render/captionTiming.js";
 import { secondsToFrame, toNumber } from "../../domain/rational.math.js";
 import { AudioClip, clipEnd, MultiTrackTimeline, OverlayClip, VideoClip } from "../../domain/timeline.types.js";
 import { DEFAULT_FADE } from "../../audio/duck.js";
@@ -87,16 +88,11 @@ export function buildPreviewModel(tl: MultiTrackTimeline, input: PreviewInput): 
     const aligned = input.words.map((w) => ({ ...w, source: "script" as const }));
     const preset = captionPreset(cap.preset);
     const lines = captionLines(remapWords(aligned, voiceParts(tl)), captionMaxWords({ preset: cap.preset, maxWordsPerLine: cap.maxWordsPerLine ?? 6 }), { withWords: preset.mode !== "line" });
-    const toFrame = (sec: number) => Math.round(sec * fps);
     captions = {
       enabled: true,
       preset: preset.id,
-      lines: lines.map((l) => ({
-        startFrame: toFrame(l.start),
-        endFrame: Math.max(toFrame(l.start) + 1, toFrame(l.end)),
-        text: l.text,
-        ...(l.words ? { words: l.words.map((w) => ({ text: w.text, startFrame: toFrame(w.start), endFrame: Math.max(toFrame(w.start) + 1, toFrame(w.end)) })) } : {}),
-      })),
+      // Same frame mapping as the Remotion caption component (+-17 ms at 30 fps).
+      lines: toFrameLines(lines, fps),
       fontSize: cap.fontSize ?? 54,
       textColor: cap.textColor ?? "#ffffff",
       background: cap.background ?? "rgba(0,0,0,0.55)",

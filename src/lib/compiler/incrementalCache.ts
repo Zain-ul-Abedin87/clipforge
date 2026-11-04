@@ -27,6 +27,8 @@ export interface SceneHashInput {
   backdrop?: string | null;
   logo?: { path: string; [k: string]: unknown } | null;
   showcase?: unknown;
+  /** Beat punch-in frames (absent = none, so older segments keep their hash). */
+  punch?: number[];
   /** Bump when the segment encoder settings change. */
   version: number;
 }
@@ -78,6 +80,8 @@ export function sceneContentHash(i: SceneHashInput): string {
     backdrop: i.backdrop ?? null,
     logo: i.logo ? { ...i.logo, file: fileStamp(i.logo.path) } : null,
     showcase: i.showcase ?? null,
+    // Only when present: segments without punch-ins keep the hash they had before.
+    ...(i.punch?.length ? { punch: i.punch } : {}),
   };
   return crypto.createHash("sha256").update(canonicalJson(payload)).digest("hex");
 }

@@ -133,6 +133,20 @@ export function checkRepeatCounts(
   return { status, detail: parts.join("; ") };
 }
 
+/**
+ * Visual change every 3-5 s: longest stretch without a cut, a sub-shot change or a punch-in
+ * (render/beats.json). Warns above maxSec + 1 s (a cut snapped to a word can run a little long).
+ */
+export function checkVisualChange(longest: { sec: number; at: number } | null, maxSec = 5): GateCheck | null {
+  if (!longest) return null;
+  return {
+    group: "Edit",
+    name: `Visual change at least every ${maxSec} s`,
+    status: longest.sec > maxSec + 1 ? "warn" : "pass",
+    detail: `longest stretch without a cut or punch-in: ${longest.sec.toFixed(1)} s at ${fmt(longest.at)}`,
+  };
+}
+
 /** Footage shots longer than `maxSec` (pacing sub-shots carry their frame count). */
 export function checkShotLength(scenes: GateScene[], maxSec = 4, fps = 30): GateCheck {
   const long: string[] = [];

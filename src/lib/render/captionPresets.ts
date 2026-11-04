@@ -13,7 +13,9 @@ export type CaptionMode =
   /** A short line whose current word is highlighted as it is spoken. */
   | "karaoke"
   /** One word at a time, popping in. */
-  | "word";
+  | "word"
+  /** A short line; the spoken word switches to the accent colour and grows (word highlight). */
+  | "highlight";
 
 export interface CaptionPreset {
   id: string;
@@ -35,6 +37,8 @@ export interface CaptionPreset {
   /** Outline width in px at 1080p (ignored with a box). */
   outline: number;
   shadow: number;
+  /** Highlight mode: the spoken word sits on an accent-coloured box instead of turning accent-coloured. */
+  highlightBox?: boolean;
 }
 
 export const CAPTION_PRESETS: readonly CaptionPreset[] = [
@@ -42,6 +46,8 @@ export const CAPTION_PRESETS: readonly CaptionPreset[] = [
   { id: "bold", label: "Bold", description: "Big capitals with a heavy outline, a few words at a time.", mode: "line", uppercase: true, sizeScale: 1.25, maxWords: 3, box: false, textColor: "#FFFFFF", accent: "#FFD60A", outlineColor: "#000000", outline: 8, shadow: 3 },
   { id: "karaoke", label: "Karaoke", description: "The spoken word lights up as it is said.", mode: "karaoke", uppercase: false, sizeScale: 1.15, maxWords: 4, box: false, textColor: "#FFFFFF", accent: "#FFD60A", outlineColor: "#000000", outline: 6, shadow: 2 },
   { id: "pop", label: "Pop", description: "One big word at a time, popping in.", mode: "word", uppercase: true, sizeScale: 1.7, maxWords: 1, box: false, textColor: "#FFFFFF", accent: "#FFD60A", outlineColor: "#000000", outline: 9, shadow: 3 },
+  { id: "highlight", label: "Word highlight", description: "A short line; the spoken word turns yellow and grows.", mode: "highlight", uppercase: false, sizeScale: 1.15, maxWords: 4, box: false, textColor: "#FFFFFF", accent: "#FFD60A", outlineColor: "#000000", outline: 6, shadow: 2 },
+  { id: "bold-pop", label: "Bold pop", description: "Big capitals, 3 words; the spoken word sits on a green box.", mode: "highlight", uppercase: true, sizeScale: 1.3, maxWords: 3, box: false, textColor: "#FFFFFF", accent: "#22C55E", outlineColor: "#000000", outline: 7, shadow: 3, highlightBox: true },
   { id: "minimal", label: "Minimal", description: "Small, quiet text with a soft shadow.", mode: "line", uppercase: false, sizeScale: 0.8, maxWords: 7, box: false, textColor: null, accent: "#FFD60A", outlineColor: "#000000", outline: 3, shadow: 2 },
 ];
 

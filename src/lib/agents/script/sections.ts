@@ -40,7 +40,9 @@ function prompt(s: OutlineSection, topic: string, facts: SourcedFact[], target: 
         ? `The OUTRO of a countdown video about ${topic}. ${s.angle}`
         : `The section for #${s.rank}: ${s.product}. Angle: ${s.angle} Start by naming the product and its rank.`;
   const f = facts.length ? `Facts you may state (and only these):\n${facts.map((x) => `- ${x.label}: ${x.value}`).join("\n")}` : "Facts: none (state no numbers).";
-  return `${what}\n${f}\n${prevLine ? `The previous section ended with: "${prevLine}"\n` : ""}Target: ${target} words.${extra ? `\n${extra}` : ""}`;
+  const beats = s.beats?.length ? `Beats for this section:\n${s.beats.map((b) => `- ${b}`).join("\n")}\n` : "";
+  const rules = s.rules?.length ? `Structure rules (from the channel's SOP, wording is yours):\n${s.rules.map((b) => `- ${b}`).join("\n")}\n` : "";
+  return `${what}\n${f}\n${beats}${rules}${prevLine ? `The previous section ended with: "${prevLine}"\n` : ""}Target: ${target} words.${extra ? `\n${extra}` : ""}`;
 }
 
 export type Ask = (system: string, user: string) => Promise<string>;
@@ -60,7 +62,7 @@ export function ruleSection(s: OutlineSection, topic: string, facts: SourcedFact
       ? [s.angle, `We looked at specs, prices and real-world trade-offs so you can pick the right one.`, `Stick around for number one, because it is not the one most people expect.`]
       : s.kind === "outro"
         ? [`That wraps up our list of ${topic}.`, s.angle, `Tell us in the comments which one you would buy.`]
-        : [`Number ${s.rank} is the ${s.product}.`, s.angle, ...facts.map((f) => `Its ${f.label.toLowerCase()} is ${f.value}.`)];
+        : [...(s.beats?.some((b) => /re-hook/.test(b)) ? ["Next up, and here's why it made the list."] : []), `Number ${s.rank} is the ${s.product}.`, s.angle, ...facts.map((f) => `Its ${f.label.toLowerCase()} is ${f.value}.`)];
   return fitWords(parts.join(" "), s.words);
 }
 
@@ -111,7 +113,7 @@ export function dropBanned(text: string, brief?: ChannelBrief | null): string {
   return out.replace(/\s{2,}/g, " ").trim();
 }
 
-export async function writeSection(s: OutlineSection, topic: string, facts: SourcedFact[], prevLine: string, ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<SectionText> {
+export async function writeSection(s: OutlineSection, topic: string, facts: SourcedFact[], prevLine: string, ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null, beatCheck?: (text: string) => string[]): Promise<SectionText> {
   const target = s.words;
   // Product names (and the outline's list of them) may contain numbers.
   const names = [s.product ?? "", ...(s.names ?? [])];
@@ -143,12 +145,18 @@ export async function writeSection(s: OutlineSection, topic: string, facts: Sour
       if (!bestClean && closer(text)) best = text;
       continue;
     }
+    const beatIssues = beatCheck?.(text) ?? [];
+    if (!bad.length && !banned.length && beatIssues.length && attempts < 3) {
+      extra = `Your last draft missed its beats: ${beatIssues.join("; ")}.`;
+      if (!bestClean && closer(text)) best = text;
+      continue;
+    }
     if (bad.length && attempts < 3) {
       extra = `Your last draft stated numbers that are not in the facts (${bad.flatMap((b) => b.numbers).join(", ")}). Remove them; use only the listed facts.`;
       if (!bestClean && closer(text)) best = text;
       continue;
     }
-    const clean = !bad.length && !banned.length;
+    const clean = !bad.length && !banned.length && !beatIssues.length;
     if ((clean && !bestClean) || ((clean || !bestClean) && closer(text))) {
       best = text;
       bestClean = clean;
@@ -167,12 +175,13 @@ export async function writeSection(s: OutlineSection, topic: string, facts: Sour
   return { section: s, text, words: countWords(text), attempts, unsourcedRemoved: removed };
 }
 
-export async function writeSections(outline: Outline, facts: SourcedFact[], ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null): Promise<SectionText[]> {
+export async function writeSections(outline: Outline, facts: SourcedFact[], ask: Ask | null, log: (m: string) => void = () => {}, brief?: ChannelBrief | null, beatCheck?: (index: number, text: string) => string[]): Promise<SectionText[]> {
   const out: SectionText[] = [];
-  for (const s of outline.sections) {
+  for (const [i, s] of outline.sections.entries()) {
     const own = s.kind === "product" ? facts.filter((f) => f.product === s.product) : [];
-    const prev = out.length ? splitSentences(out[out.length - 1].text).at(-1) ?? "" : "";
-    out.push(await writeSection(s, outline.topic, own, prev, ask, log, brief));
+    // The previous section's last 2 sentences, so the hand-over reads as one script.
+    const prev = out.length ? splitSentences(out[out.length - 1].text).slice(-2).join(" ") : "";
+    out.push(await writeSection(s, outline.topic, own, prev, ask, log, brief, beatCheck ? (t) => beatCheck(i, t) : undefined));
   }
   return out;
 }

@@ -5,6 +5,8 @@ import { bannedIn, ChannelBrief, targetWords } from "../../channelBrief.js";
 import { writeJson } from "../../project.js";
 import { factsFromUrls, loadFactsFile, numbersIn, SourcedFact, unsourcedClaims } from "./facts.js";
 import { buildOutline, Outline } from "./outline.js";
+import { BeatSheet, beatInstructions, planBeats, retentionReport, RetentionReport, sectionBeatProblems } from "./beats.js";
+import type { Sop } from "../sop/extract.js";
 import { originalityReport, OriginalityReport } from "./originality.js";
 import { Ask, balanceTotal, countWords, llmWriter, SectionText, writeSection, writeSections } from "./sections.js";
 
@@ -29,6 +31,9 @@ export interface ScriptReport {
   /** The channel brief used, and any banned phrase still in the final text (should be none). */
   channel: { id: string; name: string; bannedFound: string[] } | null;
   outline: Outline;
+  beats: BeatSheet;
+  /** The retention_beats check (also in the QA report). */
+  retention: RetentionReport;
 }
 
 export interface ScriptInput {
@@ -47,6 +52,9 @@ export interface ScriptInput {
   log?: (m: string) => void;
   /** The channel's brief (voice, audience, banned phrases, length). */
   brief?: ChannelBrief | null;
+  /** A competitor SOP whose structure (hook formula, rules) the script follows. */
+  sop?: Sop | null;
+  format?: string;
 }
 
 export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: string; report: ScriptReport }> {
@@ -62,7 +70,16 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
   log(`[script] ${facts.length} sourced fact(s) for ${new Set(facts.map((f) => f.product)).size}/${i.products.length} product(s)`);
   // 2. Outline + sections.
   const outline = await buildOutline(i.topic, i.products, target, facts, log, i.brief);
-  let sections = await writeSections(outline, facts, ask, log, i.brief);
+  // 2b. Retention beats: hook, promise, re-hooks, open loops, turns (written into each section's prompt).
+  const sheet = await planBeats(outline, { brief: i.brief, sop: i.sop, format: i.format, log });
+  outline.sections.forEach((s, k) => {
+    s.beats = beatInstructions(sheet, k);
+    s.rules = sheet.rulesFromSop;
+  });
+  const check = (k: number, t: string) => sectionBeatProblems(sheet, k, t);
+  // Without a model the intro skeleton still opens on the hook and says the promise.
+  if (!ask && outline.sections[0]) outline.sections[0].angle = `${sheet.hook.idea} ${sheet.promise}`;
+  let sections = await writeSections(outline, facts, ask, log, i.brief, ask ? check : undefined);
   // 3. Originality: rewrite sections too close to a competitor (one round), then re-check.
   let originality: OriginalityReport | null = null;
   if (i.competitors?.length) {
@@ -73,7 +90,7 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
         const s = sections[p.index];
         log(`[script] ${s.section.product ?? s.section.kind}: too close to a competitor (5-gram ${p.ngram}, embedding ${p.embedding ?? "-"}); rewriting`);
         const own = s.section.kind === "product" ? facts.filter((f) => f.product === s.section.product) : [];
-        const re = await writeSection({ ...s.section, angle: `${s.section.angle} Use a completely different structure and wording than a typical review.` }, i.topic, own, "", ask, log, i.brief);
+        const re = await writeSection({ ...s.section, angle: `${s.section.angle} Use a completely different structure and wording than a typical review.` }, i.topic, own, "", ask, log, i.brief, (t) => check(p.index, t));
         sections[p.index] = re;
       }
       originality = await originalityReport(sections.map((s) => s.text), i.competitors, opts);
@@ -91,6 +108,9 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
     const nums = numbersIn(f.value);
     return !!sec && nums.length > 0 && nums.every((x) => numbersIn(sec.text).includes(x));
   });
+  // 6. Retention beats over the final text.
+  const retention = retentionReport(sheet, sections.map((s) => ({ label: s.section.product ?? s.section.kind, text: s.text, budget: s.section.words })));
+  log(`[script] retention beats: ${retention.status}${retention.problems.length ? ` (${retention.problems.join("; ")})` : ""}`);
   const report: ScriptReport = {
     topic: i.topic,
     targetWords: target,
@@ -103,6 +123,8 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
     claims: { unsourced, factsUsed: used, factsAvailable: facts.length, facts },
     channel: i.brief ? { id: i.brief.id, name: i.brief.name, bannedFound: bannedIn(text, i.brief) } : null,
     outline,
+    beats: sheet,
+    retention,
   };
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "script.txt"), text + "\n", "utf8");

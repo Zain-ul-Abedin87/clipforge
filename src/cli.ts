@@ -324,6 +324,7 @@ program
   .option("--facts <file>", "JSON [{product,label,value,url,title}] (default <project>/facts_sources.json)")
   .option("--competitors <ids>", "comma-separated YouTube video ids whose transcripts the script must not copy")
   .option("--channel <id>", "channel whose brief (voice, audience, length) is used (default: the project's channel)")
+  .option("--sop <competitor>", "follow this competitor SOP of the channel (default: the channel's newest SOP; \"none\" = no SOP)")
   .action(async (o) => {
     const fs = await import("node:fs");
     const path = await import("node:path");
@@ -354,8 +355,13 @@ program
     if (o.channel) fs.writeFileSync(pj, JSON.stringify({ ...proj, channel }, null, 2));
     const brief = loadBrief(channel);
     if (channel && !brief) console.warn(`[script] channel "${channel}" has no brief (channels/${channel}/brief.json): writing without one. Make it with: channel init ${channel}`);
+    const { loadSop } = await import("./lib/agents/sop/extract.js");
+    const sop = channel && o.sop !== "none" ? loadSop(channel, o.sop ? String(o.sop) : undefined) : null;
+    if (o.sop && o.sop !== "none" && !sop) console.warn(`[script] no SOP "${o.sop}" for channel ${channel}: writing without one`);
+    if (sop) console.log(`[script] following the SOP learned from ${sop.competitor} (${sop.stats.videos} videos)`);
     const { report } = await writeScript(dir, {
       brief,
+      sop,
       topic: String(o.topic),
       products: String(o.products).split(",").map((x) => x.trim()).filter(Boolean),
       targetWords: o.words ? Number(o.words) : undefined,

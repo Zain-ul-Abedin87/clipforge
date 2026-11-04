@@ -21,6 +21,10 @@ export interface OutlineSection {
   factIds: string[];
   /** All product names of the video (intro / outro may name them; their numbers are not claims). */
   names?: string[];
+  /** Retention beat instructions for this section (src/lib/agents/script/beats.ts). */
+  beats?: string[];
+  /** SOP rules / do / don't the writer follows. */
+  rules?: string[];
 }
 export interface Outline {
   topic: string;

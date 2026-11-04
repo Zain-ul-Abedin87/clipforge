@@ -32,10 +32,13 @@ function fakeWriter() {
   const ask = async (_system: string, user: string) => {
     calls.push(user);
     const target = Number(/Target: (\d+) words/.exec(user)![1]);
-    const facts = [...user.matchAll(/^- (.+?): (.+)$/gm)].map((m) => `Its ${m[1].toLowerCase()} is ${m[2]}.`);
+    // Only the facts block (the beat instructions are "- ..." lines too).
+    const block = /Facts you may state \(and only these\):\n((?:- .+\n?)+)/.exec(user)?.[1] ?? "";
+    const facts = [...block.matchAll(/^- (.+?): (.+)$/gm)].map((m) => `Its ${m[1].toLowerCase()} is ${m[2]}.`);
     if (/#1: Canik/.test(user) && !copied) {
       copied = true;
-      return (COMPETITOR + " ").repeat(4).split(" ").slice(0, target).join(" ");
+      // Names the product (the #1 section pays off the "which one is number one" loop).
+      return ("Canik Mete MC9 " + (COMPETITOR + " ").repeat(4)).split(" ").slice(0, target).join(" ");
     }
     const filler = "This pick balances size and control in a way that suits daily carry for most people who want something simple".split(" ");
     const out = [...facts.join(" ").split(" ").filter(Boolean)];
@@ -101,7 +104,7 @@ describe("writeScript: 10 products", () => {
     const logs: string[] = [];
     const { text, report } = await writeScript(dir, { topic: "best concealed carry pistols", products: PRODUCTS, targetWords: 1500, factsFile, competitors: [COMPETITOR], ask: w.ask, useEmbeddings: false, log: (m) => logs.push(m) });
     assert.equal(report.sections.filter((s) => s.kind === "product").length, 10);
-    assert.ok(report.withinTolerance, `${report.totalWords} words`);
+    assert.ok(report.withinTolerance, `${report.totalWords} words ${JSON.stringify(report.sections.map((s) => [s.target, s.words, s.attempts]))}`);
     assert.ok(Math.abs(countWords(text) - 1500) <= 45);
     assert.ok(report.originality?.clean, JSON.stringify(report.originality?.paragraphs.filter((p) => p.flagged)));
     assert.ok(logs.some((l) => /too close to a competitor/.test(l)), "the copied section was rewritten");

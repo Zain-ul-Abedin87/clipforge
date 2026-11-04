@@ -1366,6 +1366,73 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## S3: Retention-aware outline, section writer and QA (2026-11-04)
+
+**What changed**
+- `src/lib/agents/script/beats.ts`: a beat sheet on top of the outline.
+  - **Hook**: question-first or stakes-first (stakes when the SOP's hook formula says so), with
+    the answer held back ("withheld").
+  - **Promise** within the first 30 s (wpm / 2 words, from the brief).
+  - **Re-hooks** every wpm x 3 words (450 at 150 wpm). Each snaps to a section start within
+    20%; otherwise it is placed inside the section. Each has a technique: curiosity gap, problem,
+    or preview.
+  - **Open loops** with `plantedInSection` < `paidOffInSection` and an `answerKey` that must be
+    said at the payoff (e.g. the #1 product).
+  - **Per section**: an angle and a but / therefore turn.
+
+  The model proposes these through `askJson` (refused and asked again if a loop is paid off before
+  it is planted, the hook is over 40 words, there are no loops, or a section index is wrong).
+  Positions, budgets and the re-hook schedule are computed. The fallback plants "which one is
+  number one?" in the intro and pays it off in the #1 section.
+- **Section writer**:
+  - each section's prompt gets its beat lines, up to 8 SOP rules / do / don't, the brief's voice,
+    and the previous section's **last 2 sentences** (was 1);
+  - a draft that misses its beats is asked again with what was missed;
+  - a clean draft (sourced numbers, no banned phrase, beats met) beats a closer-length dirty one;
+  - the facts-only rule, the originality check and +-3% are unchanged and run as before.
+- **`retention_beats` check** (`retentionReport`), run over the final text after balancing. It
+  checks:
+  - the hook (opening up to the first question) is 40 words or fewer and its last sentence leaves
+    a gap;
+  - the #1 isn't revealed in the hook;
+  - a promise line is in the first wpm / 2 words (+20%);
+  - every planned re-hook is found, and every gap is within +-25% of the target;
+  - every loop is paid off and not answered early;
+  - no section is over 2x its budget.
+
+  Result: `fail` for a long hook, an unpaid loop or a bloated section; otherwise `warn` or `pass`.
+  It is saved in `script_report.json` (`beats`, `retention`) and shown in the QA report as
+  "Script > Retention beats".
+- `script --sop <competitor|none>`: by default the channel's newest SOP is followed.
+- Without a model, the intro skeleton opens on the hook and the promise, and a product section
+  with a re-hook opens on a neutral preview line.
+
+**Fixed in old tests**: the fake writer in `tests/script.test.ts` read every "- label: value"
+line as a fact, and the beat lines (with "40 words") now look like that. It reads only the facts
+block now. No production code depended on it.
+
+**Tests**: `tests/beats.test.ts`, 8. They cover:
+- re-hook scheduling;
+- the rule plan (hook type, promise word, loop on #1, re-hook count, instructions);
+- the model plan: a loop paid off before it is planted is refused and retried, and the SOP makes
+  it stakes-first;
+- a passing script;
+- a failing script where every problem is reported;
+- the section checks;
+- `writeScript` end to end with a beat-following fake writer: retention `pass`, +-3%, no
+  unsourced numbers;
+- a writer that ignores the beats: asked again, report `fail`.
+
+Full suite: 458 tests: 457 pass, 0 fail, 1 skipped.
+
+**Limits**
+- The re-hook, curiosity and promise detectors are English cue-word rules. A clever re-hook
+  without a cue word reads as "missing" (a false warning, never a false pass for loops or hook
+  length).
+- qwen3:8b's real beat-following is untested here. Judge the first scripts on your PC.
+
+---
+
 ## S2: Competitor SOP extractor (2026-11-04)
 
 The core of "copy the structure, never the wording". 5-10 transcripts of one competitor become a

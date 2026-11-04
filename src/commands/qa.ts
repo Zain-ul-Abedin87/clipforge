@@ -190,8 +190,17 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     } else add("Sound", "Sound effects heard on time (earshot)", "warn", `earshot is switched on but "${es.command} --help" did not run: pip install earshot (see Tools)`);
   }
 
+  // ---- 3b2. script retention beats ----
+  // (script_report.json, written by the script step)
+  const srFile = path.join(dir, "script_report.json");
+  if (fs.existsSync(srFile)) {
+    const rr = readJson<{ retention?: { status: "pass" | "warn" | "fail"; problems: string[]; hook: { words: number }; rehooks: { planned: number; found: number }; loops: { paidOff: boolean }[] } }>(srFile).retention;
+    if (rr) add("Script", "Retention beats", rr.status, rr.problems.length ? rr.problems.slice(0, 6).join("; ") : `hook ${rr.hook.words} words, promise early, ${rr.rehooks.found}/${rr.rehooks.planned} re-hook(s) on time, ${rr.loops.filter((l) => l.paidOff).length}/${rr.loops.length} loop(s) paid off`);
+  }
+
   // ---- 3c. facts (documentaries: src/lib/factcheck, factcheck.json) ----
   const factFile = path.join(dir, "factcheck.json");
+
   if (fs.existsSync(factFile)) {
     const fcr = readJson<{ factcheck: { counts: Record<string, number>; claims: { sentence: string; verdict: string }[] } }>(factFile).factcheck;
     const spoken = fs.existsSync(path.join(dir, "script.txt")) ? fs.readFileSync(path.join(dir, "script.txt"), "utf8") : "";

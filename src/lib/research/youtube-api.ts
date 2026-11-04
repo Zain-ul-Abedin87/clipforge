@@ -12,7 +12,9 @@ import { ResearchDb } from "./db.js";
  * Key: YOUTUBE_API_KEY in .env (Google Cloud console -> YouTube Data API v3 -> API key; free).
  */
 
-export const UNIT_COST = { search: 100, videos: 1, channels: 1, playlistItems: 1 } as const;
+// commentThreads: 1 unit per call per Google's quota table (determine_quota_cost); not re-checked
+// from the build machine (developers.google.com was unreachable there): confirm it in the console.
+export const UNIT_COST = { search: 100, videos: 1, channels: 1, playlistItems: 1, commentThreads: 1 } as const;
 type Endpoint = keyof typeof UNIT_COST;
 
 export class QuotaError extends Error {
@@ -225,6 +227,19 @@ export class YouTubeApi {
       }
     }
     return out;
+  }
+
+  /** Top-level comments of a video, most relevant first (commentThreads.list, 1 call). Empty when comments are off. */
+  async topComments(videoId: string, max = 50): Promise<{ text: string; likes: number }[]> {
+    try {
+      const body = await this.call("commentThreads", { part: "snippet", videoId, order: "relevance", maxResults: Math.min(100, max), textFormat: "plainText" });
+      return ((body.items ?? []) as Json[]).map((it) => ({ text: String(it.snippet?.topLevelComment?.snippet?.textOriginal ?? it.snippet?.topLevelComment?.snippet?.textDisplay ?? ""), likes: n(it.snippet?.topLevelComment?.snippet?.likeCount) })).filter((c) => c.text.trim());
+    } catch (err) {
+      // 403 commentsDisabled and similar: no comments to read.
+      if (err instanceof QuotaError) throw err;
+      this.log(`[research] comments of ${videoId}: ${String((err as Error).message).slice(0, 120)}`);
+      return [];
+    }
   }
 
   /** Latest `max` upload ids of a channel (playlistItems.list, 1 unit per 50). */

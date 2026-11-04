@@ -16,9 +16,12 @@ const Bt = await import("../src/lib/agents/script/beats.js");
 const { buildOutline } = await import("../src/lib/agents/script/outline.js");
 const { writeScript } = await import("../src/lib/agents/script/index.js");
 const { cleanBrief } = await import("../src/lib/channelBrief.js");
+const { paths } = await import("../src/lib/paths.js");
 after(() => {
   J.setJsonAsk(null);
   fs.rmSync(tmp, { recursive: true, force: true });
+  // writeScript with a brief records the channel's history.
+  fs.rmSync(path.join(paths.channels, "zz-beats-test"), { recursive: true, force: true });
 });
 S.saveLlmSettings({ primary: "off" });
 
@@ -35,7 +38,7 @@ describe("beat sheet", () => {
 
   test("rule plan: question-first hook, #1 withheld and paid off in its own section, promise by word 75", async () => {
     const outline = await buildOutline("budget lights", PRODUCTS, 1800, []);
-    const sheet = await Bt.planBeats(outline, { brief: cleanBrief("x", { wpm: 150 }) });
+    const sheet = await Bt.planBeats(outline, { brief: cleanBrief("zz-beats-test", { wpm: 150 }) });
     assert.equal(sheet.source, "fallback");
     assert.equal(sheet.hook.type, "question");
     assert.equal(sheet.promiseByWord, 75);
@@ -48,7 +51,7 @@ describe("beat sheet", () => {
     assert.match(intro, /Start with the hook/);
     assert.match(intro, /Within the first 75 words/);
     assert.match(intro, /Plant this open question/);
-    assert.match(Bt.beatInstructions(sheet, sheet.loops[0].paidOffInSection).join(" "), /say Lamp F/);
+    assert.match(Bt.beatInstructions(sheet, sheet.loops[0].paidOffInSection).join(" "), /say "Lamp F"/);
   });
 
   test("model plan: a loop paid off before it is planted is refused and asked again; the SOP sets a stakes-first hook", async () => {
@@ -131,7 +134,7 @@ describe("writeScript with beats", () => {
     const out: string[] = [];
     if (/Start with the hook/.test(beats)) out.push("Which of these lights is actually worth your money? By the end you'll know which one fits you.");
     if (/re-hook/.test(beats)) out.push("But here's the catch most buyers miss.");
-    const pay = /say (Lamp [A-F])\./.exec(beats);
+    const pay = /say "(Lamp [A-F])"\./.exec(beats);
     if (pay) out.push(`Number one is ${pay[1]}.`);
     const own = /The section for #\d+: (Lamp [A-F])/.exec(user);
     if (own && !pay) out.push(`Next is ${own[1]}.`);
@@ -143,7 +146,7 @@ describe("writeScript with beats", () => {
 
   test("the written script passes retention_beats; facts-only and +-3% still hold; report has beats + retention", async () => {
     const dir = path.join(tmp, "p");
-    const { report } = await writeScript(dir, { topic: "budget lights", products: PRODUCTS, targetWords: 1500, ask: beatWriter, brief: cleanBrief("x", { wpm: 150 }) });
+    const { report } = await writeScript(dir, { topic: "budget lights", products: PRODUCTS, targetWords: 1500, ask: beatWriter, brief: cleanBrief("zz-beats-test", { wpm: 150 }) });
     assert.equal(report.retention.status, "pass", report.retention.problems.join("; "));
     assert.ok(report.withinTolerance);
     assert.deepEqual(report.claims.unsourced, []);

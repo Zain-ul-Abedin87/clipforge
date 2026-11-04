@@ -183,6 +183,10 @@
       <div id="renderDone" hidden>
         <video class="bigvideo" id="video" controls></video>
         <div class="row"><a class="btn primary" id="download">Download video</a><span id="qa"></span><a class="btn ghost" href="/dashboard">All videos</a><button class="btn ghost" id="rerender">Make it again</button></div>
+        <h2 style="margin-top:24px">Thumbnail ideas</h2>
+        <p class="help" style="margin-top:-8px">Three concepts for the thumbnail (no picture is made): what fills the frame, the words on it (4 or fewer), the emotion and the colours. They learn from the competitors' outlier thumbnails on the Research page, never their words.</p>
+        <div class="row"><button class="btn" id="thumbGo">Make 3 thumbnail concepts</button><span class="hint" id="thumbNote"></span></div>
+        <div id="thumbList"></div>
         <h2 style="margin-top:24px">Shorts</h2>
         <div class="shorts" id="shortsList"></div>
         <p class="help">The upload text (description, pinned comment, chapters) is in the project's publish folder; the QA page lists anything to check before uploading.</p>
@@ -542,10 +546,24 @@ function render() {
       $("video").src = `/api/projects/${project}/video?t=${Date.now()}`;
       $("download").href = `/api/projects/${project}/video?download=1`;
       $("qa").innerHTML = info.qa ? `<span class="pill ${info.qa.fail ? "f" : info.qa.warn ? "w" : "p"}">Checks: ${info.qa.pass} ok, ${info.qa.warn} to look at, ${info.qa.fail} problem(s)</span>` : "";
+      api(`/api/wizard/${project}/thumbnails`).then(showThumbs).catch(() => {});
       $("shortsList").innerHTML = info.shorts.length ? info.shorts.map((f) => `<video controls preload="metadata" src="/api/wizard/${project}/short/${encodeURIComponent(f)}"></video>`).join("") : '<p class="help">No Shorts this time (the video needs 30 s stretches of whole sentences).</p>';
     }
   }
 }
+
+// ---------- thumbnail concepts ----------
+function showThumbs(r) {
+  if (!r) { $("thumbList").innerHTML = ""; return; }
+  $("thumbNote").textContent = `${r.writer === "rules" ? "No model running: rule-based concepts. " : ""}${r.references.length} competitor thumbnail(s) studied.${r.notes.length ? ` ${r.notes.join("; ")}.` : ""}`;
+  $("thumbList").innerHTML = `<div class="shorts">${r.concepts.map((c, i) => `<div class="card" style="padding:12px"><b>${i + 1}. "${esc(c.text)}"</b><div class="hint" style="margin-top:6px">${esc(c.mainSubject)}</div><div class="hint">Emotion: ${esc(c.emotion)}</div><div class="hint">Colours: ${esc(c.contrast)}</div><div class="hint" style="margin-top:6px"><i>${esc(c.why)}</i></div></div>`).join("")}</div>`;
+}
+$("thumbGo").onclick = async () => {
+  $("thumbGo").disabled = true;
+  $("thumbNote").textContent = "Working (a minute)...";
+  try { showThumbs(await api(`/api/wizard/${project}/thumbnails`, { method: "POST" })); } catch (e) { $("thumbNote").textContent = e.message; }
+  $("thumbGo").disabled = false;
+};
 
 async function refresh() {
   if (!project) return;

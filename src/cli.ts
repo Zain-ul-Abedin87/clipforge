@@ -244,6 +244,22 @@ program
     }
   });
 
+program
+  .command("thumbnails")
+  .description("3 thumbnail concepts (subject, on-image text <= 4 words, emotion, contrast) from the title and the competitors' outlier thumbnails -> <project>/thumbnail_concepts.json")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--title <text>", "the title (default: the project's title)")
+  .action(async (o) => {
+    const { projectThumbnails } = await import("./lib/agents/thumbnailsRun.js");
+    try {
+      const r = await projectThumbnails(String(o.project), { title: o.title, log: console.log });
+      r.concepts.forEach((c, i) => console.log(`${i + 1}. "${c.text}" | ${c.mainSubject} | ${c.emotion} | ${c.contrast}\n   ${c.why}`));
+    } catch (err) {
+      console.error(`[thumbnails] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
 const sopCmd = program.command("sop").description("Competitor SOP: learn a competitor's structure (hook, beats, rules) from 5-10 transcripts, never their wording");
 sopCmd
   .command("build")

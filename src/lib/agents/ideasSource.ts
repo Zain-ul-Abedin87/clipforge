@@ -5,7 +5,7 @@ import type { IdeaSource } from "./ideas.js";
  * channel), else the YouTube API (needs YOUTUBE_API_KEY), else the title given by hand. The
  * transcript is fetched when possible; without it the model judges from the title.
  */
-export async function ideaSource(videoId: string, o: { title?: string; transcript?: boolean; log?: (m: string) => void } = {}): Promise<{ source: IdeaSource; competitorTitles: string[] }> {
+export async function ideaSource(videoId: string, o: { title?: string; transcript?: boolean; comments?: boolean; api?: import("../research/youtube-api.js").YouTubeApi; log?: (m: string) => void } = {}): Promise<{ source: IdeaSource; competitorTitles: string[] }> {
   const log = o.log ?? (() => {});
   const { lastResearch } = await import("../research/index.js");
   const last = lastResearch();
@@ -24,6 +24,15 @@ export async function ideaSource(videoId: string, o: { title?: string; transcrip
   if (!source && o.title) source = { videoId, title: o.title };
   if (!source) throw new Error(`Video ${videoId} is not in the last research scan and YOUTUBE_API_KEY is not set: pass its title with --title.`);
   if (o.title) source.title = o.title;
+  // Viewers' questions and complaints in its comments: angles for the ideas (needs YOUTUBE_API_KEY).
+  if (o.comments !== false) {
+    const { YouTubeApi } = await import("../research/youtube-api.js");
+    const { ResearchDb } = await import("../research/db.js");
+    const { commentAngles } = await import("../research/comments.js");
+    const api = o.api ?? new YouTubeApi({ db: new ResearchDb(), log });
+    const angles = await commentAngles(api, [videoId], log).catch((err) => (log(`[comments] ${(err as Error).message}`), []));
+    if (angles.length) source.angles = angles.map((a) => `${a.kind}: ${a.angle}`);
+  }
   if (o.transcript !== false) {
     const { quickTranscript } = await import("./youtube/ytExtractor.js");
     const t = await quickTranscript(`https://www.youtube.com/watch?v=${videoId}`).catch(() => null);

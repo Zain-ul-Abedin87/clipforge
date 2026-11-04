@@ -125,6 +125,19 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
     }
   }
 
+  // Thumbnail concepts (no image generation): GET the saved ones, POST makes 3 new ones.
+  if (parts[3] === "thumbnails") {
+    const { projectThumbnails, readThumbnails } = await import("../../lib/agents/thumbnailsRun.js");
+    if (method === "GET") return { status: 200, body: readThumbnails(project) };
+    if (method === "POST") {
+      try {
+        return { status: 200, body: await projectThumbnails(project, { log: (m) => console.log(m) }) };
+      } catch (err) {
+        return { status: 400, body: { error: (err as Error).message } };
+      }
+    }
+  }
+
   if (parts[3] === "short" && parts[4] && method === "GET") {
     const name = path.basename(parts[4]);
     if (!shortsOf(project).includes(name)) return { status: 404, body: { error: "no such Short" } };

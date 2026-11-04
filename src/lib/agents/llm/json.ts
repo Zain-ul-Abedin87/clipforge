@@ -17,9 +17,12 @@ import { stageModel, Stage } from "./settings.js";
 export const approxTokens = (s: string) => Math.ceil(s.length / 3.5);
 
 /** Room for the prompt when `answer` tokens are kept free for the reply (plus a margin for the chat template). */
-export const promptBudget = (stage: Stage, answer: number) => stageModel(stage, false).numCtx - answer - 400;
+export const promptBudget = (stage: Stage, answer: number, vision = false) => stageModel(stage, vision).numCtx - answer - 400;
 
-export const fitsContext = (stage: Stage, system: string, user: string, answer: number) => approxTokens(system) + approxTokens(user) <= promptBudget(stage, answer);
+export const fitsContext = (stage: Stage, system: string, user: string, answer: number, images = 0) => approxTokens(system) + approxTokens(user) + images * IMAGE_TOKENS <= promptBudget(stage, answer, images > 0);
+
+/** Budget per picture for the vision model (a 480x360 thumbnail is a few hundred tokens; kept on the safe side). */
+export const IMAGE_TOKENS = 600;
 
 /** Splits items into consecutive groups whose rendered text stays under `maxTokens`. */
 export function chunkByTokens<T>(items: T[], render: (x: T) => string, maxTokens: number): T[][] {
@@ -49,7 +52,7 @@ export interface JsonResult<T> {
 }
 
 /** Test hook: replaces the model call (system, user) -> raw object. */
-export type RawAsk = (system: string, user: string, stage: Stage, maxTokens: number) => Promise<unknown>;
+export type RawAsk = (system: string, user: string, stage: Stage, maxTokens: number, images?: number) => Promise<unknown>;
 let rawAsk: RawAsk | null = null;
 export const setJsonAsk = (f: RawAsk | null) => (rawAsk = f);
 
@@ -65,6 +68,8 @@ export async function askJson<S extends z.ZodType>(c: {
   maxTokens?: number;
   retries?: number;
   log?: (m: string) => void;
+  /** Pictures sent with the prompt (the stage's vision model answers; one per call is best for small models). */
+  images?: { data: string; mediaType: string }[];
 }): Promise<JsonResult<z.infer<S>>> {
   const log = c.log ?? (() => {});
   const maxTokens = c.maxTokens ?? 2000;
@@ -73,9 +78,10 @@ export async function askJson<S extends z.ZodType>(c: {
     log(`[${c.label}] ${why}: rule-based result`);
     return { value: c.fallback(), source: "fallback", attempts: problems.length, problems };
   };
-  if (!rawAsk && !llmAvailable()) return fallback("no model available");
-  if (!fitsContext(c.stage, c.system, c.user, maxTokens)) {
-    problems.push(`prompt too big: about ${approxTokens(c.system) + approxTokens(c.user)} tokens for a ${stageModel(c.stage, false).numCtx}-token context`);
+  const nImg = c.images?.length ?? 0;
+  if (!rawAsk && !llmAvailable({ vision: nImg > 0 })) return fallback(nImg ? "no vision model available" : "no model available");
+  if (!fitsContext(c.stage, c.system, c.user, maxTokens, nImg)) {
+    problems.push(`prompt too big: about ${approxTokens(c.system) + approxTokens(c.user) + nImg * IMAGE_TOKENS} tokens for a ${stageModel(c.stage, nImg > 0).numCtx}-token context`);
     return fallback(problems[0]);
   }
   let user = c.user;
@@ -84,10 +90,16 @@ export async function askJson<S extends z.ZodType>(c: {
     let raw: unknown;
     try {
       raw = rawAsk
-        ? await rawAsk(c.system, user, c.stage, maxTokens)
+        ? await rawAsk(c.system, user, c.stage, maxTokens, nImg)
         : (
             await withStage(c.stage, () =>
-              llm().messages.parse({ model: env("LLM_MODEL", "claude-haiku-4-5"), max_tokens: maxTokens, output_config: { format: zodOutputFormat(c.schema) }, system: c.system, messages: [{ role: "user", content: user }] }),
+              llm().messages.parse({
+                model: env("LLM_MODEL", "claude-haiku-4-5"),
+                max_tokens: maxTokens,
+                output_config: { format: zodOutputFormat(c.schema) },
+                system: c.system,
+                messages: [{ role: "user", content: nImg ? [...c.images!.map((im) => ({ type: "image" as const, source: { type: "base64" as const, media_type: im.mediaType as "image/jpeg", data: im.data } })), { type: "text" as const, text: user }] : user }],
+              }),
             )
           ).parsed_output;
     } catch (err) {

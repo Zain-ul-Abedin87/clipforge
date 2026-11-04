@@ -1366,6 +1366,124 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## Script engine v3: summary (2026-11-04)
+
+Branch `feature/script-engine-v3` (from `feature/full-pipeline-v2-cwi1sx` at `25e1655`). The idea:
+learn a winning channel's **structure** (hook formula, beats, re-hooks, loops), never its words,
+and write fully original scripts in **our** channel's voice.
+
+| Phase | What it adds | Tests |
+|---|---|---|
+| S0 | Optional paid SDKs (the server starts without `npm install`), baseline | 435 |
+| S1 | Channel brief (`channel init/show`, `/brief`, in every prompt, 2 seeded briefs) | +8 |
+| S2 | Competitor SOP extractor (map -> reduce in 8K, leak strip, `sop build/show`) | +7 |
+| S3 | Retention beat sheet, beat-aware writer, `retention_beats` QA | +8 |
+| S4 | Idea multiplier (why it worked -> 15 ideas, dedupe, Research > Ideas -> `/new`) | +6 |
+| S5 | Self-repetition vs our own last 20 scripts; 5 formats | +8 |
+| S6 | Thumbnail concepts (vision model, no image generation); comment mining | +9 |
+
+**Final:** typecheck clean; 481 tests: 480 pass, 0 fail, 1 skipped (the same one skipped since
+before v3).
+
+**Rules kept:**
+- Every model answer that feeds code goes through `askJson`: zod schema, then a content check,
+  then 2 retries that say what was wrong, then a deterministic fallback.
+- Every prompt is checked against the stage's context (8K) before sending. Long input is chunked
+  (SOP map -> reduce) or cut into excerpts (ideas).
+- The facts-only rule, the competitor originality check and +-3% are unchanged. S3 and S5 run
+  after them, never instead of them.
+
+**Bugs found and fixed on the way:**
+- The section writer could keep a draft with a banned phrase or an unsourced number over a clean
+  retry of the same length.
+- The rule SOP lost its payoff beat on list-heavy videos.
+- The rule ideas used format-like pillars as subjects ("Best best X ... ranked ranked").
+- Two fallback promises gave away their own loop's answer.
+- "#undefined" appeared in the writer log.
+- One test leaked a `channels/x` folder into the repo.
+
+**Known limits:**
+- **Nothing ran against the real models here** (no Ollama in the cloud). Every model path was
+  tested with fake answers that also break the rules on purpose (quotes, bad line numbers,
+  banned phrases, loops paid off before they are planted). How well qwen3:8b and qwen2.5vl:3b
+  follow the beats, describe techniques and judge thumbnails is the first thing to judge on your
+  PC (LOCAL_TESTING section 9).
+- The retention, re-hook and promise detectors are English cue-word rules. A clever re-hook
+  without a cue word reads as missing: a false warning, not a false pass.
+- Formats: only the script is format-aware. Footage for myth and history items still uses the
+  item text as a "product" search.
+- The rule fallbacks (SOP, ideas, thumbnail concepts) are skeletons, labelled "rules" wherever
+  they are shown.
+
+**Blocked / needs you:**
+- `YOUTUBE_API_KEY`: `sop build --competitor UC...`, comment mining and outlier scans need it.
+  Without it, give `sop build` a folder of transcripts.
+- **Unverified:** I set the quota cost of `commentThreads.list` to 1 unit from Google's quota
+  table, but I could not open developers.google.com from the build machine. Check it at
+  developers.google.com/youtube/v3/determine_quota_cost. If it differs, change `UNIT_COST` in
+  `src/lib/research/youtube-api.ts`.
+- `ollama pull qwen2.5vl:3b` for the thumbnail descriptions.
+
+---
+
+## S6: Thumbnail concepts + comment mining (2026-11-04)
+
+**Thumbnail concepts** (`src/lib/agents/thumbnails.ts`, `thumbnailsRun.ts`). No image is
+generated.
+- The references are the last research scan's outliers closest to our title.
+- Each competitor thumbnail (`hqdefault.jpg`) is downloaded to `<project>/thumbs/`, then
+  described by the vision model (stage `vision`, e.g. `qwen2.5vl:3b`), **one picture per call**.
+  Each picture is counted at 600 tokens against the context. The description: subject, the text
+  written on it, emotion, colours, layout.
+- Then 3 concepts (stage `titles`): main subject, on-image text (4 words or fewer), emotion, a
+  contrast / colour idea, and why it works.
+- The answer is refused and asked again when:
+  - the text is over 4 words;
+  - it repeats a competitor's on-image text (> 0.8 similar);
+  - it uses a banned phrase;
+  - two concepts share the same text.
+- Without a model: rule concepts from the title (a versus title gets a split "A and B side by
+  side" layout).
+- Saved as `<project>/thumbnail_concepts.json`.
+- `askJson` now takes `images` (and checks `llmAvailable({vision})`).
+- CLI: `thumbnails -p <project> [--title]`. API: `GET/POST /api/wizard/<project>/thumbnails`.
+- UI: `/new` step 6, "Thumbnail ideas", with a button and 3 concept cards.
+
+**Comment mining** (`src/lib/research/comments.ts`, `YouTubeApi.topComments`).
+- `commentThreads.list` (order = relevance, up to 100 per video).
+- The most-liked comments are turned into question / complaint angles by rules:
+  - the question sentence, or complaint wording ("broke", "too heavy", "why didn't",
+    "what about"...);
+  - spam and links dropped;
+  - near-duplicates merged;
+  - at most 12.
+- The angles go into the idea multiplier's prompt ("Viewers' questions and complaints").
+- Without `YOUTUBE_API_KEY` it is skipped and says so. With comments turned off (403), the video
+  just has none.
+
+**Fixed while checking the page**: the rule concept for "Mora vs Buck: which knife?" said "the two
+Mora Buck side by side". It now says "Mora and Buck side by side".
+
+**Tests**: `tests/thumbs.test.ts`, 9. They cover:
+- comment angles: order, spam, duplicates;
+- the API mapping, and comments turned off;
+- no key = skipped;
+- the angles in the ideas prompt;
+- rule concepts;
+- a fake model:
+  - one picture per vision call;
+  - every prompt under budget;
+  - a copied competitor text and a 6-word text refused and retried;
+  - the run saved;
+- no model = "not described" plus rules;
+- the reference ranking;
+- the wizard API and the real CLI.
+
+Checked in Chromium: `/new` step 6 on a staged project -> 3 concept cards, plus the note "0
+competitor thumbnails studied: could not be downloaded" (no network to i.ytimg.com here).
+
+---
+
 ## S5: Self-repetition check + script formats (2026-11-04)
 
 **Self-repetition** (`src/lib/agents/script/selfRepeat.ts`, `src/lib/channelHistory.ts`)

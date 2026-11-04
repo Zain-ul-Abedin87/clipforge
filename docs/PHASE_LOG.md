@@ -1299,6 +1299,73 @@ Read the claim table, open two "verified" sources and check them by hand, then M
 
 ---
 
+## AI image style (one picture per scene, one fixed look)
+
+The format vidrush, Kutly and YtHunter all show: a history / story / explainer narration with an AI
+picture for every scene, in the same style throughout. Page: /make > Documentary > Pictures >
+"AI pictures in one style".
+
+**How it works**
+- **Style per channel** (`channels/<ch>/ai_style/style.json`):
+  - a look and things never to show;
+  - up to 5 reference pictures;
+  - up to 4 characters, each with a fixed description;
+  - 6 presets, none naming an artist.
+- **Consistency comes from code.** The AI writes only what each scene shows. The look, the
+  avoid-list and every named character's description are added to every prompt word for word.
+  - A character's own reference picture is sent first.
+- **"Learn the look from my pictures":** the vision model describes the shared style as prompt
+  words. Artist names are dropped.
+- **"Make a test picture":** one picture before a whole video.
+- **Engines:**
+  - ComfyUI on this PC (free). SDXL with IP-Adapter in "style transfer" mode from the reference
+    picture; node names and inputs were read in `cubiq/ComfyUI_IPAdapter_plus` (`IPAdapterPlus.py`),
+    and the upload uses ComfyUI's `/upload/image` (`server.py`). Flux works without IP-Adapter.
+  - Gemini API (paid): `gemini-2.5-flash-image` from Google's SDK model list; the reference
+    pictures go with every request.
+- **Pipeline:** with AI pictures, the Visuals stage runs `plan` -> `aistyle` instead of the stock
+  search.
+  - Card scenes keep their card.
+  - Pictures are cached by prompt + style; the licence ledger and log are written.
+  - The timeline gives every picture a camera move (zoom in, pan right, zoom out, pan left).
+- **QA:**
+  - **Fix:** AI pictures (`source "imagegen"`) now trigger YouTube's synthetic-content reminder.
+    Before, only Flow / Veo clips and avatars did, so even the existing ComfyUI fallback
+    pictures were missed.
+  - In AI-picture videos, "still images vs motion" (which would always fail) is replaced by
+    "AI pictures move and change": a camera move on each, a new picture every 8 s or less.
+
+**Files**: `src/lib/assets/aiStyle.ts`, `src/server/routes/aistyle.ts`, `src/server/server.ts`,
+`src/lib/orchestrator/pipeline.ts`, `src/lib/formats/documentary.ts`, `src/server/routes/make.ts`,
+`src/commands/qa.ts`, `src/cli.ts`, `src/lib/settings/features.ts`, `web/make.html`,
+`tests/aistyle.test.ts` (7).
+
+**Checks**
+- Typecheck passes. 423 tests: 416 pass, 1 skipped, 6 fail. The 6 failures are the same
+  `src/lib/models/` stand-in failures as before.
+- Browser: preset, reference upload, character and save all work.
+- Found and fixed:
+  - card scenes had no asset in AI mode (the licence log crashed);
+  - "fetch failed" when ComfyUI is off, now a plain message;
+  - the remove buttons were unstyled.
+
+**How to verify on your PC**
+1. Start ComfyUI with an SDXL checkpoint (`stock.comfyCheckpoint`).
+2. For reference pictures: install ComfyUI_IPAdapter_plus, put `ip-adapter-plus_sdxl_vit-h.safetensors`
+   in `models/ipadapter` and `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors` in `models/clip_vision`
+   (file names from that repo's README), then set `aistyle.ipadapter` to true in Tools.
+3. /make > Documentary > AI pictures > Oil painting > a test picture > a 5-minute video.
+
+**Open risks**
+- Nothing was generated here: no ComfyUI and no Gemini key. The first real pictures are on your PC.
+- IP-Adapter_plus is in "maintenance only" mode (its README, since 2025-04-14).
+- Real people: the scene rules forbid living people's faces. Historical figures in a realistic
+  style still need YouTube's AI label (QA reminds).
+- 8 GB VRAM: ComfyUI and Ollama must not hold the GPU at the same time. The text model is done
+  before the pictures start, but check `ollama ps` (0 models) during the picture step.
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until

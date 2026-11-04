@@ -916,8 +916,34 @@ Browser check:
 
 ---
 
+## Fix: `src/lib/models/` was never committed
+
+**What was wrong**: the `.gitignore` rule `models/` (meant for model weights in the repo root, e.g.
+`models/kokoro/`) also matched `src/lib/models/`. So `src/lib/models/loader.ts` and
+`src/lib/models/embed.ts` exist only on the dev PC and were never pushed. A fresh clone fails
+`npm run typecheck` (16 errors) and `npm test` (23 of 34 test files fail with
+`ERR_MODULE_NOT_FOUND .../models/loader.js`).
+
+**What changed**: `.gitignore` now has `!src/lib/models/` right after `models/`. Weights in
+`models/` stay ignored (checked with `git check-ignore`).
+
+**Still needed (user, on the PC that has the files)**:
+
+```
+git pull
+git add src/lib/models
+git commit -m "Add model loader and embed modules (were hidden by .gitignore)"
+git push
+```
+
+Then a fresh clone should pass typecheck and all tests again.
+
+---
+
 ## Blocked / needs user
 
+- **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
+  then the pushed branch does not compile.
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live
   results. The code and tests run against a fake API.
 

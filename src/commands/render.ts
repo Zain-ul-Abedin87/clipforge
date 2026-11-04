@@ -488,7 +488,7 @@ export async function render(opts: RenderOpts, log: (m: string) => void = consol
 
   // Sound effects: one input per kind, split and delayed to every event time.
   const events = tl.audio.sfx.enabled ? tl.audio.sfx.events.filter((e) => e.at < duration - 0.2) : [];
-  const sfxFiles = events.length ? await ensureSfx(ff) : null;
+  const sfxFiles = events.length ? await ensureSfx(ff, log) : null;
   const sfxKinds = [...new Set(events.map((e) => e.kind))];
   const firstSfxInput = 2 + (bed ? 1 : 0);
   const sfxInputs = sfxKinds.flatMap((k) => ["-i", sfxFiles![k as keyof typeof sfxFiles]]);

@@ -24,6 +24,10 @@ import { readLedger } from "../lib/assets/licenseLedger.js";
 import { musicEnabled } from "./timeline.js";
 import { compileTimeline, loadTimeline } from "../lib/compiler/timelineCompiler.js";
 import { GENERATED_SOURCE } from "../lib/flowPrompt.js";
+import { analysePicture, CAPTION_FLOOR_PX, frameStats, grabCrop, measureText, MIN_CONTRAST } from "../lib/qa/picture.js";
+import { captionPreset } from "../lib/render/captionPresets.js";
+import { checkSoundEffects, earshotAvailable } from "../lib/audio/earshot.js";
+import { loadFeatures } from "../lib/settings/features.js";
 
 export type Status = "pass" | "warn" | "fail";
 export interface Check {
@@ -97,6 +101,22 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     .filter((f) => f.scene && f.scene.asset.kind === "video" && f.d >= 3);
   add("Picture", "Frozen video clips", frozenClips.length ? "warn" : "pass", frozenClips.length ? frozenClips.map((f) => `scene #${f.scene!.id} at ${fmt(f.t)} (${f.d.toFixed(1)} s)`).join(", ") : "no stock/own clip stands still for 3 s+");
 
+  // ---- 2a. what a viewer notices at once (checks and thresholds from video-director, MIT) ----
+  if (v?.width && v?.height) {
+    log("[qa] first frame, single-frame flashes ...");
+    try {
+      const [num, den] = String(v.r_frame_rate ?? "30/1").split("/").map(Number);
+      const pf = analysePicture(await frameStats(ff, video, v.width, v.height), num / (den || 1) || 30);
+      const fadesIn = tl.scenes[0]?.transition === "fade" || tl.scenes[0]?.transition === "flash";
+      add("Picture", "First frame (thumbnail / autoplay)", pf.frame0.ok ? "pass" : "fail",
+        pf.frame0.ok ? `brightness ${pf.frame0.mean}, contrast ${pf.frame0.contrast}` : `flat or black (brightness ${pf.frame0.mean}, contrast ${pf.frame0.contrast}): muted autoplay and the auto thumbnail show this${fadesIn ? ". The first scene fades in: set its transition to Cut in the editor" : ""}`);
+      add("Picture", "Single-frame flashes", pf.flashes.length ? "fail" : "pass", pf.flashes.length ? `at ${pf.flashes.slice(0, 8).map((t) => `${t.toFixed(2)} s`).join(", ")}` : "none");
+      add("Picture", "One-frame pops", pf.pops.length ? "warn" : "pass", pf.pops.length ? `at ${pf.pops.slice(0, 8).map((t) => `${t.toFixed(2)} s`).join(", ")}` : "none");
+    } catch (err) {
+      add("Picture", "First frame / flashes", "warn", `not measured: ${String((err as Error).message).slice(0, 160)}`);
+    }
+  }
+
   // ---- 2b. per-shot QA (python/shot_qa.py: PySceneDetect + CLIP + motion) on the finished video ----
   if (shotQaEnabled()) {
     log("[qa] per-shot check (shot cuts, CLIP shot type, motion, repeats) ...");
@@ -144,11 +164,53 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   const musicLicence = checkMusicLicenses(musicFiles.map((f) => ({ name: path.basename(f), license: trackLicense(path.dirname(f), path.basename(f)) })));
   if (musicLicence) add(musicLicence.group, musicLicence.name, musicLicence.status, musicLicence.detail);
 
+  // ---- 3b. sound effects audible and on time (earshot, optional; features.json earshot) ----
+  const es = loadFeatures().earshot;
+  const cues = tl.motion?.sfx ? tl.scenes.flatMap((s) => (s.sfx ?? []).map((e, i) => ({ t: s.start + e.at, kind: e.kind, id: `${s.id}.${i}` }))).filter((c) => c.t < vDur - 0.2) : [];
+  if (es.enabled && es.syncCheck && cues.length) {
+    if (await earshotAvailable(es)) {
+      log(`[qa] earshot: listening for ${cues.length} sound effect(s) ...`);
+      try {
+        const r = await checkSoundEffects(video, cues, path.join(dir, "qa"), es);
+        const late = r.items.filter((i) => i.offset_ms !== null && Math.abs(i.offset_ms) > 100);
+        add("Sound", "Sound effects heard on time (earshot)", r.hit100 >= es.minHit ? "pass" : "warn",
+          `${pct(r.hit100)} heard within 100 ms${r.medianOffsetMs !== null ? `, median off by ${r.medianOffsetMs} ms` : ""}` +
+            (r.silent.length ? `; not heard (buried under music / voice?) at ${r.silent.slice(0, 8).map((t) => fmt(t)).join(", ")}` : "") +
+            (late.length ? `; off by more than 100 ms at ${late.slice(0, 6).map((i) => `${fmt(i.t)} (${i.offset_ms} ms)`).join(", ")}` : ""));
+      } catch (err) {
+        add("Sound", "Sound effects heard on time (earshot)", "warn", `not measured: ${String((err as Error).message).slice(0, 200)}`);
+      }
+    } else add("Sound", "Sound effects heard on time (earshot)", "warn", `earshot is switched on but "${es.command} --help" did not run: pip install earshot (see Tools)`);
+  }
+
   // ---- 4. captions ----
   if (tl.captions.enabled) {
     const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: { start: number; end: number }[] }>(path.join(dir, "aligned.json")).words : [];
     const covered = words.length ? (words[words.length - 1].end - words[0].start) / tl.duration : 0;
     add("Captions", "Burned-in captions", words.length && covered > 0.8 ? "pass" : "fail", words.length ? `${words.length} words, cover ${pct(covered)} of the video` : "no aligned words");
+    // Readable on a phone, muted: size from the style, contrast measured on frames (video-director's floors).
+    const cs = tl.captions as unknown as { fontSize?: number; preset?: string; marginV?: number };
+    const preset = captionPreset(cs.preset);
+    const px = Math.round((cs.fontSize ?? 54) * preset.sizeScale);
+    add("Captions", "Caption size on a phone", px >= CAPTION_FLOOR_PX ? "pass" : "warn",
+      `${px} px at 1080p (${preset.label}; at least ${CAPTION_FLOOR_PX} px reads on a phone)${px < CAPTION_FLOOR_PX ? ": pick a bigger preset or raise the font size" : ""}`);
+    if (words.length && v?.width && v?.height) {
+      const scale = v.height / 1080;
+      const lineH = Math.round(px * scale * 1.5);
+      const box = { x: Math.round(v.width * 0.2), w: Math.round(v.width * 0.6), y: Math.max(0, Math.round(v.height - (cs.marginV ?? 70) * scale - lineH)), h: lineH };
+      const picks = Array.from({ length: Math.min(6, words.length) }, (_, i) => words[Math.floor(((i + 0.5) * words.length) / Math.min(6, words.length))]);
+      const measured: number[] = [];
+      for (const w of picks) {
+        const crop = await grabCrop(ff, video, (w.start + w.end) / 2, box);
+        if (crop) measured.push(measureText(crop, box.w, box.h, Math.min(v.width, v.height)).contrast);
+      }
+      if (measured.length) {
+        const sorted = [...measured].sort((a, b) => a - b);
+        const mid = sorted[Math.floor(sorted.length / 2)];
+        add("Captions", "Caption contrast", mid >= MIN_CONTRAST ? "pass" : "warn",
+          `${mid}:1 typical, ${sorted[0]}:1 worst of ${measured.length} moments (at least ${MIN_CONTRAST}:1)${mid < MIN_CONTRAST ? ": use a preset with an outline or a solid box" : ""}`);
+      }
+    }
   } else add("Captions", "Burned-in captions", "pass", "off for this channel");
 
   // ---- 5. reused / mass-produced content risk ----

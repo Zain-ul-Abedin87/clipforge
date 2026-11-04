@@ -129,6 +129,20 @@ export interface FeatureSettings {
     sources: string[];
     pythonCmd: string;
   };
+  earshot: {
+    /** earshot (github.com/Leonxlnx/earshot, MIT, CPU only) is installed: pip install earshot. */
+    enabled: boolean;
+    /** The earshot command ("earshot", or a full path / "python -m earshot" is not supported: use the script). */
+    command: string;
+    /** Render the whoosh / pop from earshot's code-made bank (no licence needed) instead of FFmpeg's. */
+    sfxBank: boolean;
+    whoosh: string;
+    pop: string;
+    /** QA: are the placed sound effects audible and on time (needs earshot's models, ~1.1 GB, once). */
+    syncCheck: boolean;
+    /** Share of effects that must be heard within 100 ms for a pass. */
+    minHit: number;
+  };
   localize: {
     /** Languages offered for a language version of a video (codes from src/lib/localize/languages.ts). */
     languages: string[];
@@ -162,6 +176,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
+  earshot: { enabled: false, command: "earshot", sfxBank: true, whoosh: "whoosh_fast/crisp", pop: "pop/1", syncCheck: true, minHit: 0.8 },
   localize: { languages: ["de", "es", "fr", "it", "pt", "hi"], minRatio: 0.6, maxRatio: 1.7, localNumbers: true },
 };
 

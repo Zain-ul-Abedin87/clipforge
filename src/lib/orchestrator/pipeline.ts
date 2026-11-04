@@ -38,8 +38,8 @@ export interface StageState {
 }
 
 /** ranked = the product countdown (the original pipeline); explainer / tutorial = src/lib/formats. */
-export type VideoType = "ranked" | "explainer" | "tutorial";
-export const VIDEO_TYPES: VideoType[] = ["ranked", "explainer", "tutorial"];
+export type VideoType = "ranked" | "explainer" | "tutorial" | "documentary";
+export const VIDEO_TYPES: VideoType[] = ["ranked", "explainer", "tutorial", "documentary"];
 
 export interface PipelineConfig {
   type?: VideoType;
@@ -110,6 +110,11 @@ export function stageSteps(stage: PipelineStage, project: string, cfg: PipelineC
     if (stage === "writing") return [[t, "-p", project, "--write"]];
     if (stage === "render") return [[t, "-p", project, "--render"], ["qa", "-p", project]];
     return [];
+  }
+  // Documentary: researched + fact-checked writing, then the normal voice / footage / edit / render.
+  if (cfg?.type === "documentary") {
+    if (stage === "research") return [];
+    if (stage === "writing") return version ? [["translate", "-p", project]] : [["documentary", "-p", project, "--write"]];
   }
   switch (stage) {
     case "research":
@@ -199,7 +204,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
       line(`=== ${real[0]} ===`);
       const code = await runner(real, line);
       // Exit 2 from script/shorts/translate = finished with warnings (report written); anything else non-zero fails.
-      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate" || real[0] === "explainer"))) {
+      if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts" || real[0] === "translate" || real[0] === "explainer" || real[0] === "documentary"))) {
         s.status = "failed";
         s.error = `${real[0]} exited with code ${code}`;
         s.hint = friendlyHint(s.log ?? [], s.error);

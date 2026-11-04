@@ -190,6 +190,21 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
     } else add("Sound", "Sound effects heard on time (earshot)", "warn", `earshot is switched on but "${es.command} --help" did not run: pip install earshot (see Tools)`);
   }
 
+  // ---- 3c. facts (documentaries: src/lib/factcheck, factcheck.json) ----
+  const factFile = path.join(dir, "factcheck.json");
+  if (fs.existsSync(factFile)) {
+    const fcr = readJson<{ factcheck: { counts: Record<string, number>; claims: { sentence: string; verdict: string }[] } }>(factFile).factcheck;
+    const spoken = fs.existsSync(path.join(dir, "script.txt")) ? fs.readFileSync(path.join(dir, "script.txt"), "utf8") : "";
+    // Only claims still in the script count (removed ones are not said).
+    const left = fcr.claims.filter((c) => spoken.includes(c.sentence));
+    const bad = left.filter((c) => c.verdict === "contradicted");
+    const open = left.filter((c) => c.verdict === "not_found" || c.verdict === "unchecked");
+    add("Facts", "Every claim checked against a source", bad.length ? "fail" : open.length ? "warn" : "pass",
+      bad.length ? `${bad.length} claim(s) a source contradicts: ${bad.slice(0, 3).map((c) => `"${c.sentence.slice(0, 80)}"`).join("; ")}`
+        : open.length ? `${open.length} claim(s) no source confirms: ${open.slice(0, 3).map((c) => `"${c.sentence.slice(0, 80)}"`).join("; ")}`
+        : `${left.length} claim(s), each with a source`);
+  }
+
   // ---- 4. captions ----
   if (tl.captions.enabled) {
     const words = fs.existsSync(path.join(dir, "aligned.json")) ? readJson<{ words: { start: number; end: number }[] }>(path.join(dir, "aligned.json")).words : [];

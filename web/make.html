@@ -32,6 +32,11 @@
   .bigvideo{width:100%;border-radius:12px;background:#000}
   .checks{font-size:var(--fs-sm);margin-top:8px}
   .checks div{padding:4px 0;border-bottom:1px solid var(--border)}
+  .facts{width:100%;border-collapse:collapse;font-size:var(--fs-sm);margin-top:8px}
+  .facts td{padding:8px 6px;border-top:1px solid var(--border);vertical-align:top}
+  .facts td:first-child{white-space:nowrap}
+  .facts .q{color:var(--muted);font-size:var(--fs-xs);margin-top:2px}
+  .removed{font-size:var(--fs-xs);color:var(--muted);text-decoration:line-through}
 </style>
 </head>
 <body>
@@ -39,8 +44,9 @@
 <main>
   <section class="page">
     <div class="head"><h1 id="pageTitle">Explainer &amp; tutorial videos</h1><p class="sub">Two more kinds of video. Each runs on free tools on this PC; you read and fix the words before anything is recorded.</p></div>
-    <div class="types">
+    <div class="types" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       <a class="type" href="/new"><b>Ranked products</b><span class="hint">Countdown of products with footage (the New video page)</span></a>
+      <a class="type" data-type="documentary" href="/make?type=documentary"><b>Documentary</b><span class="hint">History, science, places: researched, every fact checked</span></a>
       <a class="type" data-type="explainer" href="/make?type=explainer"><b>Explainer</b><span class="hint">Animated diagrams with a voice-over: how something works</span></a>
       <a class="type" data-type="tutorial" href="/make?type=tutorial"><b>Tutorial</b><span class="hint">Your screen recording with a voice-over, scene by scene</span></a>
     </div>
@@ -48,6 +54,21 @@
 
     <!-- 1. INPUTS -->
     <div class="pane card" id="p1">
+      <div id="doIn" hidden>
+        <h2>1. What is the documentary about?</h2>
+        <label class="lbl" for="doTopic">Topic</label>
+        <input id="doTopic" placeholder="e.g. how the Strait of Malacca became the world's most important waterway">
+        <div class="grid2" style="margin-top:12px">
+          <div><label class="lbl" for="doLen">Length</label><select id="doLen"><option value="5">About 5 minutes</option><option value="10" selected>About 10 minutes</option><option value="15">About 15 minutes</option><option value="20">About 20 minutes</option></select></div>
+          <div><label class="lbl" for="doLinks">Source links (optional, one per line)</label><textarea id="doLinks" rows="2" placeholder="https://..."></textarea></div>
+        </div>
+        <label class="lbl" for="doNotes" style="margin-top:12px">Your own facts (optional)</label>
+        <textarea id="doNotes" rows="4" placeholder="Facts you know and want in the video, with the numbers."></textarea>
+        <p class="help">ClipForge also reads Wikipedia on the topic. Every number, date and name in the script is checked against these sources; what no source confirms is taken out.</p>
+        <details style="margin-top:8px"><summary class="help" style="cursor:pointer">I already have my own script</summary>
+          <textarea id="doScript" rows="8" placeholder="Paste your whole script. The AI does not rewrite it; only the facts are checked."></textarea></details>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="doGo">Research &amp; write &rarr;</button></div>
+      </div>
       <div id="exIn">
         <h2>1. What should the video explain?</h2>
         <label class="lbl" for="exTopic">Topic</label>
@@ -77,6 +98,15 @@
     <div class="pane card" id="p2" hidden>
       <h2 id="p2Title">2. Read and fix the words</h2>
       <div id="writeBusy"></div>
+      <div id="doReview" hidden>
+        <div class="note" id="doSummary"></div>
+        <textarea class="script" id="doScript2"></textarea>
+        <div id="doFacts"></div>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><button class="btn" id="doSave">Save &amp; check the facts again</button><button class="btn ghost" id="doRedo">Write it again</button></div>
+          <button class="btn primary big" id="doMake">Make the video &rarr;</button>
+        </div>
+      </div>
       <div id="exReview" hidden>
         <div class="note" id="exCheck"></div>
         <p class="help">Each <b>## name</b> line starts a scene. <b>[#word]</b> marks the moment a picture changes. <b>{API|A, P, I}</b> shows "API" but says "A P I". Change the words freely; keep the ## lines.</p>
@@ -114,7 +144,7 @@ header();
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
 let project = qs.get("v") || "";
-let type = qs.get("type") === "tutorial" ? "tutorial" : "explainer";
+let type = ["tutorial", "documentary"].includes(qs.get("type")) ? qs.get("type") : "explainer";
 let info = null;
 let timer = null;
 let loadedText = false;
@@ -128,7 +158,8 @@ function setType(t) {
   for (const a of document.querySelectorAll(".type[data-type]")) a.classList.toggle("on", a.dataset.type === t);
   $("exIn").hidden = t !== "explainer";
   $("tuIn").hidden = t !== "tutorial";
-  $("pageTitle").textContent = t === "explainer" ? "Explainer video" : "Tutorial from a screen recording";
+  $("doIn").hidden = t !== "documentary";
+  $("pageTitle").textContent = t === "explainer" ? "Explainer video" : t === "documentary" ? "Documentary" : "Tutorial from a screen recording";
 }
 
 function stageBox(id, busyText) {
@@ -147,9 +178,13 @@ function bindRetry(el) {
 function render() {
   if (!info) return;
   setType(info.type);
-  const w = stageBox("writing", info.type === "explainer" ? "Writing the script and the pictures, then checking them (a few minutes)..." : "Finding the scenes and writing the voice-over...");
-  const r = stageBox("render", info.type === "explainer" ? "Recording the voice and drawing every frame (several minutes)..." : "Recording the voice and putting it on your recording...");
-  const written = info.type === "explainer" ? !!info.script : info.scenes.length > 0;
+  const doc = info.type === "documentary";
+  const w = stageBox("writing", info.type === "explainer" ? "Writing the script and the pictures, then checking them (a few minutes)..." : doc ? "Reading the sources, writing chapter by chapter, checking every fact (several minutes)..." : "Finding the scenes and writing the voice-over...");
+  // A documentary runs voice -> visuals -> edit -> render: show the one that is running or failed.
+  const after = doc ? info.stages.filter((x) => x.id !== "writing") : info.stages.filter((x) => x.id === "render");
+  const cur = after.find((x) => x.status === "running") || after.find((x) => x.status === "failed") || after[after.length - 1];
+  const r = stageBox(cur.id, info.type === "explainer" ? "Recording the voice and drawing every frame (several minutes)..." : doc ? `${cur.label}: ${{ voice: "recording the voice", visuals: "finding footage for every scene", edit: "cutting the video", render: "rendering and checking the video" }[cur.id] || "working"}...` : "Recording the voice and putting it on your recording...");
+  const written = info.type === "explainer" || doc ? !!info.script : info.scenes.length > 0;
   // One of three views: inputs (nothing written yet), review (the words), video (render + result).
   if (!view) view = r.state === "running" || r.state === "failed" || info.hasVideo ? "video" : written || w.state !== "pending" ? "review" : "inputs";
   if (view === "inputs" && (written || w.state === "running")) view = "review";
@@ -160,6 +195,8 @@ function render() {
   bindRetry($("writeBusy"));
   const showReview = written && w.state !== "running";
   $("exReview").hidden = info.type !== "explainer" || !showReview;
+  $("doReview").hidden = !doc || !showReview;
+  if (doc && showReview) showDocumentary();
   $("tuReview").hidden = info.type !== "tutorial" || !showReview;
   if (info.type === "explainer" && showReview) {
     if (!loadedText) { $("exScript").value = info.script; loadedText = true; }
@@ -186,6 +223,22 @@ function render() {
   }
 }
 
+function showDocumentary() {
+  if (!loadedText) { $("doScript2").value = info.script; loadedText = true; }
+  const rep = info.report;
+  if (!rep) return;
+  const fc = rep.factcheck;
+  const n = fc.counts;
+  const label = { supported: ["p", "verified"], contradicted: ["f", "wrong"], not_found: ["w", "no source"], unchecked: ["w", "not checked"] };
+  const srcs = (rep.sources || []).map((x) => esc(x.title)).join(", ");
+  $("doSummary").innerHTML = `<b>${esc(rep.title || "")}</b> &middot; ${rep.words || 0} words (about ${Math.round((rep.words || 0) / 150)} min)${rep.writer === "own" ? " &middot; your script" : ""}<br>`
+    + `Sources: ${srcs || "none"}<br>`
+    + `<span class="pill p">${n.supported} verified</span> <span class="pill f">${n.contradicted} wrong</span> <span class="pill w">${n.not_found} no source</span> <span class="pill w">${n.unchecked} not checked</span>`
+    + (fc.removed && fc.removed.length ? `<details style="margin-top:8px"><summary class="help" style="cursor:pointer">${fc.removed.length} sentence(s) taken out (wrong or not confirmed)</summary>${fc.removed.map((x) => `<div class="removed">${esc(x)}</div>`).join("")}</details>` : "");
+  const shown = fc.claims.filter((c) => !(fc.removed || []).includes(c.sentence));
+  $("doFacts").innerHTML = shown.length ? `<table class="facts">${shown.map((c) => `<tr><td><span class="pill ${label[c.verdict][0]}">${label[c.verdict][1]}</span></td><td>${esc(c.sentence)}${c.note ? `<div class="q" style="color:var(--warn)">${esc(c.note)}</div>` : ""}${c.url ? `<div class="q">${esc(c.title || "")}: <a href="${esc(c.url)}" target="_blank" rel="noopener">source</a>${c.quote ? ` &middot; "${esc(c.quote.slice(0, 220))}"` : ""}</div>` : c.title ? `<div class="q">${esc(c.title)}${c.quote ? `: "${esc(c.quote.slice(0, 220))}"` : ""}</div>` : ""}</td></tr>`).join("")}</table>` : "";
+}
+
 async function refresh() {
   if (!project) return;
   info = await api(`/api/make/${project}`);
@@ -200,6 +253,38 @@ async function create(body) {
   project = r.project;
   history.replaceState(null, "", `/make?v=${project}`);
 }
+
+$("doGo").onclick = async () => {
+  err("");
+  $("doGo").disabled = true;
+  try {
+    await create({ type: "documentary", topic: $("doTopic").value, minutes: Number($("doLen").value), links: $("doLinks").value, notes: $("doNotes").value, script: $("doScript").value });
+    loadedText = false;
+    view = "review";
+    await run("writing");
+    await refresh();
+  } catch (e) { err(e.message); }
+  $("doGo").disabled = false;
+};
+$("doSave").onclick = async () => {
+  try { info = await api(`/api/make/${project}/script`, { method: "PUT", body: { text: $("doScript2").value } }); loadedText = false; render(); } catch (e) { err(e.message); }
+};
+$("doRedo").onclick = async () => {
+  if (!confirm("Research and write the script again? Your edits will be replaced.")) return;
+  try { loadedText = false; await run("writing"); await refresh(); } catch (e) { err(e.message); }
+};
+$("doMake").onclick = async () => {
+  try {
+    if ($("doScript2").value.trim() !== (info.script || "").trim()) await api(`/api/make/${project}/script`, { method: "PUT", body: { text: $("doScript2").value } });
+    const left = info.report ? info.report.factcheck.claims.filter((c) => c.verdict === "contradicted" && $("doScript2").value.includes(c.sentence)).length : 0;
+    if (left && !confirm(`${left} claim(s) a source says are wrong are still in the script. Make the video anyway?`)) return;
+    err("");
+    view = "video";
+    $("video").removeAttribute("src");
+    await api(`/api/pipeline/${project}/run`, { method: "POST", body: { from: "voice" } });
+    await refresh();
+  } catch (e) { err(e.message); }
+};
 
 $("exGo").onclick = async () => {
   err("");

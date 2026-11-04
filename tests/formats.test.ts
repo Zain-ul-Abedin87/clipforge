@@ -192,7 +192,7 @@ describe("video types in the pipeline and the page API", () => {
     assert.equal(P.stageSteps("writing", project, { topic: "x", products: ["a", "b"] })[0][0], "script");
     assert.throws(() => M.createMade({ type: "explainer", topic: "zz formats none" }), /at least one point/);
     assert.throws(() => M.createMade({ type: "tutorial", topic: "zz formats none", notes: "too short" }), /a few sentences/);
-    assert.throws(() => M.createMade({ type: "ranked", topic: "x" }), /explainer or tutorial/);
+    assert.throws(() => M.createMade({ type: "ranked", topic: "x" }), /explainer, tutorial or documentary/);
     assert.ok(!fs.existsSync(path.join(paths.workspace, "zz-formats-none")), "a refused request leaves no folder");
     const v = M.madeView(project) as { type: string; stages: { id: string }[] };
     assert.equal(v.type, "explainer");

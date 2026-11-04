@@ -129,6 +129,18 @@ export interface FeatureSettings {
     sources: string[];
     pythonCmd: string;
   };
+  factcheck: {
+    /** Read Wikipedia articles on the topic as sources (free, no key; every claim links its article). */
+    wikipedia: boolean;
+    /** Wikipedia language edition (en, de, es ...). */
+    wikiLang: string;
+    /** Wikipedia articles read per video. */
+    wikiPages: number;
+    /** Remove sentences whose numbers / dates no source confirms (else they are only flagged). */
+    removeUnverified: boolean;
+    /** Shared content words a source passage needs before it counts as being about the claim. */
+    minOverlap: number;
+  };
   formats: {
     /** explainroo command (github.com/vincentsch/explainroo, MIT): "explainroo", or the path to its bin/explainroo.js. */
     explainroo: string;
@@ -192,6 +204,7 @@ export const FEATURE_DEFAULTS: FeatureSettings = {
   shorts: { count: 3, minSec: 30, maxSec: 58, captions: true },
   orchestrator: { approveEachStep: true },
   stills: { cutout: false, cutoutModel: "u2net", minCover: 0.04, maxCover: 0.9, upscale: false, realesrgan: "", minLongSide: 1280, sources: ["presskit", "local", "wikimedia"], pythonCmd: "" },
+  factcheck: { wikipedia: true, wikiLang: "en", wikiPages: 3, removeUnverified: true, minOverlap: 2 },
   formats: { explainroo: "explainroo", explainerTheme: "paper", fixRounds: 3, argo: "argo", sceneThreshold: 0.3, minSceneSec: 4, wordsPerSec: 2.4 },
   earshot: { enabled: false, command: "earshot", sfxBank: true, whoosh: "whoosh_fast/crisp", pop: "pop/1", syncCheck: true, minHit: 0.8 },
   localize: { languages: ["de", "es", "fr", "it", "pt", "hi"], minRatio: 0.6, maxRatio: 1.7, localNumbers: true },

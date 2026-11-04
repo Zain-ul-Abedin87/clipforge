@@ -119,6 +119,25 @@ program
   });
 
 program
+  .command("documentary")
+  .description("Documentary: research (your links, notes, Wikipedia) -> chapters -> narration -> fact check -> script.txt + factcheck.json")
+  .requiredOption("-p, --project <name>", "project name")
+  .option("--write", "research, write and fact-check the script")
+  .action(async (o) => {
+    const { writeDocumentary } = await import("./lib/formats/documentary.js");
+    try {
+      if (o.write) {
+        const r = await writeDocumentary(String(o.project));
+        // 2 = written, with claims that are not confirmed (shown to the creator).
+        process.exitCode = r.factcheck.counts.not_found + r.factcheck.counts.unchecked > 0 ? 2 : 0;
+      }
+    } catch (err) {
+      console.error(`[documentary] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command("tutorial")
   .description("Tutorial from a screen recording (argo): --write = scenes + AI voice-over; --render = argo import, tts, export -> output/<project>.mp4")
   .requiredOption("-p, --project <name>", "project name")

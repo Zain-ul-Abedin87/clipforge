@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head row-between">
+      <div><h1>Niche &amp; outlier finder</h1><p class="sub">Videos that beat their channel's median views (2x, 3x, 5x+) and new faceless channels that are growing.</p></div>
+      <div class="go-wrap"><button class="btn primary big" id="scan">Scan</button></div>
+    </div>
+
+    <div class="card">
+      <label class="lbl" for="seeds">Seed searches <span class="hint">one per line</span></label>
+      <textarea id="seeds" style="min-height:110px"></textarea>
+      <div class="row" style="justify-content:space-between">
+        <div style="flex:1;min-width:220px">
+          <div class="help" id="quota-text">Quota: -</div>
+          <div class="meter" style="margin-top:6px"><i id="quota-bar" style="width:0"></i></div>
+        </div>
+        <span class="hint" id="last-at"></span>
+      </div>
+      <p class="error" id="err"></p>
+      <div class="logbox" id="log" hidden></div>
+    </div>
+
+    <div class="card flush">
+      <div style="padding:20px 24px 0"><h2>Top outliers</h2><p class="help" style="margin-top:-8px">Score = views / median views of the channel's last 30 long-form uploads.</p></div>
+      <div class="scroll"><table class="tbl" id="outliers"><thead><tr><th></th><th>Video</th><th class="r">Views</th><th class="r">Channel median</th><th class="r">Score</th><th>Seed</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card flush">
+      <div style="padding:20px 24px 0"><h2>Growing new faceless channels</h2><p class="help" style="margin-top:-8px">Created in the last 12 months. RPM and revenue are <b>estimates</b> from niche ranges; 28-day views are measured once two scans are 3+ days apart.</p></div>
+      <div class="scroll"><table class="tbl" id="channels"><thead><tr><th>Channel</th><th class="r">Age</th><th class="r">Subs</th><th class="r">Views / 28 d</th><th class="r">RPM (est.)</th><th class="r">Revenue / 28 d (est.)</th><th class="r">Faceless</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, ago, esc, header, num } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+
+function showQuota(q) {
+  if (!q) return;
+  $("quota-text").textContent = `YouTube API quota today (${q.day}, Pacific): ${q.used.toLocaleString()} / ${q.limit.toLocaleString()} units used, ${q.left.toLocaleString()} left`;
+  $("quota-bar").style.width = `${Math.min(100, (q.used / Math.max(1, q.limit)) * 100)}%`;
+}
+
+function render(r) {
+  if (!r) return;
+  if (r.at) $("last-at").textContent = `Last scan ${ago(r.at)}${r.quota ? ` - ${r.quota.spent} units spent, ${r.quota.cacheHits} cached answers` : ""}`;
+  const flagCls = (f) => (f === "5x+" ? "f5" : f === "3x" ? "f3" : f === "2x" ? "f2" : "");
+  $("outliers").tBodies[0].innerHTML = r.outliers.length
+    ? r.outliers.map((o) => `<tr>
+        <td><img class="thumb" loading="lazy" src="${esc(o.video.thumbnail)}" alt=""></td>
+        <td class="title"><a href="https://www.youtube.com/watch?v=${esc(o.video.id)}" target="_blank" rel="noopener">${esc(o.video.title)}</a><small>${esc(o.channel.title)} - ${num(o.channel.subscribers)} subs</small></td>
+        <td class="r">${num(o.video.views)}</td><td class="r">${num(o.channelMedian)}</td>
+        <td class="r">${o.flag ? `<span class="flag ${flagCls(o.flag)}">${o.flag}</span> ` : ""}${o.score.toFixed(1)}x</td>
+        <td><span class="chip">${esc(o.seed)}</span></td></tr>`).join("")
+    : `<tr><td colspan="6" class="help" style="padding:20px 24px">No scan yet: press Scan.</td></tr>`;
+  $("channels").tBodies[0].innerHTML = r.channels.length
+    ? r.channels.map((g) => `<tr>
+        <td class="title"><a href="https://www.youtube.com/channel/${esc(g.channel.id)}" target="_blank" rel="noopener">${esc(g.channel.title)}</a><small>${esc(g.seed)} - ${g.channel.videos} videos</small></td>
+        <td class="r">${Math.round(g.ageDays / 30.4)} mo</td><td class="r">${num(g.channel.subscribers)}</td>
+        <td class="r">${num(g.views28)} <span class="est">${g.views28Source === "measured" ? "measured" : "est."}</span></td>
+        <td class="r">$${g.rpm[0]}-${g.rpm[1]}</td><td class="r">$${num(g.revenue28[0])}-${num(g.revenue28[1])}</td>
+        <td class="r">${Math.round(g.facelessScore * 100)}%</td></tr>`).join("")
+    : `<tr><td colspan="7" class="help" style="padding:20px 24px">No scan yet.</td></tr>`;
+  if (r.warnings?.length) $("err").textContent = r.warnings.join(" ");
+}
+
+async function load() {
+  const s = await api("/api/research");
+  $("seeds").value ||= (s.last?.seeds ?? s.seeds).join("\n");
+  showQuota(s.quota);
+  render(s.last ?? { at: 0, outliers: [], channels: [] });
+  if (!s.configured) $("err").textContent = "Add YOUTUBE_API_KEY to .env (Google Cloud console -> YouTube Data API v3 -> API key, free) to scan.";
+  return s;
+}
+
+let poll;
+$("scan").onclick = async () => {
+  $("err").textContent = "";
+  $("scan").disabled = true;
+  $("scan").textContent = "Scanning...";
+  $("log").hidden = false;
+  poll = setInterval(async () => {
+    const s = await api("/api/research").catch(() => null);
+    if (s) { $("log").textContent = s.log.join("\n"); $("log").scrollTop = 1e9; showQuota(s.quota); }
+  }, 1500);
+  try {
+    const seeds = $("seeds").value.split("\n").map((x) => x.trim()).filter(Boolean);
+    const r = await api("/api/research/scan", { method: "POST", body: { seeds } });
+    render(r);
+    showQuota(r.quota);
+  } catch (e) {
+    $("err").textContent = e.message;
+  } finally {
+    clearInterval(poll);
+    $("scan").disabled = false;
+    $("scan").textContent = "Scan";
+  }
+};
+load().catch((e) => ($("err").textContent = e.message));
+</script>
+</body>
+</html>

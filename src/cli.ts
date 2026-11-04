@@ -64,6 +64,18 @@ program.hook("postAction", async () => {
 });
 
 program
+  .command("research")
+  .description("Niche / outlier finder: top outliers + growing new faceless channels (YouTube Data API, YOUTUBE_API_KEY)")
+  .option("-s, --seeds <list>", "comma-separated seed searches (default: features.json research.seeds)")
+  .action(async (o) => {
+    const { runResearch } = await import("./lib/research/index.js");
+    const r = await runResearch({ seeds: o.seeds ? String(o.seeds).split(",") : undefined });
+    for (const x of r.outliers.slice(0, 15)) console.log(`${x.flag.padEnd(4)} ${x.score.toFixed(1).padStart(6)}x  ${x.video.views.toLocaleString().padStart(12)}  ${x.channel.title} - ${x.video.title}`);
+    for (const c of r.channels.slice(0, 10)) console.log(`new  ${c.ageDays}d  ~${c.views28.toLocaleString()} views/28d (${c.views28Source})  RPM est $${c.rpm[0]}-${c.rpm[1]}  ${c.channel.title}`);
+    for (const w of r.warnings) console.warn(w);
+  });
+
+program
   .command("doctor")
   .description("Check Python, FFmpeg, NVENC, GPU, RAM, disk and .env")
   .action(async () => {

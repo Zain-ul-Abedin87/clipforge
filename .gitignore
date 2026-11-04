@@ -54,3 +54,7 @@ web/simple/preview.bundle.js
 cards/public/callout/*
 !cards/public/callout/sample.jpg
 .claude/
+
+# full-pipeline feature settings (Settings / Tools page) and the research cache
+features.json
+data/research.db*

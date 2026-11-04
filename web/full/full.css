@@ -1,0 +1,30 @@
+/* Full-pipeline pages: tables, status chips and bars on top of /simple/simple.css */
+.tbl{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+.tbl th{text-align:left;font-size:var(--fs-xs);font-weight:600;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--border2);white-space:nowrap}
+.tbl td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tbl tr:hover td{background:var(--surface2)}
+.tbl .r{text-align:right;font-variant-numeric:tabular-nums}
+.tbl .thumb{width:96px;height:54px;object-fit:cover;border-radius:6px;display:block;background:var(--surface2)}
+.tbl .title{max-width:380px}
+.tbl .title a{color:var(--text)}
+.tbl .title small{display:block;color:var(--muted);font-size:var(--fs-xs)}
+.scroll{overflow-x:auto}
+.flag{font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.flag.f5{background:rgba(227,81,81,.18);color:#ff7a7a}
+.flag.f3{background:rgba(245,184,74,.18);color:var(--warn)}
+.flag.f2{background:rgba(81,130,239,.18);color:#8fb0ff}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-xs);font-weight:600;padding:3px 10px;border-radius:99px;background:var(--surface2);color:var(--muted);white-space:nowrap}
+.chip.pending{color:var(--muted)}
+.chip.running{background:rgba(81,130,239,.18);color:#8fb0ff}
+.chip.done{background:rgba(62,207,142,.15);color:var(--ok)}
+.chip.failed{background:rgba(227,81,81,.15);color:var(--bad)}
+.chip.waiting{background:rgba(245,184,74,.15);color:var(--warn)}
+.meter{height:8px;border-radius:99px;background:var(--surface2);overflow:hidden}
+.meter > i{display:block;height:100%;background:var(--accent)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+.kpi b{display:block;font-size:var(--fs-lg);font-weight:700;font-variant-numeric:tabular-nums}
+.kpi span{font-size:var(--fs-xs);color:var(--muted)}
+.logbox{background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;font:12px/1.5 ui-monospace,Consolas,monospace;color:var(--muted);max-height:220px;overflow:auto;white-space:pre-wrap}
+.est{color:var(--muted);font-size:var(--fs-xs)}
+@media (max-width:720px){main{padding:24px 16px 48px}.top-in{padding:0 16px}nav{overflow-x:auto}.grid2{grid-template-columns:1fr}}

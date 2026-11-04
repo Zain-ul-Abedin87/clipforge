@@ -37,6 +37,7 @@ import { genericStockAllowed } from "../lib/assets/sources.js";
 import { detectAndWriteNiche } from "../lib/nicheDetect.js";
 import { ProjectStore } from "./state/projectStore.js";
 import { createEditorAPI } from "./routes/editorAPI.js";
+import { researchRoute } from "./routes/research.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
@@ -472,6 +473,8 @@ function streamFile(req: http.IncomingMessage, res: http.ServerResponse, file: s
 
 // ---------- Routes ----------
 
+const FULL_PAGES = ["research", "pipeline", "dashboard", "tools", "chat"];
+
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -484,6 +487,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       res.writeHead(302, { Location: p && validName(p) ? `/#/project/${encodeURIComponent(p)}` : "/" });
       return void res.end();
     }
+    // Full-pipeline pages (web/<name>.html): research, pipeline view, dashboard, tool settings, chat.
+    const page = FULL_PAGES.find((p) => url.pathname === `/${p}` || url.pathname === `/${p}/`);
+    if (page && fs.existsSync(path.join(WEB_DIR, `${page}.html`))) return send(res, 200, fs.readFileSync(path.join(WEB_DIR, `${page}.html`)), "text/html; charset=utf-8");
     // The Remotion cards' fonts and photos (cards/public), for the studio's live preview.
     const inCards = url.pathname.startsWith("/cards-static/");
     const root = inCards ? CARDS_PUBLIC : WEB_DIR;
@@ -759,6 +765,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       fs.writeFileSync(file, await readBody(req));
       return send(res, 200, { ok: true });
     }
+  }
+
+  {
+    const r = await researchRoute(parts, method, () => readBody(req));
+    if (r) return send(res, r.status, r.body);
   }
 
   if (parts[1] !== "projects") return send(res, 404, { error: "unknown route" });

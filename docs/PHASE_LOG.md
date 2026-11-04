@@ -434,6 +434,77 @@ phase). The 10-product test checks:
 
 ---
 
+## Phase 6: Local TTS
+
+**What changed**
+
+- `src/lib/tts/index.ts`: TTS **engine interface** (`engineFor`, `closeEngines`, `loudnorm`).
+  - Local engines: **kokoro** (default), **piper**, **xtts**, and the Windows draft voice.
+  - Cloud engines (elevenlabs, openai) stay optional and are only used when their keys are set.
+- `src/lib/tts/kokoro.ts` + `python/kokoro_tts.py`: Kokoro-82M (Apache-2.0). Two ways to run it:
+  - a **Kokoro-FastAPI** server (`KOKORO_URL`, OpenAI-compatible `/v1/audio/speech`);
+  - a persistent **kokoro-onnx** worker (`src/lib/tts/worker.ts`). The model loads once, then
+    each sentence is one JSON line.
+  - It runs on the CPU, so it never fights the LLM for VRAM.
+- `src/lib/tts/xtts.ts` + `python/xtts_tts.py`: XTTS-v2, **own voice only**.
+  - The speaker sample must be inside `channels/<channel>/voice/`; any other path is refused.
+  - Each request is at most 240 characters (XTTS limit).
+- `src/lib/tts/piper.ts`: setup check for Piper. The engine itself already existed.
+- Integrated into the existing provider system (`TTS_PROVIDERS`, `speakChunk`, cache keys per
+  voice), so the existing behaviour still applies:
+  - **one request per sentence**;
+  - cached sentences are reused;
+  - `tts_chunks.json` sentence timings feed `aligned.json` / `words.json` (the existing align
+    path, no Whisper needed).
+- **Auto engine choice**: Kokoro comes first when it is installed and `features.json` →
+  `tts.engine` is `kokoro`. After that, the old order applies.
+- The `tts` step logs the **real-time factor**. It then runs **ffmpeg loudnorm** on the whole
+  voiceover to `tts.lufs` (-14 LUFS, true peak -1.5 dB). The length does not change, so the
+  timings stay valid.
+
+**Files**: `src/lib/tts/{index,kokoro,xtts,piper,worker}.ts`, `src/lib/tts.ts`,
+`src/lib/ttsChunks.ts`, `src/commands/tts.ts`, `python/{kokoro_tts,xtts_tts}.py`, `.env.example`,
+`tests/localTts.test.ts`.
+
+**Checks**: typecheck passes. 326 tests, 325 pass, 0 fail, 1 skipped (the one skipped before this
+phase).
+
+- Fake worker: the model starts once and requests are queued.
+- Server mode sends the expected request.
+- XTTS refuses a sample that is not your own voice file.
+- Sentence cache: 3 sentences synthesized, then 3 reused.
+- Real ffmpeg loudnorm keeps the file length.
+
+**How to verify on your PC**
+
+1. Install Kokoro in the ClipForge `.venv`:
+
+   ```bash
+   .venv/Scripts/pip install kokoro-onnx soundfile
+   ```
+
+2. Download `kokoro-v1.0.onnx` and `voices-v1.0.bin` from the kokoro-onnx GitHub releases into
+   `models/kokoro/`.
+3. Set `TTS_PROVIDER=kokoro` in `.env`. Optional: `KOKORO_VOICE=am_michael` or another voice.
+4. Run:
+
+   ```bash
+   npm run cf -- tts -p <project>
+   ```
+
+5. Look for this line:
+   `[tts] kokoro: 10.0 min of voice in X min (Nx real time)`. Kokoro on the i7-12700H should reach
+   well over 1x, so 10 minutes of voice takes under 10 minutes.
+6. Then run `align` / `plan` as usual.
+
+**Open risks**
+
+- **XTTS-v2 licence**: the Coqui Public Model License is **non-commercial**. Monetised videos
+  need a commercial licence. Kokoro and Piper are free for commercial use.
+- The "10-min VO in < 10 min" target has not been measured on your PC yet (needs the model files).
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live
@@ -442,3 +513,5 @@ phase). The 10-product test checks:
 - **Phase 0 hardware check**: run one full video on the RTX 3070 Ti and confirm `ollama ps` shows
   100% GPU, that there are no `GPU returned garbage twice` lines, that `[vision] verified` > 0 and
   that `pacing_stats.json` `forcedReuse` < 20.
+- **Phase 6**: put the Kokoro model files in `models/kokoro/` (or run Kokoro-FastAPI), then run
+  `tts` on a 10-minute script and confirm the real-time factor is above 1x.

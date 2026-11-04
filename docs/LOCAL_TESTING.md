@@ -63,7 +63,7 @@ ollama pull nomic-embed-text    # originality check
 ollama pull qwen2.5vl:3b        # picture checks; 3b fits 8 GB better than the default 7b
 ```
 
-If you use `qwen2.5vl:3b`, set it as the vision model on the Classic page > Settings > AI.
+If you use `qwen2.5vl:3b`, set it as the vision model in **Settings > AI models & tools** (the `vision` stage).
 
 **Whisper** (subtitles and timing, about 1.6 GB):
 
@@ -128,7 +128,7 @@ v3 they are optional: a missing package only stops the paid Veo / Gemini / Runwa
 npm.cmd run serve
 ```
 
-Open **http://localhost:4173/new**. At the top, set the **AI engine**:
+Open **http://localhost:4173/**. The app has five tabs: **Make** (start a video), **Ideas**, **My videos**, **Channel**, **Settings**. Pick **Make > Ranked list**; at the top of that page, set the **AI engine**:
 - **Local**: everything on this PC (Ollama must show ✓), free.
 - **Hybrid** (recommended): the script on Claude Sonnet 5.5 (`ANTHROPIC_API_KEY` in `.env`, about
   $0.37 for a 16-minute video), everything else on this PC. Ollama must still run.
@@ -147,10 +147,10 @@ Make each test short (about 5 minutes of video), so a problem shows up fast.
 
 | # | Test | Where | What to check |
 |---|---|---|---|
-| 1 | **Ranked products** (3 products) | /new | `ollama ps` 100% GPU; voice plays; footage fits; QA shows the new checks (First frame, Caption size, Caption contrast) |
+| 1 | **Ranked products** (3 products) | Make > Ranked list | `ollama ps` 100% GPU; voice plays; footage fits; QA shows the new checks (First frame, Caption size, Caption contrast) |
 | 2 | **Documentary** (a topic Wikipedia covers, 5 min) | /make > Documentary | Claim table: open 2 "verified" sources and check them by hand; the "taken out" list makes sense |
-| 3 | **Editor**: swap one scene | Classic > My videos > the video | "Make it with AI" > a real product photo > Write the prompt > Google Flow route |
-| 4 | **German version** of test 1 | /new, step 3, "Another language" | needs the German Piper voice from step 4 |
+| 3 | **Editor**: swap one scene | My videos > the video > Open (or Edit) | "Make it with AI" > a real product photo > Write the prompt > Google Flow route |
+| 4 | **German version** of test 1 | the video's step 3, "Another language" | needs the German Piper voice from step 4 |
 | 5 | **Explainer** | /make > Explainer | needs explainroo: `git clone https://github.com/vincentsch/explainroo`, then in it `npm.cmd install` and `node bin/explainroo.js doctor --fetch`; in Tools > Video types set explainroo to the path of `bin\explainroo.js` |
 | 6 | **Tutorial** (a 1-2 minute screen recording) | /make > Tutorial | needs argo: `npm.cmd install -g @argo-video/cli` |
 | 7 | **earshot** sound check | Tools > Sound check: enabled = true | `.venv\Scripts\pip install earshot`, then `earshot doctor --fetch`; render + QA a video |
@@ -180,12 +180,12 @@ voice. Run these in order (Ollama running, `ollama pull qwen3:8b`, `nomic-embed-
 | 1 | Channel brief | `npm.cmd run cf -- channel show survival-pulse` (seeded), or `/brief` | the voice, banned phrases, 8 min at 160 wpm = 1280 words |
 | 2 | Competitor SOP from 5 transcripts | `npm.cmd run cf -- sop build --channel survival-pulse --competitor UCxxxxxxxxxxxxxxxxxxxxxx --videos 5` (needs `YOUTUBE_API_KEY`) **or** with a folder of 5 `.txt` transcripts: `--competitor D:\transcripts\rival` | `channels\survival-pulse\sop\<id>.json`: hook formula, beats with %, rules. The last line says "copied words stripped" and the 5-gram overlap must be 0. Read the rules: are they techniques, not their sentences? |
 | 3 | Ideas from an outlier | `/research` > Scan > an outlier's **Ideas** > Survival Pulse > Find 15 ideas (or `npm.cmd run cf -- ideas --channel survival-pulse --from <videoId>`) | "Why it worked", 15 ideas, the "dropped as too similar" line; with `YOUTUBE_API_KEY`, viewer questions from the comments are used |
-| 4 | Script with retention QA | Ideas > **Use ->** opens `/new` pre-filled (title, channel, format); add the products / items and write the script. CLI: `npm.cmd run cf -- script -p test-v3 -t "budget knives" --products "A,B,C" --channel survival-pulse` | `workspace\<video>\script_report.json`: `retention.status` (pass / warn / fail and the problems), `beats` (hook, promise, re-hooks, loops), `selfRepetition`, `channel.bannedFound` = [] |
+| 4 | Script with retention QA | Ideas > **Use ->** opens the Make wizard pre-filled (title, channel, format); add the products / items and write the script. CLI: `npm.cmd run cf -- script -p test-v3 -t "budget knives" --products "A,B,C" --channel survival-pulse` | `workspace\<video>\script_report.json`: `retention.status` (pass / warn / fail and the problems), `beats` (hook, promise, re-hooks, loops), `selfRepetition`, `channel.bannedFound` = [] |
 | 5 | Render | finish the wizard (voice > footage > render) | the QA page shows **Script > Retention beats** and **Originality > Not repeating our own videos**; step 6 has **Make 3 thumbnail concepts** |
 
 Also worth one try each:
-- Another format: on `/new` step 2 pick **Versus** (2 items), **Myth vs reality**, **History of** or
-  **Every X explained**. For myths and history chapters, check the footage by hand (see
+- Another format: on Make, pick **A vs B**, **Myths vs reality**, **The history of...** or **Every type explained** (or on the wizard's step 2 pick **Versus** (2 items), **Myth vs reality**, **History of** or
+  **Every X explained**). For myths and history chapters, check the footage by hand (see
   PHASE_LOG S5 limits).
 - A second video on the same topic for the same channel: its script report should show
   `selfRepetition.checkedAgainst` = 1 or more.

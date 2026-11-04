@@ -1,3 +1,4 @@
+import { parseMusicChoice } from "../music.js";
 import { isFormat, itemsProblem } from "../agents/script/formats.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,6 +32,8 @@ export interface WizardInput {
   products: string[];
   /** Script format; default countdown. */
   format?: string;
+  /** Background music: {mode: "default" | "off" | "track", track?} (src/lib/music.ts). */
+  music?: unknown;
   words?: number;
   channel?: string;
   /** Product -> page links for sourced facts (written to sources.json). */
@@ -99,7 +102,7 @@ export function createVideo(i: WizardInput): { project: string } {
   const project = i.project && /^[a-z0-9][a-z0-9-]{1,60}$/.test(i.project) ? i.project : projectSlug(topic);
   saveConfig(project, { topic, products, words: i.words, channel: i.channel, ...(format !== "countdown" ? { format } : {}) });
   const pf = path.join(projectDir(project), "project.json");
-  writeJson(pf, { ...readJson<Record<string, unknown>>(pf), title: (i.title ?? "").trim() || topic });
+  writeJson(pf, { ...readJson<Record<string, unknown>>(pf), title: (i.title ?? "").trim() || topic, ...(i.music !== undefined ? { music: parseMusicChoice(i.music) } : {}) });
   const links: Record<string, string[]> = {};
   for (const p of products) {
     const urls = (i.sources?.[p] ?? []).map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u));

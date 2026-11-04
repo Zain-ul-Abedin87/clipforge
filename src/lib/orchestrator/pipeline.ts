@@ -254,6 +254,12 @@ export interface ProjectSummary {
   name: string;
   title: string;
   channel: string;
+  /** ranked / explainer / tutorial / documentary / clips; "classic" = made on the first app's Create page. */
+  type: string;
+  /** Where the video continues / opens (the wizard, the make page, or the first app). */
+  open: string;
+  /** The editor, when the video has a ClipForge timeline. */
+  edit: string | null;
   stages: Record<PipelineStage, StageStatus>;
   current: string;
   qa: { pass: number; warn: number; fail: number } | null;
@@ -279,12 +285,20 @@ export function listProjects(): ProjectSummary[] {
     const running = PIPELINE_STAGES.find((s) => statuses[s] === "running");
     const failed = PIPELINE_STAGES.find((s) => statuses[s] === "failed");
     const next = PIPELINE_STAGES.find((s) => statuses[s] === "pending");
+    const cfg = readConfig(name);
+    const type = cfg ? cfg.type ?? "ranked" : "classic";
+    const enc = encodeURIComponent(name);
     out.push({
       name,
       title: p.title ?? name,
       channel: p.channel ?? "default",
+      type,
+      open: type === "classic" ? `/app#/project/${enc}` : type === "ranked" ? `/new?v=${enc}` : `/make?v=${enc}`,
+      edit: fs.existsSync(path.join(dir, "timeline.json")) ? `/app#/project/${enc}` : null,
       stages: statuses,
-      current: running ? `${STAGE_LABELS[running]} running` : failed ? `${STAGE_LABELS[failed]} failed` : next ? `next: ${STAGE_LABELS[next]}` : "complete",
+      // A rendered video with nothing running or failed is finished (videos from the first app's
+      // Create page have no pipeline state at all).
+      current: running ? `${STAGE_LABELS[running]} running` : failed ? `${STAGE_LABELS[failed]} failed` : fs.existsSync(video) || !next ? "complete" : `next: ${STAGE_LABELS[next]}`,
       qa,
       outputs: { video: fs.existsSync(video) ? `${name}.mp4` : null, shorts },
       gpuMs: PIPELINE_STAGES.reduce((a, s) => a + (st.stages[s].gpuMs ?? 0), 0),

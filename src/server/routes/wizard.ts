@@ -45,6 +45,7 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
           words: b.words ? Number(b.words) : undefined,
           channel: b.channel ? String(b.channel) : undefined,
           format: typeof b.format === "string" ? b.format : undefined,
+          music: b.music,
           sources,
           project: b.project ? String(b.project) : undefined,
           scriptMode: b.scriptMode === "own" || b.scriptMode === "none" ? b.scriptMode : "ai",
@@ -65,7 +66,7 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
 
   if (!parts[3] && method === "GET") {
     const st = readState(project);
-    const p = readJson<{ title?: string; channel?: string }>(path.join(dir, "project.json"));
+    const p = readJson<{ title?: string; channel?: string; music?: { mode?: string; track?: string } }>(path.join(dir, "project.json"));
     const qaFile = path.join(dir, "qa_report.json");
     const sourcesFile = path.join(dir, "sources.json");
     return {
@@ -73,6 +74,8 @@ export async function wizardRoute(parts: string[], method: string, body: () => P
       body: {
         project,
         title: p.title ?? project,
+        // As the music picker writes it: "default" / "off" / "track:<file>".
+        music: p.music?.mode === "track" && p.music.track ? `track:${p.music.track}` : p.music?.mode === "off" ? "off" : "default",
         config: readConfig(project),
         sources: fs.existsSync(sourcesFile) ? readJson(sourcesFile) : {},
         step: wizardStep(project),

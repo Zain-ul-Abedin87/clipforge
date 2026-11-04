@@ -9,23 +9,7 @@
 <link rel="stylesheet" href="/simple/simple.css">
 </head>
 <body>
-<header class="top">
-  <div class="top-in">
-    <a class="brand" href="#/create"><span class="logo">C</span>ClipForge</a>
-    <nav>
-      <a href="#/create" data-nav="create">Create</a>
-      <a href="#/videos" data-nav="videos">My videos</a>
-      <a href="#/settings" data-nav="settings">Settings</a>
-      <a href="#/library" data-nav="library">Library</a>
-      <a href="/new">New video</a>
-      <a href="/research">Research</a>
-      <a href="/pipeline">Pipeline</a>
-      <a href="/dashboard">Dashboard</a>
-      <a href="/tools">Tools</a>
-      <a href="/chat">Chat</a>
-    </nav>
-  </div>
-</header>
+<header id="top"></header>
 
 <main>
   <!-- CREATE -->
@@ -217,7 +201,8 @@
 
   <!-- LIBRARY: footage sources + batch + glossary (moved from the old classic UI) -->
   <section id="page-library" class="page" hidden>
-    <div class="head"><h1>Library</h1><p class="sub">Footage sources, batch production and product names. Every video draws its footage from here.</p></div>
+    <div class="head"><h1>Channel</h1><p class="sub">Footage sources, music, batch production and product names. Every video draws its footage from here.</p></div>
+    <div class="subnav-slot" data-tab="channel"></div>
     <div class="lib-tabs toggle" id="lib-tabs">
       <button data-v="vault" class="on">Model vault</button><button data-v="presskit">Press kit</button><button data-v="music">Music</button><button data-v="clips">My clips</button><button data-v="batch">Batch</button><button data-v="glossary">Glossary</button>
     </div>
@@ -290,27 +275,9 @@
   </section>
 
   <!-- SETTINGS -->
-  <section id="page-settings" class="page" hidden>
-    <div class="head"><h1>Settings</h1><p class="sub">Set once; applied to every video.</p></div>
-    <div class="card">
-      <h2>Defaults</h2>
-      <label class="lbl">Default niche</label>
-      <div class="toggle" id="s-niche"><button data-v="guns">Guns</button><button data-v="tech">Tech</button></div>
-      <label class="lbl">Shot length (seconds)</label>
-      <div class="grid2 tight">
-        <div><span class="help">Guns</span><input type="number" step="0.1" min="1" max="8" id="s-pace-guns"></div>
-        <div><span class="help">Tech</span><input type="number" step="0.1" min="1" max="8" id="s-pace-tech"></div>
-      </div>
-      <label class="switch"><input type="checkbox" id="s-captions"><span>Burned-in captions</span><span class="hint">competitors use none</span></label>
-    </div>
-    <div class="card">
-      <h2>Footage sources</h2>
-      <label class="switch"><input type="checkbox" id="s-web"><span>Web crawl (YouTube / web clips)</span><span class="hint">licence unknown</span></label>
-      <label class="switch"><input type="checkbox" id="s-presskit"><span>Press kit / official product photos</span></label>
-      <label class="switch"><input type="checkbox" id="s-stock"><span>Stock (Pixabay, Pexels, Storyblocks, Wikimedia)</span></label>
-      <label class="lbl">Web crawl mode</label>
-      <div class="toggle" id="s-mode"><button data-v="fallback">Fallback (gaps only)</button><button data-v="always">Always</button></div>
-    </div>
+  <section id="page-look" class="page" hidden>
+    <div class="head"><h1>Channel</h1><p class="sub">Set up once per channel: how it sounds, how it looks, its footage and music, and the competitors it learns structure from.</p></div>
+    <div class="subnav-slot" data-tab="channel"></div>
     <div class="card">
       <h2>Channel style preset</h2>
       <p class="help">Each channel's look: card font, colours, graphics and shot length.</p>
@@ -327,6 +294,11 @@
       <div class="chips" id="cs-set"></div>
       <div class="row"><button class="btn ghost" id="cs-save">Save channel style</button><span class="ok" id="cs-msg"></span></div>
     </div>
+  </section>
+
+  <section id="page-settings" class="page" hidden>
+    <div class="head"><h1>Settings</h1><p class="sub">Set once; applied to every video.</p></div>
+    <div class="subnav-slot" data-tab="settings"></div>
     <div class="card" id="ai-card">
       <h2>AI model</h2>
       <p class="help">This model writes scene labels, footage searches, product checks and diagrams. With "Off", everything runs on free built-in rules.</p>
@@ -360,6 +332,25 @@
       <div class="row"><button class="btn ghost" id="ai-save">Save AI settings</button><span class="ok" id="ai-msg"></span></div>
     </div>
     <div class="card">
+      <h2>Defaults</h2>
+      <label class="lbl">Default niche</label>
+      <div class="toggle" id="s-niche"><button data-v="guns">Guns</button><button data-v="tech">Tech</button></div>
+      <label class="lbl">Shot length (seconds)</label>
+      <div class="grid2 tight">
+        <div><span class="help">Guns</span><input type="number" step="0.1" min="1" max="8" id="s-pace-guns"></div>
+        <div><span class="help">Tech</span><input type="number" step="0.1" min="1" max="8" id="s-pace-tech"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="s-captions"><span>Burned-in captions</span><span class="hint">competitors use none</span></label>
+    </div>
+    <div class="card">
+      <h2>Footage sources</h2>
+      <label class="switch"><input type="checkbox" id="s-web"><span>Web crawl (YouTube / web clips)</span><span class="hint">licence unknown</span></label>
+      <label class="switch"><input type="checkbox" id="s-presskit"><span>Press kit / official product photos</span></label>
+      <label class="switch"><input type="checkbox" id="s-stock"><span>Stock (Pixabay, Pexels, Storyblocks, Wikimedia)</span></label>
+      <label class="lbl">Web crawl mode</label>
+      <div class="toggle" id="s-mode"><button data-v="fallback">Fallback (gaps only)</button><button data-v="always">Always</button></div>
+    </div>
+    <div class="card">
       <h2>API keys</h2>
       <ul class="keys" id="keys"></ul>
       <p class="help">Keys are never shown here. Edit <code>.env</code> in the clipforge folder to change them.</p>
@@ -372,5 +363,10 @@
 <script src="/simple/studio.js"></script>
 <script src="/simple/simple.js"></script>
 <script src="/simple/library.js"></script>
+<script type="module">
+import { header, subnav } from "/full/full.js";
+header();
+for (const el of document.querySelectorAll(".subnav-slot")) subnav(el.dataset.tab, el);
+</script>
 </body>
 </html>

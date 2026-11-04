@@ -28,3 +28,4 @@
 .logbox{background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;font:12px/1.5 ui-monospace,Consolas,monospace;color:var(--muted);max-height:220px;overflow:auto;white-space:pre-wrap}
 .est{color:var(--muted);font-size:var(--fs-xs)}
 @media (max-width:720px){main{padding:24px 16px 48px}.top-in{padding:0 16px}nav{overflow-x:auto}.grid2{grid-template-columns:1fr}}
+

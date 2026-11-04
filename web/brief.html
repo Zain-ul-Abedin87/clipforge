@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Channel brief - ClipForge</title>
+<title>Channel - ClipForge</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/simple/simple.css">
 <link rel="stylesheet" href="/full/full.css">
@@ -21,7 +21,9 @@
 <header id="top"></header>
 <main>
   <section class="page">
-    <div class="head"><h1>Channel brief</h1><p class="sub">Who the channel is for and how it sounds. Titles, outlines and every script section are written from this, so two channels never sound the same.</p></div>
+    <div class="head"><h1>Channel</h1><p class="sub">Set up once per channel: how it sounds, how it looks, its footage and music, and the competitors it learns structure from.</p></div>
+    <div id="sub"></div>
+    <p class="help" style="margin-top:-6px">The <b>brief</b>: who the channel is for and how it sounds. Titles, outlines and every script section are written from it, so two channels never sound the same.</p>
     <p class="error" id="err"></p>
     <div class="card">
       <div class="grid2">
@@ -46,11 +48,18 @@
       </div>
       <div class="row" style="justify-content:space-between;align-items:center;margin-top:16px"><span class="help" id="words"></span><span><span class="saved" id="saved"></span> <button class="btn primary" id="save">Save the brief</button></span></div>
     </div>
+    <div class="card" id="sops" style="margin-top:16px">
+      <h2>Competitor SOPs</h2>
+      <p class="help" style="margin-top:-8px">How a winning channel builds its videos (hook, beats, re-hooks, rules), learned from 5-10 of its transcripts. Never their words. The script follows the newest one.</p>
+      <div id="sopList"></div>
+      <p class="help">Build one in a terminal in the ClipForge folder:<br><code id="sopCmd"></code><br>(with <code>YOUTUBE_API_KEY</code> set, give a channel id <code>UC...</code> instead of a folder of <code>.txt</code> transcripts).</p>
+    </div>
   </section>
 </main>
 <script type="module">
-import { api, esc, header } from "/full/full.js";
+import { api, esc, header, subnav } from "/full/full.js";
 header();
+subnav("channel", document.getElementById("sub"));
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
 const err = (m) => ($("err").textContent = m || "");
@@ -65,7 +74,8 @@ async function loadList(pick) {
 async function load() {
   err(""); $("saved").textContent = "";
   const ch = $("ch").value;
-  history.replaceState(null, "", `/brief?ch=${encodeURIComponent(ch)}`);
+  history.replaceState(null, "", `/channel?ch=${encodeURIComponent(ch)}${location.hash}`);
+  loadSops(ch).catch(() => {});
   const { brief: b, saved } = await api(`/api/channels/${encodeURIComponent(ch)}/brief`);
   $("state").textContent = saved ? `Saved in channels/${ch}/brief.json (and brief.md, which you can also edit by hand).` : "This channel has no brief yet: the defaults are shown. Save to create it.";
   $("name").value = b.name; $("niche").value = b.niche; $("audience").value = b.audience; $("tone").value = b.tone;
@@ -74,6 +84,17 @@ async function load() {
   words();
 }
 $("ch").onchange = () => load().catch((e) => err(e.message));
+async function loadSops(ch) {
+  $("sopCmd").textContent = `npm.cmd run cf -- sop build --channel ${ch} --competitor D:\\transcripts\\rival --videos 5`;
+  const list = await api(`/api/channels/${encodeURIComponent(ch)}/sops`).catch(() => []);
+  $("sopList").innerHTML = list.length
+    ? list.map((s) => `<details class="card" style="padding:12px;margin:8px 0"><summary style="cursor:pointer"><b>${esc(s.competitor)}</b> <span class="hint">${s.videos} video(s), built ${esc(s.builtAt.slice(0, 10))}, re-hook every ${s.rehookEverySec ?? "?"} s${s.newest ? " &middot; used by the script" : ""}</span></summary>
+        <p class="help" style="margin:8px 0 4px"><b>Hook (${esc(s.hookType)}):</b> ${s.hookSteps.map(esc).join(" &rarr; ")}</p>
+        <div class="help">${s.beats.map((b) => `${b.targetPct}% ${esc(b.name)}: ${esc(b.technique)}`).join("<br>")}</div>
+        <p class="help" style="margin-top:6px"><b>Rules:</b> ${s.rules.map(esc).join(" &middot; ")}</p></details>`).join("")
+    : '<p class="help">No SOP for this channel yet.</p>';
+  if (location.hash === "#sops") $("sops").scrollIntoView({ block: "start" });
+}
 $("minutes").oninput = words; $("wpm").oninput = words;
 $("save").onclick = async () => {
   err("");

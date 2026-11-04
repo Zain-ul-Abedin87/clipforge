@@ -357,3 +357,10 @@ main.wide{max-width:1480px}
 .ed-cand.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .gen-way{border-top:1px solid var(--border2);padding:8px 0;margin-top:8px}
 .gen-way select{max-width:100%}
+
+/* Sub-tabs (Channel, Settings) and the "Ask" link in the header */
+.subnav{display:flex;flex-wrap:wrap;gap:6px;margin:-8px 0 20px;border-bottom:1px solid var(--border);padding-bottom:10px}
+.subnav a{color:var(--muted);font-size:var(--fs-sm);font-weight:600;padding:6px 12px;border-radius:99px}
+.subnav a:hover{color:var(--text);background:var(--surface2)}
+.subnav a.on{color:var(--text);background:var(--surface2);box-shadow:inset 0 0 0 1px var(--border2)}
+nav a.ask{margin-left:8px;border:1px solid var(--border2)}

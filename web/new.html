@@ -60,7 +60,7 @@
 <header id="top"></header>
 <main>
   <section class="page">
-    <div class="head"><h1>New video</h1><p class="sub">Six steps from an idea to a finished video and Shorts. Nothing runs until you press the button for it. Other kinds of video: <a href="/make?type=explainer">Explainer</a> &middot; <a href="/make?type=tutorial">Tutorial from a screen recording</a></p></div>
+    <div class="head"><h1>Make a video</h1><p class="sub">Six steps from an idea to a finished video and Shorts. Nothing runs until you press the button for it. <a href="/">&larr; Other kinds of video</a></p></div>
     <div class="engine card" id="engineBar">
       <b>AI engine</b>
       <div class="toggle" id="engineToggle" role="radiogroup" aria-label="AI engine">
@@ -112,8 +112,13 @@
           <select id="length" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px">
             <option value="800">Short, about 5 minutes</option><option value="1500" selected>Medium, about 10 minutes</option><option value="2500">Long, about 17 minutes</option>
           </select></div>
-        <div><label class="lbl" for="channel">Channel <a class="help" id="briefLink" href="/brief" style="float:right">Edit the brief</a></label><select id="channel" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"></select><p class="help" id="briefInfo" style="margin:6px 0 0"></p></div>
+        <div><label class="lbl" for="channel">Channel <a class="help" id="briefLink" href="/channel" style="float:right">Edit the brief</a></label><select id="channel" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"></select><p class="help" id="briefInfo" style="margin:6px 0 0"></p></div>
       </div>
+      <div class="grid2 tight" style="margin-top:12px">
+        <div><label class="lbl" for="wmusic">Background music <span class="hint">optional</span></label><select id="wmusic" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"><option value="default">The channel's music</option><option value="off">No music</option></select></div>
+        <div><label class="lbl">&nbsp;</label><button class="btn ghost small" id="wmusicAdd" type="button">Upload a track</button></div>
+      </div>
+      <div id="wmusicUp" hidden style="margin-top:8px"><div class="row" style="margin:0"><input type="file" id="wmusicFile" accept=".mp3,.wav,.m4a,.ogg,.flac,audio/*"><input id="wmusicNote" placeholder="Source or licence, e.g. CC0 from freemusicarchive.org" style="flex:1;min-width:200px"><button class="btn small primary" id="wmusicSend" type="button">Upload and use</button></div><p class="help" id="wmusicMsg"></p></div>
       <div class="row" style="justify-content:space-between"><button class="btn ghost" data-go="1">&larr; Back</button><button class="btn primary big" id="create">Write my script &rarr;</button></div>
     </div>
 
@@ -273,6 +278,8 @@ $("to2").onclick = async () => {
   if (!$("topic").value.trim()) return err("Type what the video is about.");
   if (!$("products").children.length) for (let i = 0; i < 3; i++) addProduct();
   await suggestFormatFor(chosenTitle() || $("topic").value);
+  // The format card picked on the Make page wins over the title's suggestion.
+  if (window.__startFormat && formats.some((f) => f.id === window.__startFormat) && !formatPicked) { $("format").value = window.__startFormat; formatPicked = true; $("formatNote").textContent = ""; showFormat(); }
   if (curFormat().id === "versus") while ($("products").children.length > 2) $("products").lastElementChild.remove();
   showStep(2);
 };
@@ -314,7 +321,41 @@ function showBrief() {
     $("length").value = o.value;
   }
 }
-$("channel").onchange = showBrief;
+$("channel").onchange = () => { showBrief(); refreshMusic(); };
+
+// ---------- background music (moved here from the first app's Create page) ----------
+// "default" = the channel's music, "off" = none, "track:<file>" = one track of the channel's library.
+async function refreshMusic(want) {
+  const ch = $("channel").value || "default";
+  const tracks = await api(`/api/channels/${encodeURIComponent(ch)}/music`).catch(() => []);
+  const keep = want ?? $("wmusic").value;
+  $("wmusic").innerHTML = '<option value="default">The channel\'s music</option><option value="off">No music</option>' + tracks.map((t) => `<option value="track:${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  $("wmusic").value = [...$("wmusic").options].some((o) => o.value === keep) ? keep : "default";
+}
+function musicChoice() {
+  const v = $("wmusic").value;
+  return v.startsWith("track:") ? { mode: "track", track: v.slice(6) } : { mode: v };
+}
+$("wmusicAdd").onclick = () => ($("wmusicUp").hidden = !$("wmusicUp").hidden);
+$("wmusicSend").onclick = () => {
+  const file = $("wmusicFile").files[0];
+  if (!file) return ($("wmusicMsg").textContent = "Choose an audio file first.");
+  if (!$("wmusicNote").value.trim()) return ($("wmusicMsg").textContent = "Say where the track is from (its licence), so it can be credited and checked.");
+  const x = new XMLHttpRequest();
+  x.open("POST", `/api/channels/${encodeURIComponent($("channel").value || "default")}/music`);
+  x.setRequestHeader("x-filename", encodeURIComponent(file.name));
+  x.setRequestHeader("x-note", encodeURIComponent($("wmusicNote").value.trim()));
+  x.upload.onprogress = (e) => e.lengthComputable && ($("wmusicMsg").textContent = `Uploading ${Math.round((100 * e.loaded) / e.total)}%`);
+  x.onload = async () => {
+    const r = (() => { try { return JSON.parse(x.responseText); } catch { return {}; } })();
+    if (x.status >= 300) return ($("wmusicMsg").textContent = r.error || "Upload failed.");
+    $("wmusicMsg").textContent = "Added to the channel's music.";
+    $("wmusicUp").hidden = true;
+    await refreshMusic(`track:${r.name || file.name}`);
+  };
+  x.onerror = () => ($("wmusicMsg").textContent = "Upload failed.");
+  x.send(file);
+};
 // Script / voice choices: no script means the recording is the script (voice = own recording).
 const scriptMode = () => document.querySelector('input[name="sm"]:checked').value;
 const voiceMode = () => (scriptMode() === "none" ? "own" : document.querySelector('input[name="vm"]:checked').value);
@@ -338,7 +379,7 @@ $("create").onclick = async () => {
   const sources = Object.fromEntries(rows.filter((r) => r.link).map((r) => [r.name, [r.link]]));
   $("create").disabled = true;
   try {
-    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, format: $("format").value, sources, project: project || undefined, scriptMode: sm, voiceMode: voiceMode(), script: sm === "own" ? $("ownScript").value : undefined } });
+    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, format: $("format").value, music: musicChoice(), sources, project: project || undefined, scriptMode: sm, voiceMode: voiceMode(), script: sm === "own" ? $("ownScript").value : undefined } });
     project = r.project;
     history.replaceState(null, "", `/new?v=${project}`);
     localStorage.setItem("cf.project", project);
@@ -600,6 +641,14 @@ async function start() {
   await Promise.all([loadChannels(), loadContinue()]);
   // Prefill from an idea (research page > Ideas > Use): topic, the working title, channel, format.
   const pre = new URLSearchParams(location.search);
+  await refreshMusic();
+  // From the Make page: a format card (/new?format=versus) or "My voice-over or script" (?mode=own).
+  if (!project && pre.get("format") && !pre.get("topic")) window.__startFormat = pre.get("format");
+  if (!project && pre.get("mode") === "own") {
+    for (const r of document.querySelectorAll('input[name="sm"]')) r.checked = r.value === "own";
+    for (const r of document.querySelectorAll('input[name="vm"]')) r.checked = r.value === "own";
+    syncChoices();
+  }
   if (!project && pre.get("topic")) {
     $("topic").value = pre.get("topic");
     if (pre.get("title")) $("titles").innerHTML = `<p class="lbl" style="margin-top:16px">Pick a title</p><label class="opt"><input type="radio" name="title" value="${esc(pre.get("title"))}" checked><span>${esc(pre.get("title"))}<br><span class="hint">from the idea you picked; press Suggest titles for more options</span></span></label>`;
@@ -622,6 +671,7 @@ async function start() {
   $("titles").innerHTML = `<label class="opt"><input type="radio" name="title" value="${esc(info.title)}" checked><span>${esc(info.title)}</span></label>`;
   $("channel").value = c.channel || "default";
   showBrief();
+  await refreshMusic(info.music || "default");
   await suggestFormatFor(info.title || c.topic);
   if (c.format && formats.some((f) => f.id === c.format)) { $("format").value = c.format; formatPicked = true; showFormat(); }
   $("length").value = String(c.words && [...$("length").options].some((o) => Number(o.value) === c.words) ? c.words : 1500);

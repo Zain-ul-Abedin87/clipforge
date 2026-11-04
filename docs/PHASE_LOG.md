@@ -1366,6 +1366,69 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## UI redesign: one app, five tabs (2026-11-04)
+
+**The problem**: two apps shared one bar of 10 links.
+- 3 ways to start a video: Classic Create, New video, and Make (Make wasn't even in the bar).
+- 3 lists of videos: My videos, Dashboard, Pipeline.
+- 4 places for settings.
+- The editor could only be reached through Classic.
+- `/` opened the weakest page (the old Create).
+
+**Now**: one header on every page, the five tabs in the order a creator thinks, plus an "Ask"
+link (chat).
+
+| Tab | Path | What is there | Replaces |
+|---|---|---|---|
+| **Make** | `/` | 11 cards in 3 groups. **From products**: Ranked list, A vs B, Myths vs reality, Every type explained. **Stories and lessons**: Documentary, The history of..., Explainer, Tutorial. **From your own material**: My voice-over or script, Shorts from a long video, and "Not sure what to make?" -> Ideas. Each card says what you give. "Continue where you left off" lists the last 4 unfinished videos. | Create, New video, the Make page's type chooser |
+| **Ideas** | `/ideas` | Outliers, titles, the Ideas panel, growing channels | Research |
+| **My videos** | `/videos` | One list. One main button per row: Continue (unfinished) or Open (finished), plus Edit (the editor) and Details (the old pipeline page, now "Video details"). GPU times are folded under "Details for the curious". | My videos, Dashboard, Pipeline |
+| **Channel** | `/channel` | Sub-tabs: Voice (brief), Look & captions (`/app#/look`), Footage & music (`/app#/library`), Competitor SOPs (a new read-only list) | Channel brief, Library, the style half of the old Settings |
+| **Settings** | `/settings` | Sub-tabs: General & API keys (`/app#/settings`, with AI model on top), AI models & tools. The 16 tool sections are folded, each with a one-line description and readable names. | Settings, Tools |
+
+- **The first app** is now `/app`: the video page and editor, library, look, general settings.
+  `/app#/create` -> `/` and `/app#/videos` -> `/videos`.
+- **Old links** redirect, so bookmarks keep working (`src/server/pages.ts`):
+  `/research` -> `/ideas`, `/dashboard` -> `/videos`, `/brief` -> `/channel`, `/tools` ->
+  `/settings`, `/index.html?project=x` -> `/app#/project/x`. Old `/#/project/x` / `#/settings`
+  bookmarks are sent on by the home page, also when the hash changes on an open page.
+- **Nothing was lost**:
+  - Classic Create's **background-music picker and track upload** moved into the wizard (step
+    2). It is saved to `project.json` `music`, which the timeline already reads, and it is
+    restored when a video is reopened, so its track isn't reset.
+  - **"My voice-over or script"** opens the wizard with "own script" and "own recording" ticked.
+  - Format cards (`/new?format=versus` ...) pre-select the format; the card wins over the title's
+    suggestion.
+- **Page titles match the tabs**: Make a video, Ideas, My videos, Channel, Settings, Video
+  details, Ask ClipForge.
+- `ProjectSummary` has `type`, `open` and `edit`. A video with a finished render and nothing
+  running counts as finished, even with no pipeline state (old Create videos showed "next:
+  Research").
+
+**Found and fixed while checking in Chromium**:
+- the AI model card ended up on Channel > Look (it went back to Settings);
+- a finished old-Create video was offered under "Continue", and its Open and Edit went to the same
+  page;
+- `/#/settings` on an open home page did not move.
+
+**Tests**: `tests/ui.test.ts`, 3. They cover:
+- every tab and `/app` serve a page that exists; the old addresses redirect, keeping the query;
+- the header has exactly the five tabs, every page uses it, and none still links Create /
+  Classic;
+- the My videos fields (type, open, edit, finished);
+- the wizard saves the music.
+
+Full suite: 489 tests: 488 pass, 0 fail, 1 skipped. Checked every tab, sub-tab, redirect and the
+`/new?mode=own` / `?format=` starts in Chromium: no page errors.
+
+**Not done (on purpose)**:
+- The editor, library and look pages keep their first-app layout; only their header and place
+  changed.
+- Building an SOP stays a CLI command; the Channel page shows the command instead of a button
+  that doesn't exist.
+
+---
+
 ## Hybrid AI engine: script on Claude Sonnet 5.5, the rest local (2026-11-04)
 
 The cheapest setup that still gets a strong script: about $0.37 of Claude for a 16-minute video

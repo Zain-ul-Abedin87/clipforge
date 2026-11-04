@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Make a video - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-bottom:28px}
+  .kind{display:flex;flex-direction:column;gap:6px;padding:16px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);color:var(--text);text-decoration:none;min-height:126px}
+  .kind:hover{border-color:var(--accent);background:rgba(81,130,239,.06)}
+  .kind b{font-size:var(--fs-md)}
+  .kind .hint{flex:1}
+  .kind .need{font-size:var(--fs-xs);color:var(--dim)}
+  .kind.main{border-color:var(--accent);background:rgba(81,130,239,.08)}
+  .group{font-size:var(--fs-xs);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:0 0 8px}
+  .cont{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:12px 16px;border-top:1px solid var(--border)}
+  .cont:first-child{border-top:0}
+  .cont small{display:block;color:var(--muted);font-size:var(--fs-xs)}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1>Make a video</h1><p class="sub">Pick what you want to make. Each one walks you through it step by step, and nothing runs until you press the button for it.</p></div>
+
+    <div id="continueBox" hidden>
+      <p class="group">Continue where you left off</p>
+      <div class="card flush" id="continue" style="margin-bottom:28px"></div>
+    </div>
+
+    <p class="group">From products</p>
+    <div class="kinds">
+      <a class="kind main" href="/new"><b>Ranked list</b><span class="hint">"The 7 best budget air fryers": a countdown with real specs, #1 last.</span><span class="need">You give: the products (links optional)</span></a>
+      <a class="kind" href="/new?format=versus"><b>A vs B</b><span class="hint">Two products head to head, then one clear verdict.</span><span class="need">You give: the two products</span></a>
+      <a class="kind" href="/new?format=myth-vs-reality"><b>Myths vs reality</b><span class="hint">What people get wrong about a topic, fact by fact.</span><span class="need">You give: the myths</span></a>
+      <a class="kind" href="/new?format=every-x-explained"><b>Every type explained</b><span class="hint">Every kind of something, and which one fits most people.</span><span class="need">You give: the types</span></a>
+    </div>
+
+    <p class="group">Stories and lessons</p>
+    <div class="kinds">
+      <a class="kind" href="/make?type=documentary"><b>Documentary</b><span class="hint">History, science, places: researched, every fact checked against a source.</span><span class="need">You give: a topic (your notes and links optional)</span></a>
+      <a class="kind" href="/new?format=history-of"><b>The history of...</b><span class="hint">A product or brand's story, chapter by chapter.</span><span class="need">You give: the chapters, oldest first</span></a>
+      <a class="kind" href="/make?type=explainer"><b>Explainer</b><span class="hint">Animated diagrams with a voice-over: how something works.</span><span class="need">You give: the points to explain</span></a>
+      <a class="kind" href="/make?type=tutorial"><b>Tutorial</b><span class="hint">Your screen recording with a voice-over, scene by scene.</span><span class="need">You give: a screen recording</span></a>
+    </div>
+
+    <p class="group">From your own material</p>
+    <div class="kinds">
+      <a class="kind" href="/new?mode=own"><b>My voice-over or script</b><span class="hint">You already have the script or the recording: ClipForge finds the footage, captions and edits.</span><span class="need">You give: a script and / or an MP3 / WAV</span></a>
+      <a class="kind" href="/make?type=clips"><b>Shorts from a long video</b><span class="hint">Your podcast, vlog or stream cut into captioned Shorts.</span><span class="need">You give: your long video</span></a>
+      <a class="kind" href="/ideas"><b>Not sure what to make?</b><span class="hint">Find videos that beat their channel's usual views, and turn them into ideas for yours.</span><span class="need">Opens Ideas</span></a>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, ago, esc, header } from "/full/full.js";
+// Old bookmarks of the first app (/#/project/x, /#/settings, ...) open where those pages live now.
+const oldLink = () => {
+  const h = location.hash;
+  if (/^#\/(project|settings|library|look)\b/.test(h)) location.replace(`/app${h}`);
+  else if (h === "#/videos") location.replace("/videos");
+  else if (h) history.replaceState(null, "", "/");
+};
+oldLink();
+window.addEventListener("hashchange", oldLink);
+header();
+const $ = (id) => document.getElementById(id);
+const d = await api("/api/dashboard").catch(() => null);
+const open = (d?.projects ?? []).filter((p) => p.current !== "complete" && !p.outputs.video).slice(0, 4);
+if (open.length) {
+  $("continueBox").hidden = false;
+  $("continue").innerHTML = open.map((p) => `<div class="cont"><div><b>${esc(p.title)}</b><small>${esc(p.current)} &middot; ${ago(Date.parse(p.updatedAt))}</small></div><a class="btn small primary" href="${esc(p.open)}">Continue &rarr;</a></div>`).join("");
+}
+</script>
+</body>
+</html>

@@ -47,12 +47,20 @@ function route() {
   document.querySelector("main").classList.remove("wide");
   if (window.Studio?.project) Studio.close();
   studio.name = null;
+  // The first app keeps the video page + editor, the library, channel look and general settings.
+  // Create and My videos moved to the Make tab (/) and the My videos tab (/videos).
   const [, page, arg] = (location.hash || "#/create").split("/");
+  if (!page || page === "create") return location.replace("/");
+  if (page === "videos") return location.replace("/videos");
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   document.querySelectorAll("nav a[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (page === "project" ? "videos" : page || "create")));
   if (page === "project" && arg) return showProject(decodeURIComponent(arg));
   if (page === "videos") return showVideos();
   if (page === "settings") return showSettings();
+  if (page === "look") {
+    $("#page-look").hidden = false;
+    return showChannelStyle();
+  }
   if (page === "library") return window.showLibrary?.();
   $("#page-create").hidden = false;
 }

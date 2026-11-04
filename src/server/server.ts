@@ -42,6 +42,7 @@ import { researchRoute } from "./routes/research.js";
 import { pipelineRoute } from "./routes/pipeline.js";
 import { wizardRoute } from "./routes/wizard.js";
 import { makeRoute } from "./routes/make.js";
+import { resolvePage } from "./pages.js";
 import { aistyleRoute } from "./routes/aistyle.js";
 import { saveRef } from "../lib/assets/aiStyle.js";
 import { setRecording, tutorialDir, VIDEO_EXT } from "../lib/formats/tutorial.js";
@@ -493,10 +494,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     // One UI (web/simple). Old classic / editor links land on it (the studio has the editor).
     if (url.pathname === "/index.html" || url.pathname === "/editor.html") {
       const p = url.searchParams.get("project");
-      res.writeHead(302, { Location: p && validName(p) ? `/#/project/${encodeURIComponent(p)}` : "/" });
+      res.writeHead(302, { Location: p && validName(p) ? `/app#/project/${encodeURIComponent(p)}` : "/" });
       return void res.end();
     }
-    // Full-pipeline pages (web/<name>.html): research, pipeline view, dashboard, tool settings, chat.
+    // The five tabs and /app (src/server/pages.ts); old addresses redirect.
+    const tab = resolvePage(url.pathname, url.search);
+    if (tab && "redirect" in tab) {
+      res.writeHead(302, { Location: tab.redirect });
+      return void res.end();
+    }
+    if (tab) return send(res, 200, fs.readFileSync(path.join(WEB_DIR, tab.file)), "text/html; charset=utf-8");
+    // Full-pipeline pages (web/<name>.html): the wizard, other video types, pipeline details, chat.
     const page = FULL_PAGES.find((p) => url.pathname === `/${p}` || url.pathname === `/${p}/`);
     if (page && fs.existsSync(path.join(WEB_DIR, `${page}.html`))) return send(res, 200, fs.readFileSync(path.join(WEB_DIR, `${page}.html`)), "text/html; charset=utf-8");
     // The Remotion cards' fonts and photos (cards/public), for the studio's live preview.
@@ -730,6 +738,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (!listChannels().includes(ch)) return send(res, 404, { error: "unknown channel" });
     const what = parts[3];
     if (what === "style" && method === "PUT") return send(res, 200, updateStyle(ch, JSON.parse((await readBody(req)) || "{}")));
+    if (what === "sops" && method === "GET") {
+      const { listSops, loadSop } = await import("../lib/agents/sop/extract.js");
+      const newest = loadSop(ch);
+      return send(res, 200, listSops(ch).map((c) => loadSop(ch, c)).filter((s): s is NonNullable<typeof s> => !!s).map((s) => ({ competitor: s.competitor, videos: s.stats.videos, builtAt: s.builtAt, rehookEverySec: s.stats.rehookEverySec, hookType: s.hookFormula.type, hookSteps: s.hookFormula.steps, beats: s.beats, rules: s.rules, newest: newest?.competitor === s.competitor && newest?.builtAt === s.builtAt })));
+    }
     if (what === "brief" && method === "GET") return send(res, 200, { brief: loadBrief(ch) ?? defaultBrief(ch), saved: hasBrief(ch) });
     if (what === "brief" && method === "PUT") {
       try {

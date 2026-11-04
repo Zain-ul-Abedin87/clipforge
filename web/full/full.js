@@ -2,12 +2,13 @@
 // Plain browser JS, no build step. Every page includes <header id="top"></header>.
 
 export const PAGES = [
-  ["/", "Create"],
+  ["/new", "New video"],
   ["/research", "Research"],
   ["/pipeline", "Pipeline"],
   ["/dashboard", "Dashboard"],
   ["/tools", "Tools"],
   ["/chat", "Chat"],
+  ["/", "Classic"],
 ];
 
 export function header() {

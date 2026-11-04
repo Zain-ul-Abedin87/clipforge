@@ -39,6 +39,7 @@ import { ProjectStore } from "./state/projectStore.js";
 import { createEditorAPI } from "./routes/editorAPI.js";
 import { researchRoute } from "./routes/research.js";
 import { pipelineRoute } from "./routes/pipeline.js";
+import { wizardRoute } from "./routes/wizard.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
@@ -474,7 +475,7 @@ function streamFile(req: http.IncomingMessage, res: http.ServerResponse, file: s
 
 // ---------- Routes ----------
 
-const FULL_PAGES = ["research", "pipeline", "dashboard", "tools", "chat"];
+const FULL_PAGES = ["new", "research", "pipeline", "dashboard", "tools", "chat"];
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -769,7 +770,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   {
-    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req)));
+    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req))) ?? (await wizardRoute(parts, method, () => readBody(req, 8 * 1024 * 1024)));
+    const file = r && "file" in r ? (r as { file?: string }).file : undefined;
+    if (file) return streamFile(req, res, file);
     if (r) return send(res, r.status, r.body);
   }
 

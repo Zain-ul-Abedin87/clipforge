@@ -20,9 +20,11 @@ export interface ScriptReport {
   totalWords: number;
   deviation: number;
   withinTolerance: boolean;
+  /** Who wrote it: the local model, or rules only (no model running: a skeleton, not a finished script). */
+  writer: "model" | "rules";
   sections: { kind: string; product?: string; target: number; words: number; attempts: number; unsourcedRemoved: number }[];
   originality: OriginalityReport | null;
-  claims: { unsourced: { section: string; sentence: string; numbers: string[] }[]; factsUsed: SourcedFact[]; factsAvailable: number };
+  claims: { unsourced: { section: string; sentence: string; numbers: string[] }[]; factsUsed: SourcedFact[]; factsAvailable: number; facts: SourcedFact[] };
   outline: Outline;
 }
 
@@ -89,9 +91,10 @@ export async function writeScript(dir: string, i: ScriptInput): Promise<{ text: 
     totalWords: total,
     deviation: Math.round(((total - target) / target) * 1000) / 1000,
     withinTolerance: Math.abs(total - target) <= target * cfg.tolerance,
+    writer: ask ? "model" : "rules",
     sections: sections.map((s) => ({ kind: s.section.kind, product: s.section.product, target: s.section.words, words: s.words, attempts: s.attempts, unsourcedRemoved: s.unsourcedRemoved })),
     originality,
-    claims: { unsourced, factsUsed: used, factsAvailable: facts.length },
+    claims: { unsourced, factsUsed: used, factsAvailable: facts.length, facts },
     outline,
   };
   fs.mkdirSync(dir, { recursive: true });

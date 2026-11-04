@@ -62,9 +62,10 @@ export async function pipelineRoute(parts: string[], method: string, body: () =>
       const b = await json();
       const stage = PIPELINE_STAGES.find((s) => s === b.stage);
       const from = PIPELINE_STAGES.find((s) => s === b.from);
+      const until = PIPELINE_STAGES.find((s) => s === b.until);
       if (!stage && !from) return { status: 400, body: { error: `stage or from must be one of ${PIPELINE_STAGES.join(", ")}` } };
       running.add(project);
-      const job = stage ? runStage(project, stage as PipelineStage, { log: (m) => console.log(m) }) : runPipeline(project, from as PipelineStage, { log: (m) => console.log(m) });
+      const job = stage ? runStage(project, stage as PipelineStage, { log: (m) => console.log(m) }) : runPipeline(project, from as PipelineStage, { log: (m) => console.log(m), until });
       void job.finally(() => running.delete(project));
       return { status: 202, body: { ok: true, project, stage: stage ?? null, from: from ?? null } };
     }

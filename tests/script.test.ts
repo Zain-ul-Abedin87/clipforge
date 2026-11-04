@@ -113,10 +113,13 @@ describe("writeScript: 10 products", () => {
     assert.ok(w.calls.length >= 13 && w.calls.every((c) => c.length < 2000));
   });
 
-  test("no model: rule-based sections still hit the length and state only sourced facts", async () => {
+  test("no model: a short skeleton marked 'rules', no filler sentences, only sourced facts", async () => {
     const dir = path.join(tmp, "proj2");
-    const { report } = await writeScript(dir, { topic: "budget pistols", products: PRODUCTS.slice(0, 3), targetWords: 400, ask: null, log: () => {} });
-    assert.ok(report.withinTolerance, `${report.totalWords}`);
+    const { text, report } = await writeScript(dir, { topic: "budget pistols", products: PRODUCTS.slice(0, 3), targetWords: 400, ask: null, log: () => {} });
+    assert.equal(report.writer, "rules");
+    assert.ok(report.totalWords < 400, "it does not pretend to be a full script");
+    assert.ok(!/Keep that in mind|fair trade for most buyers/.test(text), "no filler sentences");
+    for (const p of PRODUCTS.slice(0, 3)) assert.ok(text.includes(p), p);
     assert.deepEqual(report.claims.unsourced, []);
   });
 });

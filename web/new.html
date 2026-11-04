@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New video - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .steps{display:flex;gap:6px;flex-wrap:wrap}
+  .stp{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:99px;background:var(--surface);border:1px solid var(--border);color:var(--muted);font-weight:600;font-size:var(--fs-sm);cursor:default}
+  .stp b{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--surface2);font-size:var(--fs-xs)}
+  .stp.done{color:var(--ok);cursor:pointer}.stp.done b{background:rgba(62,207,142,.18)}
+  .stp.on{color:var(--text);border-color:var(--accent)}.stp.on b{background:var(--accent);color:#fff}
+  .pane[hidden]{display:none}
+  .opt{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);cursor:pointer;margin-top:8px}
+  .opt:hover{border-color:var(--dim)} .opt input{margin-top:4px}
+  .prod{display:grid;grid-template-columns:34px 1fr 1fr 34px;gap:8px;align-items:center;margin-top:8px}
+  .prod .rank{font-weight:700;color:var(--muted);text-align:center}
+  .xbtn{height:40px;border-radius:var(--r-sm);border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:pointer}
+  .busy{display:flex;gap:14px;align-items:center;padding:18px;border:1px dashed var(--border2);border-radius:var(--r)}
+  .spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--surface2);border-top-color:var(--accent);animation:sp 1s linear infinite;flex:none}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .failbox{border:1px solid rgba(227,81,81,.4);background:rgba(227,81,81,.08);border-radius:var(--r);padding:16px}
+  .failbox h3{margin:0 0 6px;color:var(--bad);font-size:var(--fs-md)}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0 12px}
+  textarea.script{min-height:420px;font-size:15px;line-height:1.7}
+  .warnlist{margin:8px 0 0;padding-left:18px;color:var(--warn);font-size:var(--fs-xs)}
+  .shorts{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+  .shorts video{width:100%;aspect-ratio:9/16;border-radius:10px;background:#000}
+  .bigvideo{width:100%;border-radius:12px;background:#000;aspect-ratio:16/9}
+  .continue a{display:block;padding:8px 0;border-bottom:1px solid var(--border)}
+  .prod-head{display:grid;grid-template-columns:34px 1fr 1fr 34px;gap:8px;font-size:var(--fs-xs);color:var(--muted);font-weight:600;margin-top:12px}
+  @media (max-width:640px){.prod,.prod-head{grid-template-columns:28px 1fr 34px}.prod .link,.prod-head .link{display:none}}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1>New video</h1><p class="sub">Six steps from an idea to a finished video and Shorts. Nothing runs until you press the button for it.</p></div>
+    <div class="steps" id="steps"></div>
+    <p class="error" id="err"></p>
+
+    <!-- 1 TOPIC -->
+    <div class="pane card" data-pane="1">
+      <h2>1. What is the video about?</h2>
+      <label class="lbl" for="topic">Topic</label>
+      <input id="topic" placeholder="e.g. best budget 9mm pistols">
+      <p class="help">Not sure? Look at the <a href="/research">Research</a> page for videos that are doing far better than usual.</p>
+      <div class="row"><button class="btn" id="suggest">Suggest titles</button><span class="hint" id="suggestNote"></span></div>
+      <div id="titles"></div>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary big" id="to2">Next: products &rarr;</button></div>
+      <div class="continue" id="continue"></div>
+    </div>
+
+    <!-- 2 PRODUCTS -->
+    <div class="pane card" data-pane="2" hidden>
+      <h2>2. Which products?</h2>
+      <p class="help" style="margin-top:-8px">Countdown order: the <b>last</b> product is your #1. A product page link is optional; with one, the script can quote real specs and prices (with the source).</p>
+      <div class="prod-head"><span></span><span>Product name</span><span class="link">Product page link (optional)</span><span></span></div>
+      <div id="products"></div>
+      <div class="row"><button class="btn small" id="addProd">+ Add product</button></div>
+      <div class="grid2 tight" style="margin-top:16px">
+        <div><label class="lbl" for="length">Video length</label>
+          <select id="length" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px">
+            <option value="800">Short, about 5 minutes</option><option value="1500" selected>Medium, about 10 minutes</option><option value="2500">Long, about 17 minutes</option>
+          </select></div>
+        <div><label class="lbl" for="channel">Channel</label><select id="channel" style="width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px"></select></div>
+      </div>
+      <div class="row" style="justify-content:space-between"><button class="btn ghost" data-go="1">&larr; Back</button><button class="btn primary big" id="create">Write my script &rarr;</button></div>
+    </div>
+
+    <!-- 3 SCRIPT -->
+    <div class="pane card" data-pane="3" hidden>
+      <h2>3. Read and approve the script</h2>
+      <div id="scriptBusy"></div>
+      <div id="scriptEdit" hidden>
+        <div class="failbox" id="noModel" hidden style="border-color:rgba(245,184,74,.4);background:rgba(245,184,74,.08);margin-bottom:12px"><h3 style="color:var(--warn)">This is only a skeleton</h3><p style="margin:0">The local AI (Ollama) was not running, so ClipForge only listed your products and their facts. Start Ollama and press "Write it again", or write the script yourself in the box below.</p></div>
+        <div class="bar" id="scriptStats"></div>
+        <textarea class="script" id="script"></textarea>
+        <ul class="warnlist" id="unsourced"></ul>
+        <details style="margin-top:12px"><summary class="help" style="cursor:pointer">Facts the script may use (with sources)</summary><div id="facts" class="help"></div></details>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><button class="btn ghost" data-go="2">&larr; Products</button><button class="btn" id="rewrite">Write it again</button><button class="btn" id="saveScript">Save changes</button></div>
+          <button class="btn primary big" id="approveScript">Approve script &amp; record voice &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 VOICE -->
+    <div class="pane card" data-pane="4" hidden>
+      <h2>4. Listen to the voice</h2>
+      <div id="voiceBusy"></div>
+      <div id="voiceDone" hidden>
+        <audio id="audio" controls style="width:100%"></audio>
+        <p class="help">Listen to the start and a part in the middle. Want different words? Go back to the script, change it and record again.</p>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><button class="btn ghost" data-go="3">&larr; Script</button><button class="btn" id="revoice">Record again</button></div>
+          <button class="btn primary big" id="approveVoice">Sounds good: find the footage &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5 VISUALS -->
+    <div class="pane card" data-pane="5" hidden>
+      <h2>5. Footage and edit</h2>
+      <p class="help" style="margin-top:-8px">ClipForge picks the footage for every sentence, adds the avatar (if it is on) and builds the edit with captions.</p>
+      <div id="visualBusy"></div>
+      <div id="visualDone" hidden>
+        <p>The edit is ready. Check it in the preview: you can play it and replace any clip you do not like.</p>
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="margin:0"><a class="btn" id="studio" target="_blank">Open preview &amp; replace clips &nearr;</a><button class="btn ghost" id="revisual">Find footage again</button></div>
+          <button class="btn primary big" id="render">Make the video &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6 RENDER -->
+    <div class="pane card" data-pane="6" hidden>
+      <h2>6. Your video</h2>
+      <div id="renderBusy"></div>
+      <div id="renderDone" hidden>
+        <video class="bigvideo" id="video" controls></video>
+        <div class="row"><a class="btn primary" id="download">Download video</a><span id="qa"></span><a class="btn ghost" href="/dashboard">All videos</a><button class="btn ghost" id="rerender">Make it again</button></div>
+        <h2 style="margin-top:24px">Shorts</h2>
+        <div class="shorts" id="shortsList"></div>
+        <p class="help">The upload text (description, pinned comment, chapters) is in the project's publish folder; the QA page lists anything to check before uploading.</p>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header, secs } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+const STEPS = ["Topic", "Products", "Script", "Voice", "Footage", "Video"];
+let project = new URLSearchParams(location.search).get("v") || "";
+let view = 1;
+let info = null;
+let timer = null;
+let scriptLoaded = false;
+
+const err = (m) => ($("err").textContent = m || "");
+const run = (body) => api(`/api/pipeline/${project}/run`, { method: "POST", body });
+
+function showStep(n) {
+  view = n;
+  const reached = info ? info.step : 1;
+  $("steps").innerHTML = STEPS.map((s, i) => `<span class="stp ${i + 1 === n ? "on" : i + 1 < reached ? "done" : ""}" data-s="${i + 1}"><b>${i + 1 < reached && i + 1 !== n ? "&#10003;" : i + 1}</b>${s}</span>`).join("");
+  for (const el of document.querySelectorAll(".stp.done")) el.onclick = () => showStep(Number(el.dataset.s));
+  for (const p of document.querySelectorAll(".pane")) p.hidden = Number(p.dataset.pane) !== n;
+  err("");
+  if (n === 3 && !scriptLoaded) loadScript();
+  render();
+}
+for (const b of document.querySelectorAll("[data-go]")) b.onclick = () => showStep(Number(b.dataset.go));
+
+// ---------- step 1 ----------
+async function loadContinue() {
+  const d = await api("/api/dashboard").catch(() => null);
+  const mine = (d?.projects ?? []).filter((p) => p.stages).slice(0, 5);
+  if (mine.length) $("continue").innerHTML = `<h2 style="margin-top:24px;font-size:var(--fs-md)">Continue a video</h2>${mine.map((p) => `<a href="/new?v=${encodeURIComponent(p.name)}">${esc(p.title)} <span class="hint">${esc(p.current)}</span></a>`).join("")}`;
+}
+$("suggest").onclick = async () => {
+  const topic = $("topic").value.trim();
+  if (!topic) return err("Type a topic first.");
+  err("");
+  $("suggest").disabled = true;
+  $("suggestNote").textContent = "Writing title ideas... (about a minute with the local AI)";
+  try {
+    const r = await api("/api/research/titles", { method: "POST", body: { topic } });
+    $("titles").innerHTML = `<p class="lbl" style="margin-top:16px">Pick a title</p>` + r.titles.map((t, i) => `<label class="opt"><input type="radio" name="title" value="${esc(t.title)}" ${i === 0 ? "checked" : ""}><span>${esc(t.title)}<br><span class="hint">${Math.round(t.similarity.score * 100)}% like the closest competitor title</span></span></label>`).join("")
+      + `<label class="opt"><input type="radio" name="title" value="__own"><span style="flex:1">My own title<input id="ownTitle" placeholder="Type your title" style="margin-top:6px"></span></label>`;
+    $("suggestNote").textContent = "";
+  } catch (e) { err(e.message); $("suggestNote").textContent = ""; }
+  $("suggest").disabled = false;
+};
+const chosenTitle = () => {
+  const r = document.querySelector('input[name="title"]:checked');
+  if (!r) return "";
+  return r.value === "__own" ? $("ownTitle").value.trim() : r.value;
+};
+$("to2").onclick = () => {
+  if (!$("topic").value.trim()) return err("Type what the video is about.");
+  if (!$("products").children.length) for (let i = 0; i < 3; i++) addProduct();
+  showStep(2);
+};
+
+// ---------- step 2 ----------
+function renumber() {
+  const rows = [...$("products").children];
+  rows.forEach((r, i) => (r.querySelector(".rank").textContent = `#${rows.length - i}`));
+}
+function addProduct(name = "", link = "") {
+  const row = document.createElement("div");
+  row.className = "prod";
+  row.innerHTML = `<span class="rank"></span><input class="pn" placeholder="Product name" value="${esc(name)}"><input class="link pl" placeholder="https://maker.com/product (optional)" value="${esc(link)}"><button class="xbtn" title="Remove">&times;</button>`;
+  row.querySelector("button").onclick = () => { row.remove(); renumber(); };
+  $("products").appendChild(row);
+  renumber();
+}
+$("addProd").onclick = () => addProduct();
+async function loadChannels() {
+  const list = await api("/api/channels").catch(() => []);
+  $("channel").innerHTML = (list.length ? list : [{ name: "default" }]).filter((c) => c.name !== "test").map((c) => `<option>${esc(c.name)}</option>`).join("");
+}
+$("create").onclick = async () => {
+  const rows = [...$("products").children].map((r) => ({ name: r.querySelector(".pn").value.trim(), link: r.querySelector(".pl").value.trim() })).filter((r) => r.name);
+  if (rows.length < 2) return err("Add at least 2 products.");
+  const sources = Object.fromEntries(rows.filter((r) => r.link).map((r) => [r.name, [r.link]]));
+  $("create").disabled = true;
+  try {
+    const r = await api("/api/wizard", { method: "POST", body: { topic: $("topic").value.trim(), title: chosenTitle(), products: rows.map((r) => r.name), words: Number($("length").value), channel: $("channel").value, sources, project: project || undefined } });
+    project = r.project;
+    history.replaceState(null, "", `/new?v=${project}`);
+    localStorage.setItem("cf.project", project);
+    await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "script", on: false } });
+    await run({ stage: "writing" });
+    scriptLoaded = false;
+    await refresh();
+    showStep(3);
+  } catch (e) { err(e.message); }
+  $("create").disabled = false;
+};
+
+// ---------- shared: busy / failed blocks ----------
+function stageBox(ids, busyText) {
+  const st = ids.map((id) => info.stages.find((s) => s.id === id));
+  const running = st.find((s) => s.status === "running");
+  const failed = st.find((s) => s.status === "failed");
+  if (running) return { state: "running", html: `<div class="busy"><span class="spin"></span><div><b>${esc(busyText)}</b><div class="hint">${esc(running.label)} &middot; ${esc((running.last || "").slice(0, 140))}</div></div></div>` };
+  if (failed) {
+    const h = failed.hint || { title: "This step did not finish", fix: "Press Retry." };
+    return { state: "failed", stage: failed.id, html: `<div class="failbox"><h3>${esc(h.title)}</h3><p style="margin:0 0 10px">${esc(h.fix)}</p><div class="row" style="margin:0"><button class="btn primary" data-retry="${failed.id}">Retry</button>${h.where ? `<a class="btn ghost" href="${h.where}">Open ${esc(h.where.slice(1))}</a>` : ""}<a class="btn ghost" href="/pipeline?project=${project}">Full log</a></div></div>` };
+  }
+  if (st.every((s) => s.status === "done" || s.status === "skipped")) return { state: "done", html: "" };
+  return { state: "idle", html: "" };
+}
+function bindRetry(el) {
+  for (const b of el.querySelectorAll("[data-retry]")) b.onclick = async () => { b.disabled = true; try { await run({ stage: b.dataset.retry }); await refresh(); } catch (e) { err(e.message); } };
+}
+
+// ---------- step 3 ----------
+async function loadScript() {
+  if (!project) return;
+  const s = await api(`/api/wizard/${project}/script`);
+  if (!s.text) return;
+  scriptLoaded = true;
+  $("script").value = s.text;
+  showScriptChecks(s);
+}
+function showScriptChecks(s) {
+  const pill = (ok, text) => `<span class="pill ${ok ? "p" : "w"}">${text}</span>`;
+  $("scriptStats").innerHTML = [
+    pill(s.onTarget, `${s.words} words${s.target ? ` (target ${s.target})` : ""} &middot; about ${Math.round(s.words / 150)} min`),
+    pill(!s.unsourced.length, s.unsourced.length ? `${s.unsourced.length} number(s) without a source` : "every number has a source"),
+    s.originality ? pill(s.originality.clean, s.originality.clean ? "original wording" : `${s.originality.flagged} part(s) close to a competitor`) : "",
+    s.approved ? '<span class="pill p">approved</span>' : "",
+  ].join("");
+  $("noModel").hidden = s.writer !== "rules";
+  $("unsourced").innerHTML = s.unsourced.map((u) => `<li>"${esc(u.sentence)}" (${esc(u.numbers.join(", "))} not in the product facts)</li>`).join("");
+  $("facts").innerHTML = s.facts.length ? s.facts.map((f) => `${esc(f.product)}: ${esc(f.label)} ${esc(f.value)} &middot; <a href="${esc(f.source.url)}" target="_blank" rel="noopener">${esc(f.source.title || f.source.url)}</a>`).join("<br>") : "No product links were given, so the script states no specs or prices.";
+}
+async function saveScript(approve) {
+  const s = await api(`/api/wizard/${project}/script`, { method: "PUT", body: { text: $("script").value, approve } });
+  showScriptChecks(s);
+  return s;
+}
+$("saveScript").onclick = () => saveScript(false).catch((e) => err(e.message));
+$("rewrite").onclick = async () => {
+  if (!confirm("Write the whole script again? Your edits will be replaced.")) return;
+  try { await run({ stage: "writing" }); scriptLoaded = false; await refresh(); } catch (e) { err(e.message); }
+};
+$("approveScript").onclick = async () => {
+  try {
+    await saveScript(true);
+    await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "voice", on: false } });
+    await run({ stage: "voice" });
+    await refresh();
+    showStep(4);
+  } catch (e) { err(e.message); }
+};
+
+// ---------- step 4 / 5 / 6 ----------
+$("revoice").onclick = async () => { try { await run({ stage: "voice" }); await refresh(); } catch (e) { err(e.message); } };
+$("approveVoice").onclick = async () => {
+  try {
+    await api(`/api/wizard/${project}/approve`, { method: "POST", body: { what: "voice", on: true } });
+    await run({ from: "visuals", until: "edit" });
+    await refresh();
+    showStep(5);
+  } catch (e) { err(e.message); }
+};
+$("revisual").onclick = async () => { try { await run({ from: "visuals", until: "edit" }); await refresh(); } catch (e) { err(e.message); } };
+$("render").onclick = async () => { try { await run({ stage: "render" }); await refresh(); showStep(6); } catch (e) { err(e.message); } };
+$("rerender").onclick = async () => { try { await run({ stage: "render" }); await refresh(); } catch (e) { err(e.message); } };
+
+function render() {
+  if (!info) return;
+  if (view === 3) {
+    const b = stageBox(["writing"], "Writing your script, one product at a time (a few minutes)...");
+    $("scriptBusy").innerHTML = b.html;
+    bindRetry($("scriptBusy"));
+    $("scriptEdit").hidden = b.state !== "done";
+    if (b.state === "done" && !scriptLoaded) loadScript();
+  }
+  if (view === 4) {
+    const b = stageBox(["voice"], "Recording the voice, sentence by sentence...");
+    $("voiceBusy").innerHTML = b.html;
+    bindRetry($("voiceBusy"));
+    $("voiceDone").hidden = b.state !== "done";
+    if (b.state === "done" && !$("audio").src.includes(project)) $("audio").src = `/api/projects/${project}/audio?t=${Date.now()}`;
+  }
+  if (view === 5) {
+    const b = stageBox(["visuals", "avatar", "edit"], "Finding footage and building the edit (this is the longest step)...");
+    const chips = info.stages.filter((s) => ["visuals", "avatar", "edit"].includes(s.id)).map((s) => `<span class="chip ${s.status}">${esc(s.label)}: ${s.status}${s.ms ? ` &middot; ${secs(s.ms)}` : ""}</span>`).join(" ");
+    $("visualBusy").innerHTML = `<div class="bar">${chips}</div>${b.html}`;
+    bindRetry($("visualBusy"));
+    $("visualDone").hidden = b.state !== "done";
+    $("studio").href = `/#/project/${encodeURIComponent(project)}`;
+  }
+  if (view === 6) {
+    const b = stageBox(["render"], "Making the video, checking it and cutting the Shorts...");
+    $("renderBusy").innerHTML = b.html;
+    bindRetry($("renderBusy"));
+    $("renderDone").hidden = !(b.state === "done" && info.hasVideo);
+    if (!$("renderDone").hidden && !$("video").src.includes(project)) {
+      $("video").src = `/api/projects/${project}/video?t=${Date.now()}`;
+      $("download").href = `/api/projects/${project}/video?download=1`;
+      $("qa").innerHTML = info.qa ? `<span class="pill ${info.qa.fail ? "f" : info.qa.warn ? "w" : "p"}">Checks: ${info.qa.pass} ok, ${info.qa.warn} to look at, ${info.qa.fail} problem(s)</span>` : "";
+      $("shortsList").innerHTML = info.shorts.length ? info.shorts.map((f) => `<video controls preload="metadata" src="/api/wizard/${project}/short/${encodeURIComponent(f)}"></video>`).join("") : '<p class="help">No Shorts this time (the video needs 30 s stretches of whole sentences).</p>';
+    }
+  }
+}
+
+async function refresh() {
+  if (!project) return;
+  info = await api(`/api/wizard/${project}`);
+  const busy = info.stages.some((s) => s.status === "running");
+  render();
+  clearTimeout(timer);
+  timer = setTimeout(() => refresh().catch(() => {}), busy ? 2500 : 10000);
+}
+
+async function start() {
+  await Promise.all([loadChannels(), loadContinue()]);
+  if (!project) return showStep(1);
+  try {
+    await refresh();
+  } catch (e) {
+    project = "";
+    history.replaceState(null, "", "/new");
+    return showStep(1);
+  }
+  const c = info.config;
+  $("topic").value = c.topic;
+  $("titles").innerHTML = `<label class="opt"><input type="radio" name="title" value="${esc(info.title)}" checked><span>${esc(info.title)}</span></label>`;
+  $("length").value = String(c.words && [800, 1500, 2500].includes(c.words) ? c.words : 1500);
+  $("channel").value = c.channel || "default";
+  $("products").innerHTML = "";
+  for (const p of c.products) addProduct(p, (info.sources[p] || [])[0] || "");
+  showStep(Math.min(info.step, 6));
+}
+start().catch((e) => err(e.message));
+</script>
+</body>
+</html>

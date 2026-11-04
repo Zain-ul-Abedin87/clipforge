@@ -817,6 +817,55 @@ phase).
 
 ---
 
+## Follow-up: "New video" wizard + script editor (creator-friendly path)
+
+**What changed**
+
+- **`/new`**: one guided path in 6 steps. Nothing runs until the creator presses that step's
+  button.
+  1. **Topic**: suggest 10 titles and pick one, or type your own.
+  2. **Products**: one row per product, ranked automatically #3 → #1. Each row has an optional
+     product page link (written to `sources.json`, so no JSON editing). Video length is
+     Short / Medium / Long, plus a channel dropdown.
+  3. **Script editor**: read, edit and save the script.
+     - Live checks: words vs target with minutes, numbers without a source, original wording.
+     - The facts list shows their source links.
+     - Buttons: "Write it again" and "Approve script & record voice".
+     - Editing an approved script takes the approval back (and the voice's).
+  4. **Voice**: audio player, "Record again", "Sounds good".
+  5. **Footage**: visuals → avatar → edit, with a link to the studio preview to replace clips.
+  6. **Video**: player, download, QA checks summary, and the Shorts shown as vertical players.
+- The project name comes from the topic (`best-budget-9mm-pistols`, `-2` if taken). A "Continue
+  a video" list sits on step 1, and `/new?v=<project>` reopens a video at the right step.
+- **Plain-English errors** (`src/lib/orchestrator/friendly.ts`): a failed step shows a title, a
+  fix, a Retry button and a link to the right page instead of `exited with code 2`. Examples:
+  YouTube key missing, Ollama not running, no voice engine, no avatar photo, FFmpeg missing, GPU
+  out of memory, disk full. Every pipeline stage stores this hint.
+- **No filler text**: without a running AI model, the script writer no longer pads sections with
+  repeated sentences. It writes a short skeleton (products and sourced facts), the report says
+  `writer: "rules"`, and the wizard shows "This is only a skeleton: start Ollama and write it
+  again".
+- The nav has **New video** first, and the old Create page is now "Classic".
+- API: `/api/wizard` (create), `/api/wizard/:project` (GET), `/api/wizard/:project/script`
+  (GET/PUT), `/api/wizard/:project/approve`, `/api/wizard/:project/short/:file`. Runs go through
+  `/api/pipeline/:project/run` (now also `{from, until}`).
+
+**Files**: `src/lib/orchestrator/{wizard,friendly}.ts`, `src/lib/orchestrator/pipeline.ts`,
+`src/server/routes/{wizard,pipeline}.ts`, `src/server/server.ts`,
+`src/lib/agents/script/{index,sections}.ts`, `web/new.html`, `web/full/full.js`,
+`web/simple/index.html`, `tests/wizard.test.ts`, `tests/script.test.ts`.
+
+**Checks**: typecheck passes. 348 tests, 347 pass, 0 fail, 1 skipped (the one skipped before this
+work).
+
+Browser check on the dev server: topic → products (ranks #3, #2, #1) → Write my script → the
+editor shows the skeleton banner and stats (no model in this checkout) → Approve → the voice was
+recorded and plays (0:41). The footage step was not run here, because it would download clips.
+
+**How to use**: open `npm run serve` and go to **http://localhost:4173/new**.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

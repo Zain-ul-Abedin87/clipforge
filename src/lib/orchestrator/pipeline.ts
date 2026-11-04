@@ -4,6 +4,7 @@ import path from "node:path";
 import { paths } from "../paths.js";
 import { projectDir, readJson, writeJson } from "../project.js";
 import { readGpuTimes } from "../models/loader.js";
+import { friendlyHint, Hint } from "./friendly.js";
 
 /**
  * The full pipeline as 7 stages, each a list of CLI steps run as child processes (a crash in one
@@ -31,6 +32,8 @@ export interface StageState {
   loadMs?: number;
   steps?: string[];
   error?: string;
+  /** Plain-English problem + fix for a failed stage (src/lib/orchestrator/friendly.ts). */
+  hint?: Hint | null;
   log?: string[];
 }
 
@@ -179,6 +182,7 @@ export async function runStage(project: string, stage: PipelineStage, o: { runne
       if (code !== 0 && !(code === 2 && (real[0] === "script" || real[0] === "shorts"))) {
         s.status = "failed";
         s.error = `${real[0]} exited with code ${code}`;
+        s.hint = friendlyHint(s.log ?? [], s.error);
         break;
       }
       writeState(project, st);

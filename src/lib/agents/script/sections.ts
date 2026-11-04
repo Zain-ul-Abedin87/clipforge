@@ -63,7 +63,7 @@ export function ruleSection(s: OutlineSection, topic: string, facts: SourcedFact
   return fitWords(parts.join(" "), s.words);
 }
 
-/** Trims whole sentences (never the first) or adds closing sentences until within +-3 words. */
+/** Trims whole sentences (never the first) until within +-3 words of the target; never adds filler. */
 export function fitWords(text: string, target: number): string {
   let sents = splitSentences(text);
   while (countWords(sents.join(" ")) > target + 3 && sents.length > 1) {
@@ -84,9 +84,9 @@ export function fitWords(text: string, target: number): string {
     if (countWords(next.join(" ")) < target - 3 && countWords(sents.join(" ")) - target < target - countWords(next.join(" "))) break;
     sents = next;
   }
-  let out = sents.join(" ");
-  const pads = ["That matters more than it sounds.", "Keep that in mind.", "It is a fair trade for most buyers.", "Worth a close look."];
-  for (let k = 0; countWords(out) < target - 3 && k < 40; k++) out += " " + pads[k % pads.length];
+  // Never pads with filler sentences: a short section stays short (the model is asked to expand
+  // instead, and the report says the script is under its target).
+  const out = sents.join(" ");
   const w = out.split(/\s+/);
   return countWords(out) > target + 3 ? w.slice(0, target).join(" ").replace(/[,;:]?$/, ".") : out;
 }
@@ -145,7 +145,7 @@ export async function writeSections(outline: Outline, facts: SourcedFact[], ask:
   return out;
 }
 
-/** Total words within +-tolerance of the target: trims or pads the sections furthest off. */
+/** Total words over the target + tolerance: trims the sections furthest over (never pads). */
 export function balanceTotal(sections: SectionText[], target: number, tolerance: number): SectionText[] {
   const total = () => sections.reduce((s, x) => s + x.words, 0);
   for (let guard = 0; Math.abs(total() - target) > target * tolerance && guard < sections.length * 2; guard++) {

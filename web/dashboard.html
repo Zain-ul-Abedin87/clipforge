@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>.dots{display:flex;gap:4px}.dot{width:10px;height:10px;border-radius:50%;background:var(--surface2);border:1px solid var(--border2)}.dot.done{background:var(--ok);border-color:var(--ok)}.dot.running{background:var(--accent);border-color:var(--accent)}.dot.failed{background:var(--bad);border-color:var(--bad)}.dot.skipped{background:var(--dim)}</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1>Projects</h1><p class="sub">Every video: pipeline progress, QA score, GPU time and finished files.</p></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="card flush"><div class="scroll"><table class="tbl" id="tbl"><thead><tr><th>Project</th><th>Steps</th><th>Status</th><th class="r">QA</th><th class="r">GPU time</th><th>Outputs</th><th>Updated</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="card"><h2>GPU time by stage (all projects)</h2><div class="scroll"><table class="tbl" id="gpu"><thead><tr><th>Stage</th><th>Model</th><th class="r">Requests</th><th class="r">GPU</th><th class="r">CPU</th><th class="r">Loads</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+</main>
+<script type="module">
+import { api, ago, esc, header, secs } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+const d = await api("/api/dashboard");
+const qa = (q) => (q ? `<span class="pill ${q.fail ? "f" : q.warn ? "w" : "p"}">${q.pass} / ${q.warn} / ${q.fail}</span>` : '<span class="hint">-</span>');
+$("tbl").tBodies[0].innerHTML = d.projects.length
+  ? d.projects.map((p) => `<tr>
+      <td class="title"><a href="/pipeline?project=${encodeURIComponent(p.name)}">${esc(p.title)}</a><small>${esc(p.name)} - ${esc(p.channel)}</small></td>
+      <td><div class="dots">${d.stages.map((s) => `<span class="dot ${p.stages[s.id]}" title="${esc(s.label)}: ${p.stages[s.id]}"></span>`).join("")}</div></td>
+      <td>${esc(p.current)}</td><td class="r" title="pass / warn / fail">${qa(p.qa)}</td><td class="r">${secs(p.gpuMs)}</td>
+      <td>${p.outputs.video ? `<a href="/#/project/${encodeURIComponent(p.name)}">video</a>` : '<span class="hint">-</span>'}${p.outputs.shorts.length ? ` &middot; ${p.outputs.shorts.length} Short(s)` : ""}</td>
+      <td class="hint">${ago(Date.parse(p.updatedAt))}</td></tr>`).join("")
+  : `<tr><td colspan="7" class="help" style="padding:20px 24px">No projects yet. Start one on the Pipeline page or in Chat.</td></tr>`;
+const gpuTotal = d.gpu.reduce((a, g) => a + g.gpuMs, 0);
+$("kpis").innerHTML = [["Projects", d.projects.length], ["Rendered", d.projects.filter((p) => p.outputs.video).length], ["Shorts", d.projects.reduce((a, p) => a + p.outputs.shorts.length, 0)], ["GPU time (all)", secs(gpuTotal)]]
+  .map(([k, v]) => `<div class="kpi"><b>${v}</b><span>${k}</span></div>`).join("");
+$("gpu").tBodies[0].innerHTML = d.gpu.length
+  ? d.gpu.sort((a, b) => b.gpuMs - a.gpuMs).map((g) => `<tr><td>${esc(g.stage)}</td><td>${esc(g.model)}</td><td class="r">${g.requests}</td><td class="r">${secs(g.gpuMs)}</td><td class="r">${secs(g.cpuMs)}</td><td class="r">${g.loads}</td></tr>`).join("")
+  : `<tr><td colspan="6" class="help" style="padding:16px">No local model time recorded yet.</td></tr>`;
+</script>
+</body>
+</html>

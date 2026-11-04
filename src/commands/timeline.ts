@@ -310,6 +310,13 @@ export async function timeline(opts: { project: string; force?: boolean }, log: 
     },
     scenes: tl,
   };
+  // AI avatar clips rendered earlier (avatar step, avatar_plan.json) go back into the new timeline.
+  const avatarPlan = path.join(dir, "avatar_plan.json");
+  if (loadFeatures().avatar.enabled && fs.existsSync(avatarPlan)) {
+    const { applyAvatar } = await import("./avatar.js");
+    const n = await applyAvatar(dir, out, readJson(avatarPlan), log);
+    if (n) log(`[timeline] avatar: ${n} scene(s) show the channel's avatar (${readJson<{ layout: string }>(avatarPlan).layout})`);
+  }
   writeJson(path.join(dir, "timeline.json"), out);
   // Multi-track v3 timeline (rational time) for the renderer and the editor: same cut, plus each
   // scene's narration and the subject the micro-scene plan locked for it.

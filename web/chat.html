@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .thread{display:flex;flex-direction:column;gap:10px;min-height:300px;max-height:60vh;overflow:auto;padding:4px}
+  .msg{max-width:80%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;line-height:1.5}
+  .msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+  .msg.assistant{align-self:flex-start;background:var(--surface2);border-bottom-left-radius:4px}
+  .msg.tool{align-self:flex-start;background:transparent;border:1px dashed var(--border2);color:var(--muted);font-size:var(--fs-xs)}
+  .call{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .composer{display:flex;gap:8px;margin-top:12px}
+  .composer input{flex:1}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head row-between">
+      <div><h1>Chat</h1><p class="sub">Tell ClipForge what to make. It proposes one step at a time and waits for your approval before it runs anything.</p></div>
+      <button class="btn ghost" id="new">New chat</button>
+    </div>
+    <div class="card">
+      <div class="thread" id="thread"></div>
+      <div class="composer"><input id="msg" placeholder='e.g. create budget-9mm topic: best budget 9mm pistols products: Taurus G3C, Glock 43X, Sig P365'><button class="btn primary" id="send">Send</button></div>
+      <p class="help">Examples: "list projects" &middot; "status for budget-9mm" &middot; "next" &middot; "run render for budget-9mm"</p>
+      <p class="error" id="err"></p>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+let id = localStorage.getItem("cf.chat") || null;
+let timer;
+
+function render(s) {
+  id = s.id;
+  localStorage.setItem("cf.chat", id);
+  $("thread").innerHTML = s.messages.map((m) => {
+    const c = m.call;
+    const pending = c && s.pending && s.pending.id === c.id;
+    const label = c ? `${c.tool}${c.args.stage ? ` ${c.args.stage}` : ""}${c.args.project ? ` (${c.args.project})` : ""}` : "";
+    return `<div class="msg ${m.role}">${esc(m.content)}${c && m.role === "assistant" ? `<div class="call"><span class="chip ${pending ? "waiting" : c.status === "done" ? "done" : c.status === "failed" ? "failed" : c.status === "running" ? "running" : ""}">${esc(label)}: ${pending ? "waiting for you" : c.status}</span>${pending ? `<button class="btn small primary" data-yes>Approve</button><button class="btn small" data-no>Reject</button>` : ""}</div>` : ""}</div>`;
+  }).join("") + (s.running ? `<div class="msg tool">Running ${esc(s.running.tool)} ${esc(s.running.args.stage ?? "")}... (see the Pipeline page for live progress)</div>` : "");
+  $("thread").scrollTop = 1e9;
+  for (const b of $("thread").querySelectorAll("[data-yes]")) b.onclick = () => answer(true);
+  for (const b of $("thread").querySelectorAll("[data-no]")) b.onclick = () => answer(false);
+  $("send").disabled = !!s.running;
+  clearTimeout(timer);
+  if (s.running) timer = setTimeout(refresh, 2500);
+}
+
+async function refresh() {
+  if (!id) return render({ id: null, messages: [{ role: "assistant", content: "Hi! Which video should we make? Give me a project name, a topic and the products in countdown order." }], pending: null, running: null });
+  render(await api(`/api/chat/${id}`));
+}
+
+async function answer(yes) {
+  try { render(await api(`/api/chat/${id}/approve`, { method: "POST", body: { approve: yes } })); } catch (e) { $("err").textContent = e.message; }
+}
+
+async function send() {
+  const message = $("msg").value.trim();
+  if (!message) return;
+  $("msg").value = "";
+  $("err").textContent = "";
+  try { render(await api("/api/chat", { method: "POST", body: { id, message } })); } catch (e) { $("err").textContent = e.message; }
+}
+
+$("send").onclick = send;
+$("msg").onkeydown = (e) => { if (e.key === "Enter") send(); };
+$("new").onclick = () => { localStorage.removeItem("cf.chat"); id = null; refresh(); };
+refresh().catch((e) => ($("err").textContent = e.message));
+</script>
+</body>
+</html>

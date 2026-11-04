@@ -337,12 +337,15 @@ export async function qa(opts: { project: string }, log: (m: string) => void = c
   // realistic visuals). Stock footage, own voice and code-made cards do not need it.
   // Clips regenerated in Google Flow (Veo) from the studio are realistic AI video.
   const generated = (loadTimeline(dir)?.tl.tracks ?? []).flatMap((t) => t.clips).filter((c) => c.kind === "video" && c.provenance.source === GENERATED_SOURCE);
-  const aiVisuals = generated.length > 0;
+  // A generated talking avatar (Phase 7) is a realistic synthetic person: YouTube wants the label.
+  const avatarPlanFile = path.join(dir, "avatar_plan.json");
+  const avatarClips = fs.existsSync(avatarPlanFile) ? readJson<{ clips: { file?: string }[] }>(avatarPlanFile).clips.filter((c) => c.file).length : 0;
+  const aiVisuals = generated.length > 0 || avatarClips > 0;
   const aiVoice = false; // the voiceover is the creator's own
   const forced = style.aiDisclosure === "always";
   const aiDisclosure = {
     required: aiVisuals || aiVoice || forced,
-    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals ? `${generated.length} AI-generated clip(s) (Google Flow / Veo) are used` : aiVoice ? "AI-generated realistic voice is used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
+    reason: forced ? "channel setting aiDisclosure = \"always\"" : aiVisuals ? (avatarClips ? `${avatarClips} AI avatar clip(s) (lip-synced presenter) are used` : `${generated.length} AI-generated clip(s) (Google Flow / Veo) are used`) : aiVoice ? "AI-generated realistic voice is used" : "not required: own voiceover, stock/own footage, code-made graphics (AI only planned the edit)",
   };
   add("Publish", "YouTube \"altered or synthetic content\" label", "pass", aiDisclosure.required ? "TURN ON when uploading" : aiDisclosure.reason);
   add("Publish", "Human review", "warn", "watch the video and press Approve in the QA tab before uploading");

@@ -38,6 +38,7 @@ import { detectAndWriteNiche } from "../lib/nicheDetect.js";
 import { ProjectStore } from "./state/projectStore.js";
 import { createEditorAPI } from "./routes/editorAPI.js";
 import { researchRoute } from "./routes/research.js";
+import { pipelineRoute } from "./routes/pipeline.js";
 import { storyboard, storyThumb } from "./storyboard.js";
 import { poolConfig } from "../lib/assets/productPool.js";
 import { activeProvider, testProvider } from "../lib/agents/llm/llm.js";
@@ -768,7 +769,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   {
-    const r = await researchRoute(parts, method, () => readBody(req));
+    const r = (await researchRoute(parts, method, () => readBody(req))) ?? (await pipelineRoute(parts, method, () => readBody(req)));
     if (r) return send(res, r.status, r.body);
   }
 

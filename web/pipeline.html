@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .stages{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+  .stage{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+  .stage h3{margin:0;font-size:var(--fs-sm);font-weight:700}
+  .stage .meta{font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+  .stage.running{border-color:var(--accent)}
+  .stage.failed{border-color:var(--bad)}
+  .arrow{color:var(--dim)}
+  @media (max-width:980px){.stages{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head row-between">
+      <div><h1>Pipeline</h1><p class="sub">Research &rarr; Writing &rarr; Voice &rarr; Visuals &rarr; Avatar &rarr; Edit &rarr; Render. Each step shows its status, time and GPU time.</p></div>
+      <div class="row" style="margin:0"><input id="project" placeholder="project-name" style="width:220px"><button class="btn" id="open">Open</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Video</h2>
+      <div class="grid2 tight">
+        <div><label class="lbl" for="topic">Topic</label><input id="topic" placeholder="best concealed carry pistols"></div>
+        <div><label class="lbl" for="channel">Channel</label><input id="channel" placeholder="default"></div>
+      </div>
+      <label class="lbl" for="products">Products <span class="hint">countdown order, comma separated, last = #1</span></label>
+      <input id="products" placeholder="Taurus G3C, Glock 43X, Sig P365">
+      <div class="grid2 tight" style="margin-top:12px">
+        <div><label class="lbl" for="words">Script length (words)</label><input id="words" type="number" min="200" max="6000" placeholder="1500"></div>
+        <div><label class="lbl" for="seeds">Research seeds <span class="hint">comma separated, optional</span></label><input id="seeds" placeholder="gun review, concealed carry"></div>
+      </div>
+      <div class="row"><button class="btn" id="save">Save</button><button class="btn primary" id="runAll">Run all remaining steps</button><a class="btn ghost" id="studio" href="#">Timeline preview &amp; swap &rarr;</a><span class="ok" id="saved"></span></div>
+      <p class="error" id="err"></p>
+    </div>
+
+    <div class="stages" id="stages"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card"><h2>Log</h2><div class="logbox" id="log">Open a project to see its steps.</div></div>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header, secs } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+let project = new URLSearchParams(location.search).get("project") || localStorage.getItem("cf.project") || "";
+$("project").value = project;
+let timer;
+
+function renderStages(d) {
+  const st = d.state.stages;
+  $("stages").innerHTML = d.stages.map((s) => {
+    const x = st[s.id];
+    return `<div class="stage ${x.status}">
+      <h3>${esc(s.label)}</h3>
+      <span class="chip ${x.status}">${x.status}</span>
+      <div class="meta">${x.ms ? `time ${secs(x.ms)}` : "&nbsp;"}<br>${x.ms ? `GPU ${secs(x.gpuMs || 0)}${x.cpuMs ? ` &middot; CPU ${secs(x.cpuMs)}` : ""}` : "&nbsp;"}</div>
+      <div class="meta" title="${esc(s.steps.join("\n"))}">${s.steps.length ? esc(s.steps.map((a) => a.split(" ")[0]).join(" > ")) : "needs topic + products"}</div>
+      <button class="btn small" data-stage="${s.id}" ${d.running ? "disabled" : ""}>${x.status === "done" ? "Run again" : "Run"}</button>
+      ${x.error ? `<div class="error">${esc(x.error)}</div>` : ""}
+    </div>`;
+  }).join("");
+  for (const b of $("stages").querySelectorAll("button[data-stage]")) b.onclick = () => run({ stage: b.dataset.stage });
+  const total = (k) => d.stages.reduce((a, s) => a + (st[s.id][k] || 0), 0);
+  $("kpis").innerHTML = [
+    ["Steps done", `${d.stages.filter((s) => st[s.id].status === "done").length} / ${d.stages.length}`],
+    ["Total time", secs(total("ms"))],
+    ["GPU time", secs(total("gpuMs"))],
+    ["Model loads", secs(total("loadMs"))],
+  ].map(([k, v]) => `<div class="kpi"><b>${v}</b><span>${k}</span></div>`).join("");
+  const active = d.stages.find((s) => st[s.id].status === "running") ?? [...d.stages].reverse().find((s) => st[s.id].log?.length);
+  if (active) { $("log").textContent = (st[active.id].log || []).join("\n"); $("log").scrollTop = 1e9; }
+}
+
+async function load() {
+  if (!project) return;
+  localStorage.setItem("cf.project", project);
+  $("studio").href = `/#/project/${encodeURIComponent(project)}`;
+  const d = await api(`/api/pipeline/${encodeURIComponent(project)}`);
+  const c = d.config;
+  if (c && !$("topic").matches(":focus")) {
+    $("topic").value = c.topic || ""; $("products").value = (c.products || []).join(", ");
+    $("words").value = c.words || ""; $("seeds").value = (c.seeds || []).join(", "); $("channel").value = c.channel || "";
+  }
+  $("runAll").disabled = d.running;
+  renderStages(d);
+  clearTimeout(timer);
+  timer = setTimeout(() => load().catch(() => {}), d.running ? 2000 : 8000);
+}
+
+async function save() {
+  await api(`/api/pipeline/${encodeURIComponent(project)}/config`, { method: "PUT", body: { topic: $("topic").value, products: $("products").value, words: $("words").value || undefined, seeds: $("seeds").value || undefined, channel: $("channel").value || undefined } });
+  $("saved").textContent = "Saved";
+  setTimeout(() => ($("saved").textContent = ""), 1500);
+}
+
+async function run(body) {
+  $("err").textContent = "";
+  try {
+    await save();
+    await api(`/api/pipeline/${encodeURIComponent(project)}/run`, { method: "POST", body });
+    await load();
+  } catch (e) { $("err").textContent = e.message; }
+}
+
+$("open").onclick = () => { project = $("project").value.trim().toLowerCase(); history.replaceState(null, "", `?project=${encodeURIComponent(project)}`); load().catch((e) => ($("err").textContent = e.message)); };
+$("save").onclick = () => save().catch((e) => ($("err").textContent = e.message));
+$("runAll").onclick = async () => {
+  const d = await api(`/api/pipeline/${encodeURIComponent(project)}`);
+  const next = d.stages.find((s) => !["done", "skipped"].includes(d.state.stages[s.id].status));
+  if (next) run({ from: next.id });
+};
+load().catch((e) => ($("err").textContent = e.message));
+</script>
+</body>
+</html>

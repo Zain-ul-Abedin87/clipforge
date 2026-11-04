@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools - ClipForge</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/simple/simple.css">
+<link rel="stylesheet" href="/full/full.css">
+<style>
+  .form{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px 16px}
+  .form label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-xs);font-weight:600;color:var(--muted)}
+  .form label.check{flex-direction:row;align-items:center;gap:8px;color:var(--text)}
+  select{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px}
+</style>
+</head>
+<body>
+<header id="top"></header>
+<main>
+  <section class="page">
+    <div class="head"><h1>Tools &amp; models</h1><p class="sub">Settings per stage: local model and context, engines and presets. Local and free first; one model in VRAM at a time.</p></div>
+
+    <div class="card">
+      <h2>Local models per stage</h2>
+      <p class="help" style="margin-top:-8px">Empty = the default shown. 8 GB VRAM: keep numCtx at 8192 for 7-8B models.</p>
+      <div class="scroll"><table class="tbl" id="stages"><thead><tr><th>Stage</th><th>Model</th><th>numCtx</th><th>In use now</th></tr></thead><tbody></tbody></table></div>
+      <div class="form" style="margin-top:16px">
+        <label class="check"><input type="checkbox" id="oneModel"> One model in VRAM (unload others first)</label>
+        <label class="check"><input type="checkbox" id="unloadAfter"> Unload the model when a step ends</label>
+        <label>VRAM guard: minimum free MB<input type="number" id="minFree" min="0" max="16000"></label>
+        <label>Images per vision request<input type="number" id="maxImages" min="1" max="8"></label>
+      </div>
+      <div class="row"><button class="btn primary" id="saveModels">Save models</button><span class="ok" id="okModels"></span></div>
+    </div>
+
+    <div id="features"></div>
+    <p class="error" id="err"></p>
+  </section>
+</main>
+<script type="module">
+import { api, esc, header } from "/full/full.js";
+header();
+const $ = (id) => document.getElementById(id);
+
+const ENUMS = {
+  "tts.engine": ["kokoro", "piper", "xtts", "existing"],
+  "avatar.engine": ["musetalk", "liveportrait", "sadtalker", "wav2lip", "latentsync", "hallo2", "echomimic"],
+  "avatar.layout": ["pip", "full"],
+  "avatar.pipCorner": ["br", "bl", "tr", "tl"],
+  "captions.preset": ["", "classic", "bold", "karaoke", "pop", "highlight", "bold-pop", "minimal"],
+};
+const TITLES = { research: "Research", titles: "Titles", captions: "Captions & edit polish", stock: "Stock visuals & image generation", script: "Script writer", tts: "Voice (TTS)", avatar: "AI avatar", shorts: "Shorts", orchestrator: "Chat orchestrator" };
+const label = (k) => k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
+
+async function loadModels() {
+  const m = await api("/api/models");
+  $("stages").tBodies[0].innerHTML = m.stages.map((s) => `<tr><td>${esc(s.id)}</td>
+    <td><input data-stage="${s.id}" data-k="model" value="${esc(s.own?.model ?? "")}" placeholder="${esc((s.vision ?? s.text).model)}"></td>
+    <td><input data-stage="${s.id}" data-k="numCtx" type="number" min="2048" max="131072" step="1024" value="${s.own?.numCtx ?? ""}" placeholder="${(s.vision ?? s.text).numCtx}"></td>
+    <td class="hint">${esc((s.vision ?? s.text).model)} @ ${(s.vision ?? s.text).numCtx}</td></tr>`).join("");
+  $("oneModel").checked = m.models.oneModelInVram;
+  $("unloadAfter").checked = m.models.unloadAfterStage;
+  $("minFree").value = m.models.minFreeVramMb;
+  $("maxImages").value = m.qwen.maxImages;
+}
+
+$("saveModels").onclick = async () => {
+  const stages = {};
+  for (const i of $("stages").querySelectorAll("input[data-stage]")) {
+    stages[i.dataset.stage] ??= {};
+    stages[i.dataset.stage][i.dataset.k] = i.dataset.k === "numCtx" ? (i.value ? Number(i.value) : null) : i.value.trim();
+  }
+  try {
+    await api("/api/models", { method: "PUT", body: { stages, models: { oneModelInVram: $("oneModel").checked, unloadAfterStage: $("unloadAfter").checked, minFreeVramMb: Number($("minFree").value) }, qwen: { maxImages: Number($("maxImages").value) } } });
+    $("okModels").textContent = "Saved";
+    setTimeout(() => ($("okModels").textContent = ""), 1500);
+    await loadModels();
+  } catch (e) { $("err").textContent = e.message; }
+};
+
+function field(sec, k, v) {
+  const id = `${sec}.${k}`;
+  if (typeof v === "boolean") return `<label class="check"><input type="checkbox" data-f="${id}" ${v ? "checked" : ""}> ${esc(label(k))}</label>`;
+  if (ENUMS[id]) return `<label>${esc(label(k))}<select data-f="${id}">${ENUMS[id].map((o) => `<option value="${o}" ${o === v ? "selected" : ""}>${o || "(channel default)"}</option>`).join("")}</select></label>`;
+  if (Array.isArray(v)) return `<label>${esc(label(k))} <span class="hint">comma separated</span><input data-f="${id}" data-array="1" value="${esc(v.join(", "))}"></label>`;
+  return `<label>${esc(label(k))}<input data-f="${id}" ${typeof v === "number" ? 'type="number" step="any"' : ""} value="${esc(v)}"></label>`;
+}
+
+async function loadFeatures() {
+  const f = await api("/api/features");
+  $("features").innerHTML = Object.entries(f).map(([sec, vals]) => `<div class="card" style="margin-bottom:16px"><h2>${esc(TITLES[sec] ?? sec)}</h2>
+    <div class="form">${Object.entries(vals).map(([k, v]) => field(sec, k, v)).join("")}</div>
+    <div class="row"><button class="btn" data-save="${sec}">Save</button><span class="ok" id="ok-${sec}"></span></div></div>`).join("");
+  for (const b of document.querySelectorAll("button[data-save]")) b.onclick = () => saveSection(b.dataset.save);
+}
+
+async function saveSection(sec) {
+  const patch = {};
+  for (const el of document.querySelectorAll(`[data-f^="${sec}."]`)) {
+    const k = el.dataset.f.slice(sec.length + 1);
+    patch[k] = el.type === "checkbox" ? el.checked : el.dataset.array ? el.value.split(",").map((x) => x.trim()).filter(Boolean) : el.type === "number" ? Number(el.value) : el.value;
+  }
+  try {
+    await api("/api/features", { method: "PUT", body: { [sec]: patch } });
+    $(`ok-${sec}`).textContent = "Saved";
+    setTimeout(() => ($(`ok-${sec}`).textContent = ""), 1500);
+  } catch (e) { $("err").textContent = e.message; }
+}
+
+Promise.all([loadModels(), loadFeatures()]).catch((e) => ($("err").textContent = e.message));
+</script>
+</body>
+</html>

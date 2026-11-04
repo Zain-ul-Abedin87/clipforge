@@ -306,7 +306,7 @@ main.wide{max-width:1480px}
 
 /* ---------- Google Flow panel (studio inspector) ---------- */
 .flow-h{margin-top:16px!important}
-.flow-angles .btn.on{outline:2px solid var(--accent)}
+.flow-angles .btn.on,#genRefPick .btn.on{outline:2px solid var(--accent)}
 .flow-step{margin-top:12px;font-size:var(--fs-xs)}
 .flow-frame{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px;margin-top:6px;background:#000}
 .flow-step textarea{width:100%;margin-top:6px;font-size:12px}
@@ -350,3 +350,10 @@ main.wide{max-width:1480px}
 .cc-style.on{border-color:var(--accent);background:rgba(81,130,239,.1)}
 
 .btn.sm{padding:4px 10px;font-size:var(--fs-xs)} .btn.danger{color:var(--bad)}
+/* Editor: "Don't like this picture?" ways (another real clip / make it with AI) */
+.ed-way{border:1px solid var(--border2);border-radius:8px;padding:8px 10px;margin-top:8px}
+.ed-way>summary{cursor:pointer;font-weight:600;font-size:var(--fs-sm)}
+.ed-way textarea{width:100%;margin-top:4px}
+.ed-cand.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.gen-way{border-top:1px solid var(--border2);padding:8px 0;margin-top:8px}
+.gen-way select{max-width:100%}

@@ -40,6 +40,10 @@
   .opt.off{opacity:.45;cursor:default}
   .note{border:1px solid var(--border2);background:var(--surface2);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
   .diff{font-size:var(--fs-sm);padding:8px 0;border-bottom:1px solid var(--border)}
+  .engine{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:0 0 16px}
+  .engine .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip.ok{color:var(--ok, #3ecf8e)}
+  .chip.no{color:var(--warn)}
   .lang{margin-top:16px}
   .lang .row{margin:8px 0 0}
   .lang select{width:auto;max-width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:9px 12px}
@@ -57,6 +61,16 @@
 <main>
   <section class="page">
     <div class="head"><h1>New video</h1><p class="sub">Six steps from an idea to a finished video and Shorts. Nothing runs until you press the button for it.</p></div>
+    <div class="engine card" id="engineBar">
+      <b>AI engine</b>
+      <div class="toggle" id="engineToggle" role="radiogroup" aria-label="AI engine">
+        <button data-e="local" title="Only the AI on this PC (Ollama): free and private">Local</button>
+        <button data-e="api" title="Only a cloud AI (needs an API key; costs money per use)">API</button>
+        <button data-e="both" title="The AI on this PC first; the cloud AI only when the local one fails">Both</button>
+      </div>
+      <div class="chips" id="engineChips"></div>
+      <span class="hint" id="engineHint"></span>
+    </div>
     <div class="steps" id="steps"></div>
     <p class="error" id="err"></p>
 
@@ -496,8 +510,28 @@ async function refresh() {
   timer = setTimeout(() => refresh().catch(() => {}), busy ? 2500 : 10000);
 }
 
+// ---------- AI engine switch (local / API / both) ----------
+async function showEngine(e) {
+  e = e || (await api("/api/engine").catch(() => null));
+  if (!e) return ($("engineBar").hidden = true);
+  for (const b of $("engineToggle").querySelectorAll("button")) b.classList.toggle("on", b.dataset.e === e.engine);
+  const chip = (ok, text, tip) => `<span class="chip ${ok ? "ok" : "no"}" title="${esc(tip || "")}">${ok ? "&#10003;" : "&#10007;"} ${esc(text)}</span>`;
+  const vid = e.video.filter((v) => v.paid);
+  $("engineChips").innerHTML = [
+    chip(e.local.running, "Local AI", e.local.running ? `Ollama is running (${e.local.model})` : "Ollama is not running: start it from the Start menu"),
+    chip(e.api.claude || e.api.qwenCloud, "API key", e.api.claude ? "ANTHROPIC_API_KEY is set" : e.api.qwenCloud ? "QWEN_API_KEY is set" : "No AI API key in .env"),
+    ...vid.map((v) => chip(v.ready, v.label.replace(/ \(.*\)$/, ""), v.ready ? "Key found: scenes can be generated (paid, asked each time)" : v.why)),
+  ].join("");
+  const need = e.engine === "local" && !e.local.running ? "Start Ollama, or switch to API." : e.engine === "api" && !(e.api.claude || e.api.qwenCloud) ? "Add an API key to .env, or switch to Local." : e.engine === "custom" ? "Custom settings (Classic page). Pick one to simplify." : "";
+  $("engineHint").textContent = need;
+}
+for (const b of document.querySelectorAll("#engineToggle button")) b.onclick = async () => {
+  try { await showEngine(await api("/api/engine", { method: "PUT", body: { engine: b.dataset.e } })); } catch (e) { err(e.message); }
+};
+
 async function start() {
   syncChoices();
+  showEngine();
   await Promise.all([loadChannels(), loadContinue()]);
   if (!project) return showStep(1);
   try {

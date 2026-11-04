@@ -7,6 +7,7 @@ import { paths } from "../lib/paths.js";
 import { listChannels, loadStyle } from "../lib/style.js";
 import { listNiches } from "../lib/niche.js";
 import { addPresskitFile, listPresskit, removePresskitFile } from "../lib/assets/presskit.js";
+import { engineStatus, setEngine } from "../lib/agents/llm/engine.js";
 import { applyCandidate, applyManualFile, loadCandidates, saveCandidates, searchAlternatives } from "../lib/assets/review.js";
 import { FOOTAGE_MODE_LABELS, FOOTAGE_MODES, loadNiche, loadProjectNiche } from "../lib/niche.js";
 import { cleanQueries, savePlanEdit } from "../lib/planEdits.js";
@@ -574,6 +575,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   // ----- exact-model vaults (workspace/models/<brand>_<model>/): list, harvest, thumbnails -----
+  // ----- The "AI engine" switch (wizard start, editor): local / api / both + video API keys -----
+  if (parts[1] === "engine") {
+    reloadEnv();
+    if (method === "PUT") {
+      const e = JSON.parse((await readBody(req)) || "{}").engine;
+      if (e !== "local" && e !== "api" && e !== "both") return send(res, 400, { error: "engine must be local, api or both" });
+      setEngine(e);
+    }
+    if (method === "GET" || method === "PUT") return send(res, 200, await engineStatus());
+  }
+
   // ----- AI model: Claude / Qwen, backup order, credit budget, auto-disable (Settings page) -----
   if (parts[1] === "llm") {
     reloadEnv();

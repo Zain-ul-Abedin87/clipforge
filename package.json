@@ -12,7 +12,7 @@
     "doctor": "tsx src/cli.ts doctor",
     "test:nvenc": "tsx src/cli.ts test-nvenc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts tests/flow.test.ts tests/music.test.ts tests/preview.test.ts tests/transcript.test.ts tests/captions.test.ts tests/pacing.test.ts tests/introOutro.test.ts tests/hook.test.ts tests/mentions.test.ts tests/ttsChunks.test.ts tests/planCache.test.ts tests/queue.test.ts tests/portability.test.ts tests/productNames.test.ts tests/llmBudget.test.ts tests/videoPolish.test.ts tests/models.test.ts tests/research.test.ts tests/titles.test.ts tests/polish.test.ts tests/visuals.test.ts tests/script.test.ts tests/localTts.test.ts tests/avatar.test.ts tests/shorts.test.ts tests/orchestrator.test.ts tests/wizard.test.ts tests/localize.test.ts tests/stills.test.ts",
+    "test": "tsx --test tests/pipeline.test.ts tests/domain.test.ts tests/ytCaptions.test.ts tests/engine.test.ts tests/agents.test.ts tests/compiler.test.ts tests/editor.test.ts tests/llm.test.ts tests/flow.test.ts tests/music.test.ts tests/preview.test.ts tests/transcript.test.ts tests/captions.test.ts tests/pacing.test.ts tests/introOutro.test.ts tests/hook.test.ts tests/mentions.test.ts tests/ttsChunks.test.ts tests/planCache.test.ts tests/queue.test.ts tests/portability.test.ts tests/productNames.test.ts tests/llmBudget.test.ts tests/videoPolish.test.ts tests/models.test.ts tests/research.test.ts tests/titles.test.ts tests/polish.test.ts tests/visuals.test.ts tests/script.test.ts tests/localTts.test.ts tests/avatar.test.ts tests/shorts.test.ts tests/orchestrator.test.ts tests/wizard.test.ts tests/localize.test.ts tests/stills.test.ts tests/videogen.test.ts",
     "test:py": "python -m unittest discover -s tests -p \"test_*.py\"",
     "serve": "npm run build:preview && tsx src/cli.ts serve --port 4173",
     "build:preview": "npm --prefix cards run build:preview",
@@ -23,6 +23,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
+    "@fal-ai/client": "1.10.1",
+    "@google/genai": "2.30.0",
+    "@runwayml/sdk": "4.22.0",
     "bullmq": "6.3.10",
     "commander": "^15.0.0",
     "dotenv": "^18.0.7",

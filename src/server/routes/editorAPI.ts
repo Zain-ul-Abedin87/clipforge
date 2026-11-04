@@ -16,6 +16,12 @@ import { DEFAULT_CAPTION_STYLE } from "../../lib/render/captions.js";
 import { parseVoiceCleanup } from "../../audio/voiceCleanup.js";
 import { sampleFile, voiceSample } from "./voiceSample.js";
 import { downloadsDir, flowAngles, flowFile, flowRequest, generatedReplaceOp, recentDownloads, saveFlowUpload, takeFromDownloads } from "./flowBridge.js";
+import { listPresskit, slug } from "../../lib/assets/presskit.js";
+import { paths } from "../../lib/paths.js";
+import { generateClip, GenerateOpts } from "../../lib/videogen/generate.js";
+import { modelsOf, videoProviders } from "../../lib/videogen/providers.js";
+import { writeScenePrompt } from "../../lib/videogen/prompt.js";
+import { engineStatus } from "../../lib/agents/llm/engine.js";
 
 /**
  * Editor backend: JSON-RPC 2.0 on POST /api/editor for the block-based multi-track timeline UI
@@ -30,6 +36,9 @@ import { downloadsDir, flowAngles, flowFile, flowRequest, generatedReplaceOp, re
  *   editor.fetchNewClip {clipId, keyword?}        -> job id: harvest new exact-model clips from YouTube and hot-swap the best unused one
  *   editor.job        {jobId}                     -> job state / log / result
  *   editor.render     {}                          -> starts an incremental render (only edited scenes re-render)
+ *   editor.genOptions {clipId}                    -> AI video providers (ready / why not), AI engine, real product photos
+ *   editor.genPrompt  {clipId, wish, angle, photo?, atFrame?} -> prompt (AI-written from the wish) + reference image
+ *   editor.generate   {clipId, provider, model, prompt, frame, confirmPaid} -> job id: image-to-video, then swapped in
  */
 
 export interface EditorDeps {
@@ -46,6 +55,8 @@ export interface EditorDeps {
   harvestModel?: (o: HarvestOpts) => Promise<{ added: number }>;
   harvestKeyword?: (o: KeywordHarvestOpts) => Promise<{ added: number }>;
   vaultRoot?: string;
+  /** Tests: replaces the paid image-to-video call. */
+  generate?: typeof generateClip;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -237,7 +248,7 @@ export interface Job {
   clipId: string;
   state: "running" | "done" | "failed";
   log: string[];
-  result?: { candidateId: string; path: string; revision: number; added: number };
+  result?: { candidateId: string; path: string; revision: number; added: number } | { file: string; revision: number; model: string; seconds: number; note: string | null };
   error?: string;
 }
 
@@ -249,6 +260,17 @@ function readAlignedWords(dir: string): { word: string; start: number; end: numb
   } catch {
     return null;
   }
+}
+
+/** Real product photos (press kit) of a product, as image files. */
+export function productPhotos(channel: string, product: string | null): { folder: string; name: string; path: string }[] {
+  if (!product) return [];
+  const want = slug(product);
+  const root = path.join(paths.channels, channel, "presskit");
+  return listPresskit(channel)
+    .filter((p) => p.folder === want || want.includes(p.folder) || p.folder.includes(want) || slug(p.product) === want)
+    .flatMap((p) => p.files.filter((f) => /\.(jpe?g|png|webp)$/i.test(f.name)).map((f) => ({ folder: p.folder, name: f.name, path: path.join(root, p.folder, f.name) })))
+    .slice(0, 12);
 }
 
 export function createEditorAPI(deps: EditorDeps) {
@@ -292,6 +314,46 @@ export function createEditorAPI(deps: EditorDeps) {
     }
   }
 
+  const channelOf = (project: string): string => {
+    const f = path.join(deps.dirOf(project), "project.json");
+    return (fs.existsSync(f) ? (JSON.parse(fs.readFileSync(f, "utf8")) as { channel?: string }).channel : undefined) ?? "default";
+  };
+  /** A press-kit photo copied into the project's flow/ folder (served by /api/editor/flow-file). */
+  const stagePhoto = (dir: string, ph: { folder: string; name: string; path: string }): string => {
+    const name = `photo_${slug(ph.folder)}_${ph.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`.slice(-110);
+    const out = path.join(dir, "flow", name);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    if (!fs.existsSync(out)) fs.copyFileSync(ph.path, out);
+    return name;
+  };
+  const photoUrl = (project: string, ph: { folder: string; name: string; path: string }) =>
+    `/api/editor/flow-file?project=${encodeURIComponent(project)}&name=${encodeURIComponent(stagePhoto(deps.dirOf(project), ph))}`;
+
+  async function generateJob(job: Job, o: Pick<GenerateOpts, "provider" | "model" | "prompt" | "image">): Promise<void> {
+    const log = (m: string) => {
+      job.log.push(m);
+      if (job.log.length > 300) job.log.splice(0, job.log.length - 300);
+    };
+    try {
+      const tl = deps.store.get(job.project).tl;
+      const { clip } = findClip(tl, job.clipId);
+      const seconds = toNumber(clipEnd(clip)) - toNumber(clip.start);
+      const dir = deps.dirOf(job.project);
+      const name = `gen_${job.clipId.replace(/[^A-Za-z0-9_-]+/g, "_")}_${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}.mp4`;
+      const r = await (deps.generate ?? generateClip)({ ...o, seconds, outFile: path.join(dir, "flow", name), log });
+      // Same path as a Google Flow import: swapped into the clip, marked AI-generated for QA.
+      const { op, note } = await generatedReplaceOp(deps.store.get(job.project).tl, dir, job.clipId, name, o.prompt);
+      const applied = deps.store.apply(job.project, null, [op]);
+      job.result = { file: name, revision: applied.revision, model: r.model, seconds: r.seconds, note };
+      log(`[videogen] swapped into the scene${note ? ` (${note})` : ""}`);
+      job.state = "done";
+    } catch (err) {
+      job.state = "failed";
+      job.error = String((err as Error).message ?? err).slice(0, 400);
+      log(`[videogen] FAILED: ${job.error}`);
+    }
+  }
+
   async function call(method: string, p: Record<string, unknown>): Promise<unknown> {
     if (method === "editor.job") {
       const j = jobs.get(str(p, "jobId"));
@@ -300,7 +362,7 @@ export function createEditorAPI(deps: EditorDeps) {
     }
     const project = str(p, "project");
     if (!deps.validProject(project)) throw new RpcError(RPC.INVALID_PARAMS, "project name: letters, digits, - and _ only");
-    const editing = ["editor.edit", "editor.undo", "editor.redo", "editor.replace", "editor.fetchNewClip", "editor.render", "editor.flowImport", "editor.musicSet", "editor.deleteWords", "editor.tightenPauses"];
+    const editing = ["editor.edit", "editor.undo", "editor.redo", "editor.replace", "editor.fetchNewClip", "editor.generate", "editor.render", "editor.flowImport", "editor.musicSet", "editor.deleteWords", "editor.tightenPauses"];
     if (editing.includes(method) && deps.isBusy(project)) throw new RpcError(RPC.BUSY, "the pipeline is running for this project - wait until it finishes");
     switch (method) {
       // ----- Google Flow round trip (see flowBridge.ts) -----
@@ -363,6 +425,57 @@ export function createEditorAPI(deps: EditorDeps) {
         const frame = typeof p.frame === "number" && Number.isFinite(p.frame) ? Math.max(0, Math.round(p.frame)) : 0;
         const r = await voiceSample(deps.store.get(project).tl, deps.dirOf(project), { frame, seconds: optNum(p, "seconds", 8, 1, 20), cleaned: p.cleaned === true });
         return { ...r, url: `/api/editor/voice-sample?project=${encodeURIComponent(project)}&name=${encodeURIComponent(r.name)}` };
+      }
+      // ----- Make this scene with AI (src/lib/videogen) -----
+      case "editor.genOptions": {
+        const { subject } = subjectOfClip(deps.store.get(project).tl, str(p, "clipId"));
+        const product = subject?.product ? identityText(subject.product) : null;
+        const photos = productPhotos(channelOf(project), product).map((ph) => ({ id: `${ph.folder}/${ph.name}`, name: ph.name, url: photoUrl(project, ph) }));
+        return { product, photos, ...(await engineStatus()) };
+      }
+      case "editor.genPrompt": {
+        const clipId = str(p, "clipId");
+        const angle = isFlowAngle(p.angle) ? p.angle : "animate";
+        const at = typeof p.atFrame === "number" ? p.atFrame : undefined;
+        const dir = deps.dirOf(project);
+        // The clip's frame (and the rule-based prompt's inputs) always; a real photo replaces the frame.
+        const req = await flowRequest(deps.store.get(project).tl, dir, clipId, angle, deps.categoryOf(project), at);
+        let frame = req.frame;
+        if (typeof p.photo === "string" && p.photo) {
+          const ph = productPhotos(channelOf(project), req.product).find((x) => `${x.folder}/${x.name}` === p.photo);
+          if (!ph) throw new RpcError(RPC.NOT_FOUND, "that product photo is not in this product's press kit");
+          frame = stagePhoto(dir, ph);
+        }
+        const { subject, scene } = subjectOfClip(deps.store.get(project).tl, clipId);
+        // A button must answer fast: with the local AI first and Ollama not running, the shared LLM
+        // code would wait up to a minute for it, so the simple prompt is made at once instead.
+        const eng = await engineStatus();
+        const localFirst = eng.engine === "local" || eng.engine === "both";
+        const ask = localFirst && !eng.local.running ? null : undefined;
+        const w = await writeScenePrompt({ wish: typeof p.wish === "string" ? p.wish : "", product: req.product, category: deps.categoryOf(project), spec: subject?.spec?.spec ?? null, sceneText: scene?.text ?? "", angle, seconds: req.seconds, realPhoto: frame !== req.frame }, { ask });
+        return { prompt: w.prompt, writer: w.writer, frame, frameUrl: `/api/editor/flow-file?project=${encodeURIComponent(project)}&name=${encodeURIComponent(frame)}`, seconds: req.seconds, product: req.product, flowUrl: req.flowUrl };
+      }
+      case "editor.generate": {
+        const clipId = str(p, "clipId");
+        findClip(deps.store.get(project).tl, clipId);
+        const provider = str(p, "provider");
+        if (provider !== "veo" && provider !== "runway") throw new RpcError(RPC.INVALID_PARAMS, "provider must be veo or runway (Google Flow runs in your browser)");
+        const info = videoProviders().find((v) => v.id === provider)!;
+        if (!info.ready) throw new RpcError(RPC.INVALID_PARAMS, info.why ?? "not set up");
+        const model = str(p, "model");
+        if (!modelsOf(provider).some((m) => m.id === model)) throw new RpcError(RPC.INVALID_PARAMS, `unknown ${provider} model`);
+        // A paid call needs the creator's explicit yes, every time.
+        if (p.confirmPaid !== true) throw new RpcError(RPC.INVALID_PARAMS, "this is a paid API call: confirm it first");
+        const frame = flowFile(deps.dirOf(project), str(p, "frame"));
+        if (!frame) throw new RpcError(RPC.NOT_FOUND, "reference image not found (write the prompt again)");
+        const prompt = str(p, "prompt").trim();
+        if (prompt.length < 10) throw new RpcError(RPC.INVALID_PARAMS, "the prompt is empty");
+        const running = [...jobs.values()].find((j) => j.project === project && j.clipId === clipId && j.state === "running");
+        if (running) return { jobId: running.id };
+        const job: Job = { id: crypto.randomUUID(), project, clipId, state: "running", log: [] };
+        jobs.set(job.id, job);
+        void generateJob(job, { provider, model, prompt, image: frame });
+        return { jobId: job.id };
       }
       case "editor.flowDownloads":
         return { folder: downloadsDir(), items: recentDownloads() };

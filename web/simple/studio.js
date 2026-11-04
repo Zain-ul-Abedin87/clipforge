@@ -242,19 +242,27 @@ function inspect() {
       <div class="row ed-trans">${["cut", "fade", "flash"].map((t) => `<button class="btn small${tr === t ? " on" : ""}" data-tr="${t}">${t === "cut" ? "Cut" : t === "fade" ? "Fade" : "Flash"}</button>`).join("")}
         <button class="btn small" id="insTrAll" title="Use this transition at every scene start">Apply to all</button></div>` : ""}
     ${isPicture ? `
-      <h3>Replace picture</h3>
-      <div class="row"><input type="text" id="insKeyword" placeholder="keyword (default: scene spec)" value="${esc(scene?.subject.spec || "")}"></div>
-      <div class="row">
-        <button class="btn small" id="insCands">Show vault clips</button>
-        <button class="btn small primary" id="insFetch" ${block.locked ? "disabled" : ""}>Fetch new clip</button>
-      </div>
-      <div id="insJob"></div>
-      <div id="insCandList" class="ed-cands"></div>
-      <h3 class="flow-h">New angle with Google Flow</h3>
-      <p class="help">Makes a prompt and a reference frame of this clip. Generate it in Flow, download the video, then drop it here.</p>
-      <div class="row flow-angles" id="flowAngles">${FLOW_ANGLE_LIST.map((a) => `<button class="btn small${(st.flow?.clipId === block.id ? st.flow.angle : "animate") === a.id ? " on" : ""}" data-angle="${a.id}">${a.label}</button>`).join("")}</div>
-      <div class="row"><button class="btn small primary" id="flowMake" ${block.locked ? "disabled" : ""}>Make prompt</button></div>
-      <div id="flowBox"></div>` : ""}`;
+      <h3>Don't like this picture?</h3>
+      <details class="ed-way" open><summary>Use another real clip</summary>
+        <div class="row"><input type="text" id="insKeyword" placeholder="keyword (default: scene spec)" value="${esc(scene?.subject.spec || "")}"></div>
+        <div class="row">
+          <button class="btn small" id="insCands">Show vault clips</button>
+          <button class="btn small primary" id="insFetch" ${block.locked ? "disabled" : ""}>Fetch new clip</button>
+        </div>
+        <div id="insCandList" class="ed-cands"></div>
+      </details>
+      <details class="ed-way" id="aiWay" ${st.flow?.clipId === block.id ? "open" : ""}><summary>Make it with AI</summary>
+        <label class="help" for="genWish">What should this scene show? (your own words)</label>
+        <textarea id="genWish" rows="3" placeholder="e.g. the mower on fresh grass at sunset, camera slowly pushes in">${esc(st.genWish?.clipId === block.id ? st.genWish.text : "")}</textarea>
+        <p class="help" style="margin:8px 0 4px">Start from</p>
+        <div class="row" id="genRefPick"><button class="btn small on" data-ref="frame">This clip's picture</button><button class="btn small" data-ref="photo">A real product photo</button></div>
+        <div id="genPhotos" class="ed-cands" hidden></div>
+        <p class="help" style="margin:8px 0 4px">Camera</p>
+        <div class="row flow-angles" id="flowAngles">${FLOW_ANGLE_LIST.map((a) => `<button class="btn small${(st.flow?.clipId === block.id ? st.flow.angle : "animate") === a.id ? " on" : ""}" data-angle="${a.id}">${a.label}</button>`).join("")}</div>
+        <div class="row"><button class="btn small primary" id="flowMake" ${block.locked ? "disabled" : ""}>Write the prompt</button><span class="help" id="genEngine"></span></div>
+        <div id="flowBox"></div>
+      </details>
+      <div id="insJob"></div>` : ""}`;
   $("insSplit").onclick = () => split();
   for (const b of box.querySelectorAll("[data-tr]")) b.onclick = () => edit([{ op: "setTransition", clipId: block.id, transition: b.dataset.tr }]);
   if ($("insTrAll"))
@@ -272,6 +280,15 @@ function inspect() {
       st.flowAngle = b.dataset.angle;
     };
     $("flowMake").onclick = () => makeFlowPrompt(block.id);
+    $("genWish").oninput = (e) => (st.genWish = { clipId: block.id, text: e.target.value });
+    for (const b of box.querySelectorAll("[data-ref]")) b.onclick = () => {
+      box.querySelectorAll("[data-ref]").forEach((x) => x.classList.toggle("on", x === b));
+      st.genRef = b.dataset.ref === "photo" ? st.genRef?.photo ? st.genRef : { photo: null } : null;
+      $("genPhotos").hidden = b.dataset.ref !== "photo";
+      if (b.dataset.ref === "photo") loadGenPhotos(block.id);
+    };
+    $("aiWay").ontoggle = () => $("aiWay").open && loadGenOptions(block.id);
+    if ($("aiWay").open) loadGenOptions(block.id);
     if (st.flow?.clipId === block.id) renderFlowBox();
     $("insCands").onclick = () => showCandidates(block.id);
     $("insFetch").onclick = () => fetchNew(block.id, $("insKeyword").value.trim());
@@ -591,20 +608,70 @@ const FLOW_ANGLE_LIST = [
   { id: "orbit", label: "Orbit" }, { id: "top", label: "Top-down" }, { id: "hands", label: "Hands-on" }, { id: "wide", label: "Wide" },
 ];
 
+// ---------- Make it with AI: your words -> prompt (local or API AI) -> Flow / Veo / Runway ----------
+
+async function loadGenOptions(clipId) {
+  try {
+    const o = await rpc("editor.genOptions", { clipId });
+    st.gen = { clipId, ...o };
+    const eng = { local: "the AI on this PC", api: "the cloud AI", both: "the AI on this PC (cloud as backup)" }[o.engine] || "your AI settings";
+    if ($("genEngine")) $("genEngine").textContent = `Written by ${eng}${o.engine !== "api" && !o.local.running ? " - Ollama is not running, so a simple prompt is made" : ""}.`;
+    if (st.flow?.clipId === clipId) renderFlowBox();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function loadGenPhotos(clipId) {
+  const box = $("genPhotos");
+  if (!st.gen || st.gen.clipId !== clipId) await loadGenOptions(clipId);
+  const g = st.gen;
+  if (!g) return;
+  if (!g.photos.length) {
+    box.innerHTML = `<p class="help">${g.product ? `No photos of the ${esc(g.product)} in the press kit yet. Add official photos in Library &gt; Press kit, then come back.` : "This scene has no product, so there is no product photo to start from."}</p>`;
+    return;
+  }
+  box.innerHTML = g.photos.map((ph) => `<button class="ed-cand${st.genRef?.photo === ph.id ? " on" : ""}" data-photo="${esc(ph.id)}" title="${esc(ph.name)}"><img loading="lazy" src="${esc(ph.url)}" alt=""><div>${esc(ph.name)}</div></button>`).join("");
+  for (const b of box.querySelectorAll("[data-photo]")) b.onclick = () => {
+    st.genRef = { photo: b.dataset.photo };
+    box.querySelectorAll("[data-photo]").forEach((x) => x.classList.toggle("on", x === b));
+  };
+}
+
 async function makeFlowPrompt(clipId) {
   const btn = $("flowMake");
+  if (st.genRef && !st.genRef.photo) return toast("Pick a product photo first (or start from this clip's picture)", true);
   btn.disabled = true;
-  btn.textContent = "Making...";
+  btn.textContent = "Writing...";
   try {
     const angle = st.flowAngle || "animate";
-    const r = await rpc("editor.flowPrompt", { clipId, angle, atFrame: st.playFrame });
-    st.flow = { clipId, angle, prompt: r.prompt, frameUrl: r.frameUrl, frame: r.frame, seconds: r.seconds, url: r.flowUrl || FLOW_URL };
+    const wish = $("genWish")?.value.trim() || "";
+    const r = await rpc("editor.genPrompt", { clipId, angle, wish, photo: st.genRef?.photo || undefined, atFrame: st.playFrame });
+    st.flow = { clipId, angle, prompt: r.prompt, frameUrl: r.frameUrl, frame: r.frame, seconds: r.seconds, url: r.flowUrl || FLOW_URL, writer: r.writer };
+    if (!st.gen || st.gen.clipId !== clipId) await loadGenOptions(clipId);
     renderFlowBox();
   } catch (e) {
     toast(e.message, true);
   } finally {
     btn.disabled = false;
-    btn.textContent = "Make prompt";
+    btn.textContent = "Write the prompt";
+  }
+}
+
+/** Paid image-to-video in the background; the clip is swapped in when it is ready. */
+async function generateWith(provider, model) {
+  const f = st.flow;
+  const v = st.gen?.video.find((x) => x.id === provider);
+  const m = v?.models.find((x) => x.id === model);
+  if (!f || !v || !m) return;
+  if (!confirm(`${m.label} is a paid API: it uses your ${v.label.replace(/ \(.*\)$/, "")} credit.\n\nMake one ${f.seconds} s clip from the picture shown, with this prompt?`)) return;
+  try {
+    const r = await rpc("editor.generate", { clipId: f.clipId, provider, model, prompt: f.prompt, frame: f.frame, confirmPaid: true });
+    st.job = { id: r.jobId, clipId: f.clipId };
+    toast(`${m.label} is making the clip (usually 1-5 minutes)...`);
+    pollJob();
+  } catch (e) {
+    handleError(e);
   }
 }
 
@@ -612,18 +679,23 @@ function renderFlowBox() {
   const f = st.flow;
   const box = $("flowBox");
   if (!box || !f) return;
+  const paid = (st.gen?.video || []).filter((v) => v.paid);
   box.innerHTML = `
-    <div class="flow-step"><b>1.</b> Reference frame
-      <img class="flow-frame" src="${esc(f.frameUrl)}" alt="reference frame">
-      <div class="row"><button class="btn small" id="flowCopyImg">Copy image</button><a class="btn small ghost" href="${esc(f.frameUrl)}" download="${esc(f.frame)}">Download</a></div></div>
-    <div class="flow-step"><b>2.</b> Prompt <span class="help">(edit if you like; the clip needs ${f.seconds} s)</span>
-      <textarea id="flowPromptText" rows="7">${esc(f.prompt)}</textarea>
-      <div class="row"><button class="btn small" id="flowCopy">Copy prompt</button><button class="btn small primary" id="flowOpen">Open Flow beside</button></div></div>
-    <div class="flow-step"><b>3.</b> In Flow: add the image as a frame/ingredient, paste the prompt, generate, download the video.</div>
-    <div class="flow-step"><b>4.</b> Bring it back
-      <label class="flow-drop" id="flowDrop"><input type="file" id="flowFile" accept="video/*" hidden>Drop the Flow video here (or click)</label>
-      <div class="row"><button class="btn small" id="flowDl">Use latest from Downloads</button></div>
-      <div id="flowDlList" class="flow-dl"></div></div>`;
+    <div class="flow-step"><b>1.</b> Starting picture <span class="help">(the video begins on this exact picture, so the product stays the real one)</span>
+      <img class="flow-frame" src="${esc(f.frameUrl)}" alt="reference picture"></div>
+    <div class="flow-step"><b>2.</b> Prompt <span class="help">(${f.writer === "model" ? "written by the AI from your words" : "simple prompt"}; edit freely; the scene needs ${f.seconds} s)</span>
+      <textarea id="flowPromptText" rows="7">${esc(f.prompt)}</textarea></div>
+    <div class="flow-step"><b>3.</b> Make the video with
+      <div class="gen-way"><b>Google Flow</b> <span class="help">free with your Google plan, in your browser</span>
+        <div class="row"><button class="btn small" id="flowCopyImg">Copy picture</button><button class="btn small" id="flowCopy">Copy prompt</button><button class="btn small primary" id="flowOpen">Open Flow beside</button></div>
+        <p class="help">In Flow: add the picture as the first frame, paste the prompt, generate, download. Then bring it back:</p>
+        <label class="flow-drop" id="flowDrop"><input type="file" id="flowFile" accept="video/*" hidden>Drop the Flow video here (or click)</label>
+        <div class="row"><button class="btn small" id="flowDl">Use latest from Downloads</button></div>
+        <div id="flowDlList" class="flow-dl"></div></div>
+      ${paid.map((v) => `<div class="gen-way"><b>${esc(v.label)}</b> <span class="help">${v.ready ? "paid, made here automatically" : esc(v.why || "")}</span>
+        ${v.ready ? `<div class="row"><select data-model="${v.id}">${v.models.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("")}</select><button class="btn small primary" data-gen="${v.id}">Make it</button></div>` : ""}</div>`).join("")}
+    </div>`;
+  for (const b of box.querySelectorAll("[data-gen]")) b.onclick = () => generateWith(b.dataset.gen, box.querySelector(`[data-model="${b.dataset.gen}"]`).value);
   $("flowPromptText").oninput = (e) => (f.prompt = e.target.value);
   $("flowCopy").onclick = async () => {
     try { await navigator.clipboard.writeText(f.prompt); toast("Prompt copied"); } catch { $("flowPromptText").select(); toast("Press Ctrl+C to copy", true); }
@@ -756,7 +828,8 @@ async function pollJob() {
   if (r.state === "running") return void setTimeout(pollJob, 2000);
   st.job = null;
   if (r.state === "done") {
-    toast("New clip swapped in - press Render changes to re-render that scene");
+    if (r.result?.model) st.flow = null;
+    toast(r.result?.model ? `AI clip placed in the scene${r.result.note ? ` - note: ${r.result.note}` : ""}. Press Render changes to apply.` : "New clip swapped in - press Render changes to re-render that scene", !!r.result?.note);
     setView(await rpc("editor.open"));
   } else toast(r.error || "Fetch failed", true);
 }

@@ -99,7 +99,77 @@ ollama ps
 
 ---
 
+## Phase 1: Niche / Outlier Finder
+
+**What changed**
+
+- `src/lib/research/youtube-api.ts`: YouTube Data API v3 client (`search`, `videos`, `channels`,
+  `playlistItems`).
+  - Quota counter per quota day (Pacific time, when Google resets it). It counts 100 units per
+    `search` and 1 unit per list call.
+  - A call that would go past `dailyQuota - quotaReserve` is refused before it is sent.
+  - A real `quotaExceeded` answer marks the day as used up.
+  - Every answer is cached in SQLite, so a repeat scan within `cacheHours` costs ~0 units.
+- `src/lib/research/outliers.ts`: score = views / median of the channel's last 30 long-form
+  uploads. Flags are 2x, 3x and 5x+. Shorts (< 60 s) are left out of both sides. Channels with
+  fewer than 5 recent uploads are skipped (the median is not reliable).
+- `src/lib/research/niche-scan.ts`: channels created in the last 12 months (search with
+  `publishedAfter`, plus the channels the outlier scan already loaded).
+  - Faceless heuristic score from title and description.
+  - 28-day views are **measured** once two snapshots are 3+ days apart; until then they are
+    **estimated**.
+  - RPM and 28-day revenue are shown only as **estimate ranges** per niche. The seed decides the
+    niche.
+- `src/lib/research/db.ts`: `data/research.db` on Node's built-in `node:sqlite` (no native
+  module). Tables: cache, quota, channel snapshots, last scans. The file is git-ignored.
+- `src/lib/settings/features.ts`: `features.json` (git-ignored) with a section per new feature,
+  validated and merged with the defaults. API: `GET/PUT /api/features`.
+- UI: **`/research`** page (seeds, Scan button, quota meter, live log, outlier table with
+  thumbnails and flags, growing-channel table). Shared nav for the new pages is in `web/full/`.
+  The main UI nav links to it.
+- CLI: `npm run cf -- research [-s "seed1,seed2"]`.
+
+**Quota per scan** (6 default gun/survival seeds, nothing cached): about 6×100 (video search) +
+6×100 (channel search) + ~2 units per channel for the medians, so roughly 1,500-1,900 units out of
+10,000. A re-scan on the same day mostly hits the cache.
+
+**Files**: `src/lib/research/{youtube-api,outliers,niche-scan,db,index}.ts`,
+`src/lib/settings/features.ts`, `src/server/routes/research.ts`, `src/server/server.ts`,
+`src/cli.ts`, `web/research.html`, `web/full/{full.js,full.css}`, `web/simple/index.html`,
+`tests/research.test.ts`, `.env.example`, `.gitignore`.
+
+**Checks**: typecheck passes. 292 tests, 291 pass, 0 fail, 1 skipped (the one skipped before this
+phase). The `/research` page was loaded in the browser preview; without a key it shows the
+"add YOUTUBE_API_KEY" message.
+
+**How to verify on your PC**
+
+1. Google Cloud console → enable **YouTube Data API v3** → create an API key, and add
+   `YOUTUBE_API_KEY=...` to `.env`.
+2. Run `npm run serve`, open <http://localhost:4173/research> and press **Scan**. Or run:
+
+   ```bash
+   npm run cf -- research
+   ```
+
+3. Expect up to 50 outliers (with 2x/3x/5x+ flags) and up to 20 growing channels, with the quota
+   meter well under 10,000.
+
+**Open risks**
+
+- The faceless check is a heuristic (it does not look at thumbnails). An optional
+  vision-model check could come later.
+- The RPM table is a rough industry range, not data from the channels. It is labelled "est."
+  everywhere.
+- `search.list` with `order=viewCount` favours big channels. Raise `research.resultsPerSeed`
+  or add more specific seeds to find more small-channel outliers.
+
+---
+
 ## Blocked / needs user
+
+- **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live
+  results. The code and tests run against a fake API.
 
 - **Phase 0 hardware check**: run one full video on the RTX 3070 Ti and confirm `ollama ps` shows
   100% GPU, that there are no `GPU returned garbage twice` lines, that `[vision] verified` > 0 and

@@ -221,6 +221,29 @@ channelCmd
     console.log(briefToMd(b));
   });
 
+program
+  .command("ideas")
+  .description("Idea multiplier: why an outlier video went viral -> 15 new ideas for our channel (deduped against our past titles and competitor titles)")
+  .requiredOption("--channel <id>", "our channel (its brief shapes the ideas)")
+  .requiredOption("--from <videoId>", "the outlier video (from the last research scan, or any video with YOUTUBE_API_KEY / --title)")
+  .option("--title <text>", "the video's title, when it is not in the research scan and there is no API key")
+  .option("--no-transcript", "do not fetch the transcript")
+  .action(async (o) => {
+    const { ideaSource } = await import("./lib/agents/ideasSource.js");
+    const { multiplyIdeas } = await import("./lib/agents/ideas.js");
+    const { loadBrief } = await import("./lib/channelBrief.js");
+    try {
+      const { source, competitorTitles } = await ideaSource(String(o.from), { title: o.title, transcript: o.transcript !== false, log: console.log });
+      const r = await multiplyIdeas(source, { channel: String(o.channel), brief: loadBrief(String(o.channel)), competitorTitles, log: console.log });
+      console.log(`Why it worked (${r.why.triggers.join(", ")}): ${r.why.explanation}`);
+      r.ideas.forEach((i, k) => console.log(`${String(k + 1).padStart(2)}. [${i.format}, ${i.trigger}, copy risk ${i.copyRisk}] ${i.workingTitle}\n    ${i.idea}`));
+      if (r.dropped.length) console.log(`Dropped as too similar: ${r.dropped.map((d) => `"${d.workingTitle}" (${d.reason})`).join("; ")}`);
+    } catch (err) {
+      console.error(`[ideas] ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
 const sopCmd = program.command("sop").description("Competitor SOP: learn a competitor's structure (hook, beats, rules) from 5-10 transcripts, never their wording");
 sopCmd
   .command("build")

@@ -33,7 +33,21 @@
 
     <div class="card flush">
       <div style="padding:20px 24px 0"><h2>Top outliers</h2><p class="help" style="margin-top:-8px">Score = views / median views of the channel's last 30 long-form uploads.</p></div>
-      <div class="scroll"><table class="tbl" id="outliers"><thead><tr><th></th><th>Video</th><th class="r">Views</th><th class="r">Channel median</th><th class="r">Score</th><th>Seed</th></tr></thead><tbody></tbody></table></div>
+      <div class="scroll"><table class="tbl" id="outliers"><thead><tr><th></th><th>Video</th><th class="r">Views</th><th class="r">Channel median</th><th class="r">Score</th><th>Seed</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card" id="ideasCard" hidden>
+      <h2>Ideas from this outlier</h2>
+      <p class="help" style="margin-top:-8px">Why it worked, then 15 ideas for <b>your</b> channel with the same pull and your own wording. Ideas too close (over 80%) to your past titles or a competitor's are dropped.</p>
+      <div class="row" style="margin-top:8px;align-items:flex-end">
+        <div style="flex:1;min-width:220px"><span class="lbl">Video</span><div id="ideaVideo" class="title"></div></div>
+        <div><label class="lbl" for="ideaCh">For channel</label><select id="ideaCh" style="min-width:200px;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px 12px;color:var(--text)"></select></div>
+        <button class="btn primary" id="ideaGo">Find 15 ideas</button>
+      </div>
+      <p class="error" id="ierr"></p>
+      <div id="ideaWhy" class="help"></div>
+      <div class="scroll"><table class="tbl" id="ideas" hidden><thead><tr><th>#</th><th>Idea</th><th>Format</th><th>Trigger</th><th class="r">Copy risk</th><th></th></tr></thead><tbody></tbody></table></div>
+      <p class="help" id="ideaDropped"></p>
     </div>
 
     <div class="card">
@@ -72,8 +86,10 @@ function render(r) {
         <td class="title"><a href="https://www.youtube.com/watch?v=${esc(o.video.id)}" target="_blank" rel="noopener">${esc(o.video.title)}</a><small>${esc(o.channel.title)} - ${num(o.channel.subscribers)} subs</small></td>
         <td class="r">${num(o.video.views)}</td><td class="r">${num(o.channelMedian)}</td>
         <td class="r">${o.flag ? `<span class="flag ${flagCls(o.flag)}">${o.flag}</span> ` : ""}${o.score.toFixed(1)}x</td>
-        <td><span class="chip">${esc(o.seed)}</span></td></tr>`).join("")
-    : `<tr><td colspan="6" class="help" style="padding:20px 24px">No scan yet: press Scan.</td></tr>`;
+        <td><span class="chip">${esc(o.seed)}</span></td>
+        <td><button class="btn small" data-ideas="${esc(o.video.id)}" data-title="${esc(o.video.title)}">Ideas</button></td></tr>`).join("")
+    : `<tr><td colspan="7" class="help" style="padding:20px 24px">No scan yet: press Scan.</td></tr>`;
+  for (const b of $("outliers").querySelectorAll("[data-ideas]")) b.onclick = () => openIdeas(b.dataset.ideas, b.dataset.title);
   $("channels").tBodies[0].innerHTML = r.channels.length
     ? r.channels.map((g) => `<tr>
         <td class="title"><a href="https://www.youtube.com/channel/${esc(g.channel.id)}" target="_blank" rel="noopener">${esc(g.channel.title)}</a><small>${esc(g.seed)} - ${g.channel.videos} videos</small></td>
@@ -117,6 +133,44 @@ $("scan").onclick = async () => {
     $("scan").textContent = "Scan";
   }
 };
+// ---------- idea multiplier ----------
+let ideaVid = "";
+async function openIdeas(id, title) {
+  ideaVid = id;
+  $("ideasCard").hidden = false;
+  $("ideaVideo").textContent = title;
+  $("ierr").textContent = "";
+  if (!$("ideaCh").options.length) {
+    const list = (await api("/api/channels").catch(() => [])).filter((c) => c.name !== "test");
+    $("ideaCh").innerHTML = list.map((c) => `<option value="${esc(c.name)}">${esc(c.brief?.name || c.name)}${c.brief ? "" : " (no brief)"}</option>`).join("");
+  }
+  showIdeas(await api(`/api/research/ideas/${encodeURIComponent($("ideaCh").value)}/${encodeURIComponent(id)}`).catch(() => null));
+  $("ideasCard").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function showIdeas(r) {
+  $("ideas").hidden = !r;
+  $("ideaWhy").innerHTML = r ? `<b>Why it worked</b> (${r.why.triggers.map(esc).join(", ")}): ${esc(r.why.explanation)}${r.writer === "rules" ? " <i>(no model running: rule-based ideas)</i>" : ""}` : "";
+  $("ideaDropped").textContent = r && r.dropped.length ? `Dropped as too similar: ${r.dropped.map((d) => `"${d.workingTitle}" (${d.reason}, ${Math.round(d.score * 100)}%)`).join("; ")}` : "";
+  if (!r) return;
+  const ch = $("ideaCh").value;
+  $("ideas").tBodies[0].innerHTML = r.ideas.map((i, k) => `<tr><td>${k + 1}</td><td class="title">${esc(i.workingTitle)}<small>${esc(i.idea)} <i>${esc(i.whyFits)}</i></small></td><td><span class="chip">${esc(i.format)}</span></td><td>${esc(i.trigger)}</td>
+    <td class="r">${esc(i.copyRisk)}</td><td><a class="btn small primary" href="/new?${new URLSearchParams({ topic: i.workingTitle, title: i.workingTitle, channel: ch, format: i.format })}">Use &rarr;</a></td></tr>`).join("");
+}
+$("ideaCh").onchange = async () => ideaVid && showIdeas(await api(`/api/research/ideas/${encodeURIComponent($("ideaCh").value)}/${encodeURIComponent(ideaVid)}`).catch(() => null));
+$("ideaGo").onclick = async () => {
+  $("ierr").textContent = "";
+  $("ideaGo").disabled = true;
+  $("ideaGo").textContent = "Thinking (a minute or two)...";
+  try {
+    showIdeas(await api("/api/research/ideas", { method: "POST", body: { videoId: ideaVid, channel: $("ideaCh").value } }));
+  } catch (e) {
+    $("ierr").textContent = e.message;
+  } finally {
+    $("ideaGo").disabled = false;
+    $("ideaGo").textContent = "Find 15 ideas";
+  }
+};
+
 function renderTitles(r) {
   if (!r) return;
   $("topic").value ||= r.topic;

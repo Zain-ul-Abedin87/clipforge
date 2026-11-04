@@ -1366,6 +1366,71 @@ picture for every scene, in the same style throughout. Page: /make > Documentary
 
 ---
 
+## S4: Idea multiplier (2026-11-04)
+
+**What changed**
+- `src/lib/agents/ideas.ts`: one outlier becomes why it went viral, then 15 new ideas for our
+  channel.
+  - **Input**: title, views, view multiple (from `outliers.ts`), channel, and the transcript as
+    excerpts (the opening ~400 words plus 3 spread samples, about 800 words, so the prompt fits 8K).
+  - **One model call** (stage `titles`, `askJson`): triggers from a fixed list (curiosity,
+    stakes, controversy, versus, ranking, nostalgia, money, danger, myth, transformation,
+    authority, novelty) and an explanation, then ideas with: idea, trigger, format (countdown /
+    versus / myth-vs-reality / history-of / every-x-explained), working title, why it fits the
+    brief, and copy risk (low / med / high).
+  - The answer is refused and asked again when a working title uses a banned phrase or repeats
+    the outlier's title.
+  - **Dedupe**: each working title is compared with our own past titles (S5's history plus every
+    project made for the channel), the competitor titles (the outlier and the last scan's
+    outliers) and the other ideas. Over 0.8 similar (the hybrid n-gram / token / embedding score
+    the title checker already uses) = dropped, and the reason is listed.
+  - **Without a model**: rule ideas from the outlier's subject and the brief's pillars that are
+    real subjects, times the formats. Pillars that name a format ("Best X under a price,
+    ranked") are skipped. The rules give fewer ideas than the model and never padded copies;
+    they are labelled "rules" on the page.
+- `src/lib/agents/ideasSource.ts`: the video comes from the last research scan, else the YouTube
+  API (needs a key), else `--title`. The transcript is fetched when possible; without it the
+  ideas come from the title.
+- `src/lib/channelHistory.ts`: `channels/<id>/history/` (filled in S5) and `pastTitles()`.
+- CLI: `ideas --channel <id> --from <videoId> [--title "..."] [--no-transcript]`.
+- API: `POST /api/research/ideas {videoId, channel}`; `GET /api/research/ideas/<channel>/<videoId>`
+  returns the saved run (`channels/<id>/ideas/<videoId>.json`).
+- UI:
+  - **Research**: an "Ideas" button on every outlier row opens the "Ideas from this outlier"
+    panel (channel picker, why it worked, 15 ideas, what was dropped).
+  - **Use ->** opens `/new` with the topic, the working title (as the picked title), the channel
+    and the format pre-filled. "Suggest titles" on `/new` now uses the channel's brief.
+
+**Fixed while checking the page**: the rule ideas used survival-pulse's pillars as subjects and
+wrote "Best best X under a price ranked ranked for this year". Pillars that name a format are now
+skipped, and the outlier's subject is used. Also, "5 Survival Knives ..." was not seen as a
+ranking (the regex wanted the number next to a known noun).
+
+**Tests**: `tests/ideas.test.ts`, 6. They cover:
+- triggers;
+- the transcript excerpt size;
+- rule ideas: valid formats, no duplicates, no padding;
+- a fake model:
+  - the banned phrase is refused and retried;
+  - the prompt fits the context;
+  - one idea like our past title, one like the outlier and one twin are each dropped with the
+    right reason;
+  - the run is saved;
+- the API (the saved run; bad ids refused);
+- the real CLI.
+
+Checked in Chromium with a seeded research DB (`RESEARCH_DB`, a scratch file):
+- Ideas -> survival-pulse -> 15 rows;
+- Use -> `/new` with the topic, title, channel and the channel's 1280-word length.
+
+Full suite: 464 tests: 463 pass, 0 fail, 1 skipped.
+
+**Limits**
+- The rule fallback is a format grid, not a strategist. Real "why it went viral" needs the model.
+- The format is passed to `/new` but only used from S5 on (the format templates).
+
+---
+
 ## S3: Retention-aware outline, section writer and QA (2026-11-04)
 
 **What changed**

@@ -228,7 +228,7 @@ $("suggest").onclick = async () => {
   $("suggest").disabled = true;
   $("suggestNote").textContent = "Writing title ideas... (about a minute with the local AI)";
   try {
-    const r = await api("/api/research/titles", { method: "POST", body: { topic } });
+    const r = await api("/api/research/titles", { method: "POST", body: { topic, channel: $("channel").value } });
     $("titles").innerHTML = `<p class="lbl" style="margin-top:16px">Pick a title</p>` + r.titles.map((t, i) => `<label class="opt"><input type="radio" name="title" value="${esc(t.title)}" ${i === 0 ? "checked" : ""}><span>${esc(t.title)}<br><span class="hint">${Math.round(t.similarity.score * 100)}% like the closest competitor title</span></span></label>`).join("")
       + `<label class="opt"><input type="radio" name="title" value="__own"><span style="flex:1">My own title<input id="ownTitle" placeholder="Type your title" style="margin-top:6px"></span></label>`;
     $("suggestNote").textContent = "";
@@ -552,6 +552,14 @@ async function start() {
   syncChoices();
   showEngine();
   await Promise.all([loadChannels(), loadContinue()]);
+  // Prefill from an idea (research page > Ideas > Use): topic, the working title, channel, format.
+  const pre = new URLSearchParams(location.search);
+  if (!project && pre.get("topic")) {
+    $("topic").value = pre.get("topic");
+    if (pre.get("title")) $("titles").innerHTML = `<p class="lbl" style="margin-top:16px">Pick a title</p><label class="opt"><input type="radio" name="title" value="${esc(pre.get("title"))}" checked><span>${esc(pre.get("title"))}<br><span class="hint">from the idea you picked; press Suggest titles for more options</span></span></label>`;
+    if (pre.get("channel") && channelList.some((c) => c.name === pre.get("channel"))) { $("channel").value = pre.get("channel"); showBrief(); }
+    if (pre.get("format")) window.__ideaFormat = pre.get("format");
+  }
   if (!project) return showStep(1);
   try {
     await refresh();

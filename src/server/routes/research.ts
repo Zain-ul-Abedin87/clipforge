@@ -42,10 +42,34 @@ export async function researchRoute(parts: string[], method: string, body: () =>
       }
     }
     if (method === "POST" && parts[2] === "titles") {
-      const req = JSON.parse((await body()) || "{}") as { topic?: unknown };
+      const req = JSON.parse((await body()) || "{}") as { topic?: unknown; channel?: unknown };
       const topic = typeof req.topic === "string" ? req.topic.trim().slice(0, 120) : "";
       if (!topic) return { status: 400, body: { error: "topic is required" } };
-      return { status: 200, body: await runTitles(topic, { db, api, log: (m) => (logs.push(m), console.log(m)) }) };
+      return { status: 200, body: await runTitles(topic, { db, api, channel: typeof req.channel === "string" ? req.channel : undefined, log: (m) => (logs.push(m), console.log(m)) }) };
+    }
+    // Idea multiplier: POST {videoId, channel, title?} -> 15 ideas; GET /ideas/<channel>/<videoId> -> the saved run.
+    if (parts[2] === "ideas") {
+      const { multiplyIdeas } = await import("../../lib/agents/ideas.js");
+      const { ideaSource } = await import("../../lib/agents/ideasSource.js");
+      const { loadBrief } = await import("../../lib/channelBrief.js");
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { paths } = await import("../../lib/paths.js");
+      if (method === "GET") {
+        const ch = String(parts[3] ?? "");
+        const vid = String(parts[4] ?? "").replace(/[^\w-]/g, "_");
+        const f = path.join(paths.channels, ch, "ideas", `${vid}.json`);
+        return /^[a-z0-9][a-z0-9_-]{0,60}$/.test(ch) && fs.existsSync(f) ? { status: 200, body: JSON.parse(fs.readFileSync(f, "utf8")) } : { status: 200, body: null };
+      }
+      if (method === "POST") {
+        const req = JSON.parse((await body()) || "{}") as { videoId?: unknown; channel?: unknown; title?: unknown };
+        const videoId = typeof req.videoId === "string" && /^[\w-]{6,20}$/.test(req.videoId) ? req.videoId : "";
+        const channel = typeof req.channel === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(req.channel) ? req.channel : "";
+        if (!videoId || !channel) return { status: 400, body: { error: "videoId and channel are required" } };
+        const log = (m: string) => (logs.push(m), console.log(m));
+        const { source, competitorTitles } = await ideaSource(videoId, { title: typeof req.title === "string" ? req.title : undefined, log });
+        return { status: 200, body: await multiplyIdeas(source, { channel, brief: loadBrief(channel), competitorTitles, log }) };
+      }
     }
     if (method === "GET" && parts[2] === "titles") return { status: 200, body: db.lastScan("titles")?.result ?? null };
     return { status: 404, body: { error: "unknown research route" } };

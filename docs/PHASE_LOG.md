@@ -653,6 +653,170 @@ Then open `output/<project>_short_1.mp4` … `_3.mp4`.
 
 ---
 
+## Phase 9: UI + chat orchestrator
+
+**What changed**
+
+- `src/lib/orchestrator/pipeline.ts`: the **7 stages** Research → Writing → Voice → Visuals →
+  Avatar → Edit → Render. Each stage is a list of CLI steps run as child processes:
+
+  | Stage | CLI steps |
+  |-------|-----------|
+  | Research | `research`, `titles` |
+  | Writing | `script` |
+  | Voice | `tts`, `transcribe`, `align` |
+  | Visuals | `plan`, `assets`, `visuals --apply` |
+  | Avatar | `avatar` |
+  | Edit | `timeline` |
+  | Render | `render`, `qa`, `shorts` |
+
+  - Each stage records its **status** (pending / running / done / failed / skipped), **duration**,
+    and **GPU time**, CPU time and model-load time (the difference in `cache/gpu_time.json`
+    before and after the stage).
+  - These are saved per project in `pipeline_state.json`. The inputs live in `pipeline.json`
+    (topic, products, words, seeds, channel).
+- `src/lib/orchestrator/agent.ts`: the **chat orchestrator**.
+  - The local model (stage `orchestrator`) answers with a reply plus at most one **tool call**
+    (JSON schema; works the same on Qwen and Claude). Tools: `list_projects`, `pipeline_status`,
+    `create_project`, `run_stage`.
+  - Read-only tools run at once. **Every working step waits for Approve** (`features.json` →
+    `orchestrator.approveEachStep`).
+  - When a stage finishes, the next pending stage is proposed. A rule parser takes over when there
+    is no model.
+- UI (shared nav on every page, and links in the main UI's nav):
+  - **`/pipeline`**: topic and products form, 7 stage cards (status chip, time, GPU / CPU time,
+    steps, a Run button each), "Run all remaining steps", KPIs, live log, and a link to the
+    **studio timeline preview**. The studio is the existing Remotion Player with segments, assets
+    and captions, plus "Replace picture" for a per-clip swap. Full-frame avatar clips show there.
+  - **`/dashboard`**: all projects with stage dots, status, **QA score** (pass / warn / fail),
+    GPU time, output video and Shorts, plus GPU time per stage and model.
+  - **`/tools`**: the model and numCtx for each stage (`llm_settings.json` stages), VRAM loader
+    settings, images per vision request, and every `features.json` section as a form (TTS engine,
+    avatar engine and layout, caption preset, stock, shorts, …).
+  - **`/chat`**: the conversation with Approve / Reject buttons on each proposed step.
+- API: `/api/pipeline/:project` (GET, `PUT config`, `POST run {stage|from}`), `/api/dashboard`,
+  `/api/models` (GET/PUT), `/api/chat` (POST), `/api/chat/:id` (GET), `/api/chat/:id/approve`.
+- The avatar step now also works **before** `timeline`, and `timeline` re-applies the rendered
+  clips (re-running timeline keeps the avatar).
+- QA now requires the YouTube "altered or synthetic content" label when an AI avatar is used.
+
+**Files**: `src/lib/orchestrator/{pipeline,agent}.ts`, `src/server/routes/pipeline.ts`,
+`src/server/server.ts`, `src/commands/{avatar,timeline,qa}.ts`,
+`web/{pipeline,dashboard,tools,chat}.html`, `tests/orchestrator.test.ts`.
+
+**Checks**: typecheck passes. 342 tests, 341 pass, 0 fail, 1 skipped (the one skipped before this
+phase).
+
+- Pipeline tests:
+  - a full run with a fake CLI calls all 14 steps in order, and each stage gets its status and
+    GPU time;
+  - a failed step stops the run, and the dashboard shows "Render failed".
+- Chat tests:
+  - nothing runs before Approve;
+  - the next stage is proposed after each step;
+  - Reject runs nothing.
+- Browser check on the dev server:
+  - chat "create zz-ui-demo …" → Approve → project created → Research proposed → Reject;
+  - `/pipeline`, `/dashboard` and `/tools` load, and every API call returns 200.
+
+**How to verify on your PC**
+
+1. Start the server:
+
+   ```bash
+   npm run serve
+   ```
+
+2. Open <http://localhost:4173/chat> and type:
+   `create budget-9mm topic: best budget 9mm pistols products: Taurus G3C, Glock 43X, Sig P365`
+   → Approve. Then press Approve on each proposed step.
+3. Or open `/pipeline?project=budget-9mm` and press "Run all remaining steps".
+4. Watch the status, time and GPU time per stage on `/pipeline` and `/dashboard`.
+
+**Open risks**
+
+- PiP avatar layers are ProRes with alpha, which browsers cannot play. The studio preview shows
+  full-frame avatars only; PiP shows in the render.
+- A 7B model sometimes picks the wrong tool. Every working step still needs your Approve, and
+  "next" always proposes the correct pending stage.
+
+---
+
+## Final summary
+
+| Phase | Status | Commit(s) |
+|------:|--------|-----------|
+| Setup | `feature/full-pipeline-v2` created from `origin/feature/general-web-crawler` and pushed | — |
+| 0 Fix current issues | done (code + tests); needs a real GPU run | `2a74dcf`, `4a2b0d8` |
+| 1 Niche / Outlier Finder | done; needs `YOUTUBE_API_KEY` for live data | `19a3c90`, `f7e4f5f` |
+| 2 Titles | done | `b121665`, `989d2a5` |
+| 3 Captions + edit polish | done | `d7717f0`, `705b9ce` |
+| 4 Stock visuals + Prompt Mapper | done (stock needs keys, imagegen needs ComfyUI) | `3f5d6dc`, `68f8d49` |
+| 5 Script writer | done | `3962b36`, `78e9a1d` |
+| 6 Local TTS | done; needs the Kokoro model files | `ae3bb6b`, `05e13f2` |
+| 7 AI Avatar | done (tested with FFmpeg as a stand-in engine); needs MuseTalk on the GPU | `71f5cc4`, `b177e52` |
+| 8 Shorts cutter | done | `9f292de`, `bee2e37` |
+| 9 UI + chat orchestrator | done | `c59f94e` + this report |
+
+**Checks at the end**:
+
+- `npm run typecheck` passes, and so does `npm run typecheck:cards`.
+- `npm test`: **342 tests, 341 pass, 0 fail, 1 skipped**. The skipped test was already skipped
+  before this work.
+- The existing pipeline (transcribe/align, plan, assets, timeline, Remotion cards incl.
+  RecapGrid, render, QA) is unchanged apart from the additions above; all its old tests still
+  pass.
+
+**What you must run on your PC**:
+
+1. Merge or check out `feature/full-pipeline-v2` in `D:\YT_CODE_Base\clipforge`, then:
+
+   ```bash
+   npm install
+   ```
+
+   ```bash
+   npm --prefix cards install
+   ```
+
+   ```bash
+   npm run build:preview
+   ```
+
+2. Pull the models:
+
+   ```bash
+   ollama pull qwen3:8b
+   ```
+
+   ```bash
+   ollama pull qwen2.5vl:3b
+   ```
+
+   ```bash
+   ollama pull nomic-embed-text
+   ```
+
+   Keep your `qwen2.5-cf:7b` for plan and labels.
+3. Add `YOUTUBE_API_KEY` to `.env`. Optional: `PEXELS_API_KEY` / `PIXABAY_API_KEY`.
+4. Kokoro: in the `.venv`, run the command below, put `kokoro-v1.0.onnx` and `voices-v1.0.bin`
+   in `models/kokoro/`, and set `TTS_PROVIDER=kokoro`.
+
+   ```bash
+   pip install kokoro-onnx soundfile
+   ```
+
+5. Avatar (optional): install MuseTalk and its weights, put the photo at
+   `channels/<channel>/avatar.png`, and set `features.json` → `avatar.enabled: true`.
+6. Run one video end to end from `/chat` or `/pipeline`. Then check:
+   - `ollama ps` shows 100% GPU;
+   - there are no `GPU returned garbage twice` lines;
+   - forced reuse is under 20;
+   - the captions are in sync;
+   - the 3 Shorts come out.
+
+---
+
 ## Blocked / needs user
 
 - **Phase 1**: add `YOUTUBE_API_KEY` to `.env` and press Scan on `/research` to confirm the live

@@ -1087,10 +1087,75 @@ pipeline, its enhancement tools (background removal, upscaling) and its decision
 
 ---
 
+## Phase A: viewer-facing QA checks and earshot (sound)
+
+Context: ClipForge is for creators in general, not one channel. Eight repos were read
+(huashu-motion, rossark-motion-skill, take-one, reanimate, argo, explainroo, video-director,
+earshot). Their code was read, not run: running third-party code was blocked without the user's
+OK. Phase A takes the two that improve every video of every creator.
+
+**1. QA checks a viewer notices at once** (`src/lib/qa/picture.ts`; checks and thresholds from
+video-director's `qa_video.py`, MIT, re-implemented in TypeScript)
+- **First frame** flat or black -> fail. Muted autoplay and the auto thumbnail show it. When the
+  first scene fades in, the message says to set its transition to Cut.
+- **Single-frame flashes** -> fail; **one-frame pops** -> warn.
+- **Caption size on a phone**: font px from the style (at least 48 px at 1080p). The built-in
+  "Minimal" preset is 54 x 0.8 = 43 px, so it is flagged.
+- **Caption contrast**: measured on 6 rendered frames; Otsu splits ink from background, at least 7:1.
+- Tested on real FFmpeg videos: a white frame slipped in at frame 45 was found at exactly 1.50 s;
+  a fade from black failed frame 0; a clean clip passed.
+
+**2. earshot** (`src/lib/audio/earshot.ts`; github.com/Leonxlnx/earshot, MIT, CPU only).
+Off by default; Tools > "Sound check & SFX bank".
+- **SFX bank**: whoosh / pop rendered from its 252-sound code-made bank (`earshot sfx render`,
+  no models, no licence needed); FFmpeg's sounds are the fallback.
+  - Own sounds: `assets/sfx/whoosh.own.wav` / `pop.own.wav` win in every mode.
+- **QA "Sound effects heard on time"**: every placed effect becomes a cue for
+  `earshot timeline --cues`. It flags effects not heard (buried under music or voice) or off by
+  more than 100 ms.
+  - Needs earshot's models (~1.1 GB, once).
+  - earshot's own measurements: it finds placed effects well (93% within 30 ms), but naming what
+    a sound is is weak, so ClipForge uses only the timing and "heard / not heard" parts.
+- The arguments and the JSON shape are copied from earshot's source; the tests use fake runs in
+  that shape.
+
+**Files**: `src/lib/qa/picture.ts`, `src/lib/audio/earshot.ts`, `src/commands/qa.ts`,
+`src/lib/render/sfx.ts`, `src/commands/render.ts`, `src/lib/settings/features.ts`,
+`web/tools.html`, `tests/qaPicture.test.ts` (5), `tests/earshot.test.ts` (3).
+
+**Checks**: typecheck passes. 398 tests: 391 pass, 1 skipped, 6 fail. The 6 failures are the same
+`src/lib/models/` stand-in failures as before.
+
+**How to verify on your PC**
+1. `npm run qa -- -p <a rendered video>` (or the QA step): look for "First frame", "Single-frame
+   flashes", "Caption size on a phone" and "Caption contrast".
+2. earshot:
+   - `pip install torch --index-url https://download.pytorch.org/whl/cpu`, then
+     `pip install earshot` (or from its repo).
+   - Then `earshot doctor --fetch` (downloads the models).
+   - Tools > Sound check: enabled = true, then render and QA a video.
+
+**Open risks**
+- earshot has not been run against ClipForge here; the first real run is on your PC.
+  Windows: earshot declares "OS Independent" and handles a Windows file-lock case in its code,
+  but that is not a test.
+- Caption contrast is measured in a fixed band above the bottom margin. A channel that moves
+  captions elsewhere gets a measurement of the wrong area (it is a warning, never a fail).
+
+**Next (Phase B / C)**
+- **Phase B**: Explainer videos (explainroo) and tutorial / screen-demo videos (argo, including
+  its import of your own screen recording).
+- **Phase C**:
+  - original music (huashu-motion's approach; CC0 / CC-BY samples, listen first);
+  - a take-one-style fresh-eyes reviewer (API mode).
+
+---
+
 ## Blocked / needs user
 
 - **Commit `src/lib/models/loader.ts` and `embed.ts` from the dev PC** (see the fix above). Until
   then the pushed branch does not compile.
+- **Run third-party code**: to test earshot / explainroo / argo for real (here or on your PC).
 - **Video API keys** (optional, paid): `GEMINI_API_KEY` for Veo, `RUNWAYML_API_SECRET` for Runway
   (also Veo 3.1 and Seedance 2). Then `npm install` (3 new SDKs) and try one scene.
 - **German voice**: download a German Piper voice and set `PIPER_MODEL_DE` (see the
